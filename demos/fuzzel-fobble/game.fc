@@ -100,8 +100,14 @@ struct game_state =
     high_score: i32
     new_high: bool
 
-    // Launcher
+    // Launcher. The aim keys are read by duration, not by the fact of being
+    // down, so the turn has to remember the press it is in the middle of:
+    // which way it is going and how many frames it has been going that way.
+    // Neither is saved — a press does not survive being put down and picked
+    // up again, and a resumed game starts from a still barrel.
     angle: f64              // degrees; 0 = straight up, negative = left
+    aim_dir: i32            // -1, 0, +1: the direction the current press holds
+    aim_hold: i32           // frames since that press, capped once the ramp ends
     cur_color: i32
     next_color: i32
 
@@ -210,9 +216,11 @@ module game =
     // What it buys, in this raft's own numbers: a one-bubble hole in a row
     // leaves its two flanking centres 96 apart, so a shot threads it while its
     // centre stays 36 clear of each — a 24 wide lane down the middle of a 48
-    // wide hole. At the old 44 that lane was 8 wide, less than one press of the
-    // aim key moves the shot at raft range, so the needle-thread was a shot that
-    // existed on paper and not in the hands.
+    // wide hole. At the old 44 that lane was 8 wide — about what a single press
+    // of the aim key moves the shot at raft range, and back when a press moved
+    // ten degrees it was far under it — so the needle-thread was a shot that
+    // existed on paper and not in the hands. See `aim_step`: a lane is only as
+    // real as the number of distinct places the controls can put a shot in it.
     //
     // The floor is 27.9. Three touching bubbles leave an interstice with that
     // circumradius, and a sticking circle under it would let a shot tunnel clean
@@ -232,7 +240,64 @@ module game =
     let shot_speed = 15.0
     let shot_substeps = 5
     let aim_limit = 78.0
-    let aim_speed = 1.7
+
+    // Aiming. A press is worth exactly one `aim_step` however long the finger
+    // stays on the key, and only a deliberate hold — past `aim_delay` frames —
+    // starts the barrel sweeping, from a crawl up to `aim_fast`. That is
+    // keyboard auto-repeat, and it is here for the reason auto-repeat exists:
+    // a key is either down or up, so the only way one key can deliver both a
+    // repeatable nudge and a fast traverse is to read how long the press
+    // lasted rather than merely that it happened.
+    //
+    // A flat rate per held frame — which is what this was — can do neither, and
+    // the reason is that the player does not control how many frames a press
+    // lasts. Five or six is a quick one, and at the old 1.7 that came to ten
+    // degrees: 54 px off across the board at close raft range, 72 at arm's
+    // length, more than a bubble either way. The 24 px lane through a
+    // one-bubble hole was not something you aimed at, it was something you
+    // landed in. `aim_step` is 0.55 — 3 px at the near rows, 7 px out where a
+    // bounce puts you — so that lane is five or six distinct places to put a
+    // shot, one press apart, and the tolerance `collide_d2` was widened to
+    // offer is finally a tolerance the controls can reach.
+    //
+    // The sweep between those two ends is where the control actually lives,
+    // and its shape matters more than either end does. It starts at
+    // `aim_creep` — half a press per frame, a crawl you can stop on a bubble —
+    // and reaches `aim_fast` `aim_ramp` frames later along an S, not a
+    // straight line and not a square. Both ends of that S are doing work, and
+    // they are answering different complaints:
+    //
+    // *Flat at the bottom*, because a linear ramp spends half its time in the
+    // top half of its speed range. The useful middle — the few degrees between
+    // a nudge and a swing — went past in a fifth of a second, and the hold
+    // read as two settings with nothing in between.
+    //
+    // *Flat at the top*, because the shot most people actually take is press,
+    // sweep, release, and where that lands depends entirely on the rate at the
+    // moment the finger comes up. A square curve is at its steepest exactly
+    // there: the speed is still climbing hard as you approach the target, so
+    // two frames of reaction time are worth wildly different amounts depending
+    // on when you let go, and the aim overshoots by an amount you cannot learn.
+    // Settling into `aim_fast` instead of arriving at it means the last third
+    // of the sweep runs at a rate you can predict — which is the whole of what
+    // makes a release land where it was meant to.
+    //
+    // What is left after both of those is a question of *range*, and the answer
+    // is much narrower than it first looks. The two ends started 17 times
+    // apart and are now 7, because a curve that has to climb 17-fold in 55
+    // frames is a steep curve wherever you put the bend in it — too slow to be
+    // going anywhere at the bottom, too quick to stop at the top. Closing the
+    // gap from both sides leaves the middle where it was: three quarters of a
+    // second of hold moves 30 degrees, the same as it did before, and it is
+    // the approach to that figure and the departure from it that changed.
+    //
+    // A full traverse is 104 frames against the flat 1.7's 92 — the one thing
+    // this costs, and the rarest thing anybody does with the aim.
+    let aim_step = 0.55       // one press
+    let aim_creep = 0.30      // where a hold starts moving
+    let aim_fast = 2.2        // where a hold settles
+    let aim_delay = 10        // frames held before it starts moving at all
+    let aim_ramp = 55         // frames from aim_creep to aim_fast
 
     // The aim guide walks the live shot's substep (shot_speed / shot_substeps =
     // 3 px) so it can't disagree with it, and draws one dot in nine — the same
@@ -273,6 +338,22 @@ module game =
     // The aim guide is a tutorial device: it draws the bounce for you while you
     // learn the geometry, and comes off after this level.
     let guide_levels = 1
+
+    // The sight, which is what is left once it has. Past the guide levels the
+    // only thing on screen that says where the barrel points is the barrel,
+    // and 64 px of barrel turns one press into 0.6 px of muzzle movement: the
+    // aim would be finer than the instrument you read it off, which is no
+    // better than not having it. These dots are that barrel drawn longer and
+    // nothing else — dead straight, no bounce, no collision test, ending at
+    // the wall because a straight line drawn through one would be a lie. They
+    // are laid down before the raft is, so the sight stops where the board
+    // starts without being told to, and they wear the launcher's own colour
+    // rather than the loaded bubble's so that nobody mistakes them for the
+    // guide coming back. Reading the bounce is still the skill; knowing which
+    // way you are pointed was never supposed to be part of it.
+    let sight_from = 84      // px out from the turret, clear of the muzzle ring
+    let sight_gap = 24
+    let sight_dots = 10      // 300 px at the tip, where one press moves 2.9 px
 
     // Ceiling pacing. The countdown runs on shots landed and nothing else — a
     // pop scores, it does not buy time back. The interval itself comes from how
@@ -1057,6 +1138,27 @@ module game =
                 // one escape the field and hang the turn.
                 w.shot.active = false
 
+    // What one frame of a *held* aim key is worth, given how many frames the
+    // press has been running. The press itself is worth `aim_step` and is paid
+    // separately, so this is nothing at all until `aim_delay` — and that dead
+    // stretch is precisely what makes the step repeatable, because a press a
+    // human can make is five or six frames long and if every one of those
+    // frames counted then the smallest move anyone could make would be however
+    // fast that player's finger happens to be. Past the delay the press has
+    // stopped being a nudge and become a sweep.
+    //
+    // `t * t * (3 - 2 * t)` is the smoothstep, and it is here because it is
+    // flat at *both* ends: it leaves `aim_creep` gently and it arrives at
+    // `aim_fast` gently. See `aim_ramp` for why each of those matters, and to
+    // whom.
+    private let aim_sweep = (held: i32) ->
+        if held < aim_delay then
+            0.0
+        else
+            let raw = (f64) (held - aim_delay) / (f64) aim_ramp
+            let t = if raw >= 1.0 then 1.0 else raw
+            aim_creep + (aim_fast - aim_creep) * t * t * (3.0 - 2.0 * t)
+
     let fire = (w: world*, rng: pcg_random*, s: opl_audio.audio*) ->
         if w.shot.active then
             return
@@ -1087,6 +1189,8 @@ module game =
         w.game.cur_color = pick_launcher(w, rng)
         w.game.next_color = pick_launcher(w, rng)
         w.game.angle = 0.0
+        w.game.aim_dir = 0
+        w.game.aim_hold = 0
         w.game.idle_timer = 0
         w.game.level_frames = 0
         w.game.popup_timer = 0
@@ -1455,6 +1559,8 @@ module game =
         w.game.drop_interval = st.drop_interval
         w.game.row_parity = st.row_parity
         w.game.angle = fclamp(st.angle, -aim_limit, aim_limit)
+        w.game.aim_dir = 0
+        w.game.aim_hold = 0
         w.game.cur_color = st.cur_color
         w.game.next_color = st.next_color
         w.game.idle_timer = st.idle_timer
@@ -1657,14 +1763,55 @@ module game =
         match w.game.phase with
         | playing ->
             w.game.level_frames = w.game.level_frames + 1
+            // Which way the keys say to go. Both down is a standing still, the
+            // same as neither: they cancel here rather than fighting frame by
+            // frame.
+            let mut dir = 0
             if plat.down(inp, plat.aim_left) then
-                w.game.angle = w.game.angle - aim_speed
+                dir = dir - 1
             if plat.down(inp, plat.aim_right) then
-                w.game.angle = w.game.angle + aim_speed
-            if w.game.angle < -aim_limit then
-                w.game.angle = -aim_limit
-            if w.game.angle > aim_limit then
-                w.game.angle = aim_limit
+                dir = dir + 1
+
+            // The nudge is taken off the *edge*, not off the held state. A tap
+            // quick enough to go down and come back up inside one frame leaves
+            // `held` already clear by the time the game reads it — the queue
+            // gave the backend both events and the second undid the first —
+            // and silently dropping the finest input a player can give is
+            // exactly the wrong failure for the one control that is meant to
+            // be a precision instrument. `tapped` is latched for the frame
+            // whatever else happened to the key, in both backends.
+            let mut press = 0
+            if plat.tap(inp, plat.aim_left) then
+                press = press - 1
+            if plat.tap(inp, plat.aim_right) then
+                press = press + 1
+
+            if press != 0 then
+                // A new press: one step, and the sweep clock starts over. The
+                // clock never carries across, because inheriting the last
+                // press's speed would send the barrel off at a sweep for
+                // somebody who has just overshot and tapped back to correct.
+                w.game.aim_dir = press
+                w.game.aim_hold = 0
+                w.game.angle = w.game.angle + (f64) press * aim_step
+            else if dir != w.game.aim_dir then
+                // Released, or the other key took the direction over without
+                // an edge of its own. Either way the press that was running is
+                // over and the next hold starts from a standstill.
+                w.game.aim_dir = dir
+                w.game.aim_hold = 0
+
+            if w.game.aim_dir != 0 && dir == w.game.aim_dir then
+                // The hold. `aim_hold` counts frames since the press and stops
+                // counting once the ramp is spent — past that the number has
+                // nothing left to say, and a counter that climbs for as long
+                // as a key is down is a counter with no ceiling on it.
+                if w.game.aim_hold < aim_delay + aim_ramp then
+                    w.game.aim_hold = w.game.aim_hold + 1
+                w.game.angle = w.game.angle
+                             + (f64) w.game.aim_dir * aim_sweep(w.game.aim_hold)
+
+            w.game.angle = fclamp(w.game.angle, -aim_limit, aim_limit)
             update_shot(w, rng, s)
             // The turn clock only runs while the shot is yours to take. Sit
             // on it long enough and the launcher fires wherever you left it

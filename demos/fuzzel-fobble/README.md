@@ -102,7 +102,7 @@ and a typo in it should not cost you the file.
 
 | Key | Action |
 |-----|--------|
-| Left / Right (or A, D) | Aim |
+| Left / Right (or A, D) | Aim — a press nudges, a hold sweeps |
 | SPACE | Fire (also starts / restarts) |
 | ENTER | Start / restart |
 | TAB | Swap the loaded bubble with the next one |
@@ -840,11 +840,67 @@ smaller circle says what you can get through. It is the difference between a
 threadable gap and a decorative one. A one-bubble hole in a row leaves its
 flanking centres 96 apart, so the shot has a 24-wide lane down the middle of
 a 48-wide hole — where a full-width test would leave a lane of nothing, and
-even a near-full one leaves a lane narrower than a tap of the aim key moves
-the shot at that range. The floor is 27.9, the interstice between three
+even a near-full one leaves a lane you could not reliably steer into. The
+floor is 27.9, the interstice between three
 touching bubbles; go under it and shots tunnel through solid raft. Everything
 between those two numbers is a judgement call about how generous the game is,
 and the genre has always answered generously.
+
+**The aim keys are read by duration, not by being down.** A press moves the
+barrel exactly one small step however long the finger stays on it; holding
+past ten frames starts a sweep that crawls at half that step per frame and
+takes a second to settle into full speed. This is
+keyboard auto-repeat, and it is here for the reason auto-repeat exists: a key
+is either down or up, so the only way one key delivers both a repeatable
+nudge and a fast traverse is to read *how long* the press lasted. A flat rate
+per held frame — the obvious implementation, and what this was — can do
+neither, because the player does not control how many frames a press lasts.
+Five or six is a quick one, and at the old rate that came to ten degrees:
+more than a bubble's width off across the board at any range that matters. A
+tolerance the collision test is generous enough to offer is not a tolerance
+until the controls can reach it, and a 24-wide lane you cannot place a shot
+inside is decoration.
+
+The sweep's *shape* turned out to matter more than either end of it, and it
+took two goes to find. Ramping linearly spends half the ramp in the top half
+of the speed range, so the useful middle — the few degrees between a nudge
+and a swing — went past in a fifth of a second and the hold read as two
+settings with nothing between them. Squaring the ramp fixed that end and
+broke the other: a square curve is at its steepest exactly where it tops out,
+and the shot most people actually take is press, sweep, release, which lands
+wherever the rate happened to be at the moment the finger came up. Still
+accelerating hard at that moment means two frames of reaction time are worth
+wildly different amounts depending on when you let go.
+
+What both complaints want is a curve flat at *both* ends, which is the
+smoothstep: `t * t * (3 - 2 * t)`. It leaves the crawl gently, so the middle
+lasts; it settles into full speed rather than arriving at it, so the last
+third of a sweep runs at a rate you can predict and a release lands where it
+was aimed.
+
+The last thing to fall out was *range*, and it turned out to be much narrower
+than it first looked. The two ends of the sweep started seventeen times apart,
+and a curve that has to climb seventeen-fold is steep wherever you put the
+bend in it — too slow to be going anywhere at the bottom, too quick to stop
+at the top. Closing the gap from both sides to a factor of seven leaves the
+middle exactly where it was: three quarters of a second of hold moves thirty
+degrees, the same as before. Only the approach to that figure and the
+departure from it changed. A full traverse costs twelve frames against the
+flat rate it replaced — 104 against 92 — which is the one thing any of this
+costs, and the rarest thing anybody does with the aim.
+
+**The sight is the barrel, drawn long enough to read.** Aim finer than the
+instrument you read it off and you have not gained anything: 64 px of barrel
+turns one press into 0.6 px of muzzle movement. So past the guide levels a
+line of ten fading dots runs 300 px out from the turret, where that same
+press moves 2.9 px. It is dead straight, knows nothing about bubbles, and
+stops at the wall — there is nothing in it a player could not have read off
+the angle of the barrel itself, only sooner and without squinting. It is laid
+down before the raft is, so it disappears behind the board rather than
+needing to be told where to end, and it wears the launcher's colour rather
+than the loaded bubble's so it cannot be mistaken for the guide coming back.
+Reading the bounce is still the skill; knowing which way you are pointed was
+never meant to be part of it.
 
 **The aim guide is the physics.** The dotted trajectory walks the shot's own
 path — wall bounces and all — through the same `hits_bubble` test the live

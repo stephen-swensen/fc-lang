@@ -360,6 +360,31 @@ module art =
         if !w.shot.active then
             draw_bubble(shooter_x, shooter_y, w.game.cur_color, 255u8, w.game.show_symbols)
 
+    // The barrel, drawn long enough to read. See `sight_from` in game.fc for
+    // why this is not the aim guide wearing a smaller hat: it is straight, it
+    // knows nothing about bubbles, and it goes out 300 px because that is what
+    // it takes for a single press of the aim key to move something the eye can
+    // see. No bounce and no collision, so there is nothing here a player could
+    // not have worked out from the angle of the barrel itself — only sooner,
+    // and without squinting.
+    let draw_aim_sight = (w: world*) ->
+        if w.shot.active then
+            return
+        let a = deg2rad(w.game.angle)
+        let dx = math.sin(a)
+        let dy = -math.cos(a)
+        let left = (f64) (field_x0 + bubble_r)
+        let right = (f64) (field_x1 - bubble_r)
+        for i in 0..sight_dots do
+            let d = (f64) (sight_from + i * sight_gap)
+            let x = (f64) shooter_x + dx * d
+            // The one thing a straight line must not do is carry on through a
+            // wall, because that is the one place it stops being the truth.
+            if x < left || x > right then
+                break
+            gfx.disc((i32) x, (i32) ((f64) shooter_y + dy * d), 3,
+                     150u8, 175u8, 215u8, (u8) (150 - i * 12))
+
     // Walks the shot's path — bounces and all — and dots it out. Reuses the
     // live collision test, and walks it at the shot's own substep rather than a
     // coarser one: a preview that samples the path more sparsely than the shot
@@ -646,6 +671,8 @@ module art =
 
         if aiming then
             draw_aim_guide(w)
+        else if your_turn then
+            draw_aim_sight(w)
         draw_grid(w)
         draw_ceiling()
         draw_fallers(w)

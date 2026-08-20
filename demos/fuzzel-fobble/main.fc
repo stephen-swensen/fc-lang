@@ -619,7 +619,7 @@ let main = (args: str[]) ->
     io.write("A Puzzle Bobble clone in FC (raylib)\n\n", stdout)
 #end
     io.write("Controls:\n", stdout)
-    io.write("  Left/Right  Aim\n", stdout)
+    io.write("  Left/Right  Aim (tap to nudge, hold to sweep)\n", stdout)
     io.write("  SPACE       Fire\n", stdout)
     io.write("  ENTER       Start / restart\n", stdout)
     io.write("  TAB         Swap current and next bubble\n", stdout)
