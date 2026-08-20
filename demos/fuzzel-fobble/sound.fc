@@ -104,9 +104,20 @@ module snd =
         // is down — SL 15 would *not* do that, the chip reads it as "decay
         // all the way out" — and feedback supplies the edge that makes
         // brass sound like brass.
+        //
+        // That sustain is also why the carrier sits at TL 5 rather than up
+        // near 0 where it started. Peak is the wrong yardstick for this
+        // voice: every other effect here is a transient that is gone inside
+        // 300 ms, while this one holds its peak for the better part of a
+        // second, so matching their peak makes it the loudest thing in the
+        // game by a distance. Rendered one at a time, the bank peaks
+        // between 1.8k and 6.9k; at TL 1 the fanfare hit 7.5k, above all of
+        // them. TL 5 is 3 dB down from there — 5.3k, inside the pack — and
+        // the fanfare reads as a flourish over the game rather than a
+        // gear change in the mix.
         opl_audio.instrument {
             m_char = 0x21, m_scale = 0x0F, m_atk = 0xB4, m_sus = 0x06, m_wave = 0x00,
-            c_char = 0x21, c_scale = 0x01, c_atk = 0xA4, c_sus = 0x06, c_wave = 0x00,
+            c_char = 0x21, c_scale = 0x05, c_atk = 0xA4, c_sus = 0x06, c_wave = 0x00,
             n_conn = 0x0C },
         // Game over: a soft reed, sustaining, with a slow release that
         // lets the last note sag out instead of stopping.
