@@ -385,10 +385,10 @@ module art =
             x = x + vx
             y = y + vy
             if x < left then
-                x = left
+                x = left + (left - x)
                 vx = -vx
             if x > right then
-                x = right
+                x = right - (x - right)
                 vx = -vx
             if y - (f64) bubble_r <= (f64) ceiling_y then
                 break

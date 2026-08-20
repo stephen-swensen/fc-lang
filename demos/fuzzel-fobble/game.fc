@@ -981,17 +981,23 @@ module game =
             w.shot.x = w.shot.x + w.shot.vx
             w.shot.y = w.shot.y + w.shot.vy
 
+            // Mirror the overshoot rather than clamp to the bounce line: parking
+            // the shot on the line eats up to a substep of horizontal travel
+            // while `y` climbs on, and five bounces of that walk the shot a
+            // third of a cell off the geometry a player aims by. A 3 px substep
+            // cannot mirror across a 528 px field, so the two tests still cannot
+            // both fire. Sparks fly at the wall face, not inside the bubble.
             let left = (f64) (field_x0 + bubble_r)
             let right = (f64) (field_x1 - bubble_r)
             if w.shot.x < left then
-                w.shot.x = left
+                w.shot.x = left + (left - w.shot.x)
                 w.shot.vx = -w.shot.vx
-                spawn_burst(w, rng, w.shot.x - 6.0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
+                spawn_burst(w, rng, (f64) field_x0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
                 opl_audio.play(s, snd.sfx_bounce)
             if w.shot.x > right then
-                w.shot.x = right
+                w.shot.x = right - (w.shot.x - right)
                 w.shot.vx = -w.shot.vx
-                spawn_burst(w, rng, w.shot.x + 6.0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
+                spawn_burst(w, rng, (f64) field_x1, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
                 opl_audio.play(s, snd.sfx_bounce)
 
             let popped = metal_smash(w, rng, s, prev_y, w.shot.x, w.shot.y)
@@ -1022,17 +1028,23 @@ module game =
             w.shot.x = w.shot.x + w.shot.vx
             w.shot.y = w.shot.y + w.shot.vy
 
+            // Mirror the overshoot rather than clamp to the bounce line: parking
+            // the shot on the line eats up to a substep of horizontal travel
+            // while `y` climbs on, and five bounces of that walk the shot a
+            // third of a cell off the geometry a player aims by. A 3 px substep
+            // cannot mirror across a 528 px field, so the two tests still cannot
+            // both fire. Sparks fly at the wall face, not inside the bubble.
             let left = (f64) (field_x0 + bubble_r)
             let right = (f64) (field_x1 - bubble_r)
             if w.shot.x < left then
-                w.shot.x = left
+                w.shot.x = left + (left - w.shot.x)
                 w.shot.vx = -w.shot.vx
-                spawn_burst(w, rng, w.shot.x - 6.0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
+                spawn_burst(w, rng, (f64) field_x0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
                 opl_audio.play(s, snd.sfx_bounce)
             if w.shot.x > right then
-                w.shot.x = right
+                w.shot.x = right - (w.shot.x - right)
                 w.shot.vx = -w.shot.vx
-                spawn_burst(w, rng, w.shot.x + 6.0, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
+                spawn_burst(w, rng, (f64) field_x1, w.shot.y, 3, 220u8, 240u8, 255u8, 1.0)
                 opl_audio.play(s, snd.sfx_bounce)
 
             if w.shot.y - (f64) bubble_r <= (f64) ceiling_y then
