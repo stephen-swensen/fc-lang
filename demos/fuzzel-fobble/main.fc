@@ -272,47 +272,270 @@ let open_bank = (args: str[]) ->
     | some(path) -> load_bank_file(path)
     | none -> opl_bank_gm.make()
 
-// The tuning everything here is played in, unless `--tuning` says otherwise.
+// The tuning everything here is played in, unless the config file or
+// `--tuning` says otherwise.
 //
-// Every piece the game plays is Bach — the notebook on the levels, and the
-// game's own arrangement of the Minuet in G on the title screen — and none of
-// it was written for equal temperament, which was a theoretical curiosity in
-// 1725 and did not become the default until the nineteenth century. Kirnberger
-// III is the reading with the best claim to being *Bach's*: Johann Kirnberger
-// studied with him, published this tuning as what he had been taught, and said
-// so in print while people who had known Bach were alive to contradict him.
-// What it sounds like: C-E is a pure major third and the flat keys stay close
-// to it, while the remote keys tighten — which is most of the point, since the
-// notebook wanders from F to C minor and back.
+// Equal temperament — every semitone the same size, every key the same
+// colour — is where this starts, because it is what a modern ear is tuned
+// to, and a game that opened by sounding subtly wrong to most people would
+// have spent its one first impression on a history lesson.
 //
-// `--tuning equal` is the way back to how this sounded before, and the other
-// names in `opl_midi.temperaments` are all offered.
+// It is not, though, what any of this music was written for. Everything the
+// game plays is Bach — the notebook on the levels, and the game's own
+// arrangement of the Minuet in G on the title screen — and equal temperament
+// was a theoretical curiosity in 1725 that did not become the default until
+// the nineteenth century. Twelve pure fifths overshoot seven octaves by about
+// a quarter of a semitone, and a tuning is a decision about where to put that
+// error: equal spreads it evenly, so nothing is pure and nothing is bad,
+// while a *well* temperament spreads it unevenly and the keys stop sounding
+// alike. `tuning kirnberger3` in the config file is the reading with the best
+// claim to being Bach's own, and the config file the game writes lists all
+// six with a line on each.
 //
 // A function rather than a constant because a file-level initializer has to be
 // a C constant expression, and another module's constant is not one.
-let default_tuning = () -> opl_midi.kirnberger3
+let default_tuning = () -> opl_midi.equal
 
-// And the pitch it is sounded at: `opl_midi.baroque_a`, a semitone below
-// modern concert pitch.
+// And the pitch it is sounded at: modern concert pitch, A = 440 Hz.
 //
-// This one is a convention standing in for a fact nobody has. There was no
-// pitch standard in 1725 — it was a local matter, set by whatever organ or
-// wind band a town already owned, and surviving instruments of the period
-// range over nearly a whole tone. Bach's Leipzig had two at once: the organs
-// sat at Chorton, about A=465, and everything else at a Kammerton roughly a
-// tone below, which is why he transposed organ parts to meet the players.
-// The notebook is domestic keyboard music — a clavichord or harpsichord in
-// the house — so Kammerton is its pitch, and A=415 is the modern early-music
-// convention for it. It has the convenient property of being exactly a
-// semitone down, so it is a transposition rather than a smear.
+// The same argument, and a weaker fact underneath it. There was no pitch
+// standard in 1725 — it was a local matter, set by whatever organ or wind
+// band a town already owned, and surviving instruments of the period range
+// over nearly a whole tone. Bach's Leipzig had two at once: the organs sat at
+// Chorton, about A=465, and everything else at a Kammerton roughly a tone
+// below, which is why he transposed organ parts to meet the players. The
+// notebook is domestic keyboard music — a clavichord or harpsichord in the
+// house — and A=415, a semitone below modern, is the early-music convention
+// for that Kammerton. `pitch 415.3` is one line of config away.
+let default_pitch = () -> opl_midi.concert_a
+
+// ------------------------------------------------------------------
+// The config file
+// ------------------------------------------------------------------
 //
-// `--pitch 440` is modern concert pitch, for anyone who wants the tunes where
-// their ear expects them.
-let default_pitch = () -> opl_midi.baroque_a
+// `~/.fuzzel-fobble/config`, beside the high score and the nine saved games,
+// and the same shape of file as those: one setting per line, `//` for a
+// comment, blank lines ignored, meant to be opened in an editor.
+//
+// What belongs here is a setting somebody would want to make once instead of
+// typing at every launch — which is exactly what the tuning is. `--tuning`
+// and `--pitch` still win for the run they are given on: a flag is what you
+// reach for to hear two tunings against each other, and hearing them against
+// each other is the only way to judge either.
+//
+// The game writes the file when it is missing and never touches it again. So
+// a first run leaves behind a document of everything that can be set, with
+// the defaults spelled out and the alternatives beside them, and an edit made
+// to it is never overwritten by a later run.
+module config =
+    // Everything the file can say.
+    //
+    // One field, because `opl_midi.temperament` already carries both of the
+    // things this file configures: the twelve deviations, and the pitch the
+    // A above middle C is sounded at. They are independent axes — any of the
+    // six tables can be sounded at any pitch — and the two settings below set
+    // one each.
+    struct settings =
+        tuning: opl_midi.temperament
+
+    // What a `pitch` line may say. A pitch standard has to land in the
+    // audible part of the range for the F-number arithmetic downstream to
+    // mean anything; the bounds are generous rather than musical, and they
+    // are here rather than at the flag so that the file and the command line
+    // agree about what a pitch is.
+    let min_pitch = 100.0
+    let max_pitch = 1000.0
+
+    // The file itself. Heap rather than the stack an interpolated string
+    // would give it, so it can outlive the call that built it.
+    private let path_of = (hd: const str) -> alloc("%s{hd}/.fuzzel-fobble/config")!
+
+    // The file the game leaves behind on a first run.
+    //
+    // It is written from `d` rather than from anything spelled out here, so
+    // the defaults in the file are the defaults the program actually has, and
+    // the set of tunings it lists is `opl_midi.temperaments` — the one place
+    // that set is written down. A tuning added there appears here without
+    // this function being touched; only its line of prose has to be added
+    // below, and a tuning with no line of prose still gets listed.
+    private let write_default = (fp: any*, d: settings) ->
+        io.write("// Fuzzel Fobble settings.\n", fp)
+        io.write("//\n", fp)
+        io.write("// One setting per line, `name value`. Blank lines and lines\n", fp)
+        io.write("// beginning with // are ignored, and a setting this build does\n", fp)
+        io.write("// not know is reported and skipped rather than refused — a\n", fp)
+        io.write("// file written by a newer build still works here.\n", fp)
+        io.write("//\n", fp)
+        io.write("// The command line wins: --tuning and --pitch override what is\n", fp)
+        io.write("// here, for the run they are given on.\n", fp)
+        io.write("//\n", fp)
+        io.write("// The game wrote this file because it was not there, and will\n", fp)
+        io.write("// not write it again. Edits stay put; delete it to get this\n", fp)
+        io.write("// back.\n", fp)
+        io.write("\n", fp)
+        io.write("// tuning <name> — the temperament the music is played in: how\n", fp)
+        io.write("// big each of the twelve semitones is. In every tuning but the\n", fp)
+        io.write("// first they differ, which is the point — it is what gives a\n", fp)
+        io.write("// key its colour, and what this music was written for.\n", fp)
+        io.write("//\n", fp)
+        // Padded to the longest name so the descriptions line up: a config
+        // file is read down its left edge.
+        let width = name_width()
+        for i in 0i64..opl_midi.temperaments.len do
+            let t = opl_midi.temperaments[i]
+            io.write(alloca("//   %s{t.name}"), fp)
+            let line = about(t.name)
+            // A name with no sentence written for it is listed on its own
+            // rather than padded out to a blank column.
+            if line.len > 0i64 then
+                for pad in 0i64..width - t.name.len do
+                    io.write(" ", fp)
+                io.write(alloca("  %s{line}"), fp)
+            io.write("\n", fp)
+        io.write("\n", fp)
+        io.write(alloca("tuning %s{d.tuning.name}\n"), fp)
+        io.write("\n", fp)
+        io.write("// pitch <hz> — the frequency of the A above middle C, which is\n", fp)
+        io.write("// what every other note is measured from. Independent of the\n", fp)
+        io.write("// tuning above: any of the tunings can be sounded at any pitch.\n", fp)
+        io.write("//\n", fp)
+        io.write("//   440    modern concert pitch\n", fp)
+        io.write("//   415.3  baroque chamber pitch, a semitone below modern —\n", fp)
+        io.write("//          roughly where Bach's Leipzig played this music\n", fp)
+        io.write("//   465    Chorton, the pitch his church organs sat at\n", fp)
+        io.write("//\n", fp)
+        io.write(alloca("// Anything from %.0f{min_pitch} to %.0f{max_pitch} works.\n"), fp)
+        // A tenth of a hertz is about four tenths of a cent at this pitch,
+        // and the chip tunes on a grid between 1.7 and 3.4 cents wide — so
+        // one decimal place is already finer than anything it can sound, and
+        // this is the same number the game prints at startup.
+        io.write(alloca("pitch %.1f{d.tuning.a4}\n"), fp)
+
+    // The longest name in `opl_midi.temperaments`, for the padding above.
+    private let name_width = () ->
+        let mut w = 0i64
+        for i in 0i64..opl_midi.temperaments.len do
+            if opl_midi.temperaments[i].name.len > w then
+                w = opl_midi.temperaments[i].name.len
+        w
+
+    // A line about each tuning, for the file. Keyed by name rather than by
+    // index so that it cannot silently slide out of step with the table, and
+    // answering "" for a name it does not know so that a tuning added to
+    // `opl_midi` is listed here whether or not anybody wrote it a sentence.
+    private let about = (name: const str) ->
+        if name == "equal" then
+            "every key the same colour; the modern default, and this one"
+        else if name == "werckmeister3" then
+            "Werckmeister III (1691) — what a recording usually means"
+        else if name == "kirnberger3" then
+            "Kirnberger III (1779) — the best claim to being Bach's own"
+        else if name == "vallotti" then
+            "Vallotti (1754) — the gentlest; most period ensembles use it"
+        else if name == "young2" then
+            "Young II (1800) — Vallotti shifted one fifth sharper"
+        else if name == "meantone" then
+            "quarter-comma meantone — eight pure thirds, four dead keys"
+        else ""
+
+    // Reads the file over `d`, a setting at a time.
+    //
+    // Unlike a save file — a snapshot of a running game, refused whole if any
+    // of it is wrong, because half a board is worse than none — a config file
+    // is written by hand, and its worst line should cost only that line. A
+    // name that names no tuning, a pitch that is not a number or not in
+    // range, a setting this build has never heard of: each says so on stdout
+    // and leaves everything else standing.
+    private let apply = (src: const str, d: settings) ->
+        let mut cur = d
+        let lines = text.split(src, "\n")
+        defer free(lines)
+        for li in 0..lines.len do
+            let line = text.trim(lines[li])
+            if line.len == 0i64 || text.starts_with(line, "//") then
+                continue
+            // Split at the first space rather than into words: the value is
+            // everything after the name, trimmed, so a setting whose value
+            // has a space in it can be added later without touching this.
+            let cut = match text.index_of(line, " ") with
+                      | some(i) -> i
+                      | none -> line.len
+            let key = line[0i64..cut]
+            let val = text.trim(line[cut..line.len])
+
+            if key == "tuning" then
+                cur.tuning = match opl_midi.temperament_named(val) with
+                             // The pitch is not the tuning's to bring with
+                             // it: the table's own `a4` is 440 for every
+                             // entry, and a file that set the pitch above
+                             // this line means it.
+                             | some(t) -> opl_midi.at_pitch(t, cur.tuning.a4)
+                             | none ->
+                                 io.write(alloca("Config: no tuning named %s{val} — keeping %s{cur.tuning.name}\n"),
+                                          stdout)
+                                 cur.tuning
+            else if key == "pitch" then
+                cur.tuning = match text.parse_f64(val) with
+                             | ok(hz) ->
+                                 if hz >= min_pitch && hz <= max_pitch then
+                                     opl_midi.at_pitch(cur.tuning, hz)
+                                 else
+                                     io.write(alloca("Config: pitch %s{val} is not between %.0f{min_pitch} and %.0f{max_pitch} Hz\n"),
+                                              stdout)
+                                     cur.tuning
+                             | err(_) ->
+                                 io.write(alloca("Config: pitch %s{val} is not a number\n"),
+                                          stdout)
+                                 cur.tuning
+            else
+                ignore io.write(alloca("Config: ignoring unknown setting %s{key}\n"),
+                                stdout)
+        cur
+
+    // The settings for this run.
+    //
+    // A missing file is not a failure, it is a first run — and it is answered
+    // by writing the file, which is how a player finds out there is one. A
+    // home directory the game cannot write is not a failure either: it costs
+    // the file and nothing else, and the defaults still play.
+    let read = (d: settings) ->
+        match sys.home_dir() with
+        | none -> d
+        | some(hd) ->
+            let path = path_of(hd)
+            defer free(path)
+            if !io.exists(path) then
+                ignore io.ensure_dir(alloca("%s{hd}/.fuzzel-fobble"))  // shared with highscore.txt
+                match io.open(path, "w") with
+                | ok(fp) ->
+                    write_default(fp, d)
+                    // Reported because it is the whole of how the file
+                    // announces itself; a player who never sees this line
+                    // never learns there is anything to edit.
+                    match io.close(fp) with
+                    | ok -> io.write(alloca("Config: wrote %s{path}\n"), stdout)
+                    | err(_) -> io.write(alloca("Config: could not finish writing %s{path}\n"), stdout)
+                | err(_) ->
+                    io.write(alloca("Config: cannot write %s{path}\n"), stdout)
+                return d
+            match io.read_all(path) with
+            | ok(bytes) ->
+                defer free(bytes)
+                apply((const str) bytes, d)
+            | err(_) ->
+                io.write(alloca("Config: cannot read %s{path} — using defaults\n"), stdout)
+                d
+
+// The settings this run starts from: the built-in defaults, then whatever
+// the config file has to say about them.
+let open_config = () ->
+    config.read(config.settings {
+        tuning = opl_midi.at_pitch(default_tuning(), default_pitch()) })
 
 // `--tuning <name>` picks a temperament by name and `--pitch <hz>` the pitch
-// standard the A above middle C is tuned to. The two are independent: any
-// temperament can be sounded at any pitch, so the flags do not interact.
+// standard the A above middle C is tuned to, each overriding the config file
+// for this run. The two are independent: any temperament can be sounded at
+// any pitch, so neither flag disturbs the other's setting.
 //
 // Neither is a rebuild for the same reason `--music` isn't: hearing two
 // tunings against each other back to back is the only way to judge either, and
@@ -320,12 +543,14 @@ let default_pitch = () -> opl_midi.baroque_a
 //
 // A name or a number that doesn't work says so and falls back, rather than
 // leaving somebody wondering why nothing changed.
-let open_tuning = (args: str[]) ->
+let open_tuning = (args: str[], cfg: config.settings) ->
     let base = match arg_after(args, "--tuning") with
-               | none -> default_tuning()
+               | none -> cfg.tuning
                | some(n) ->
                    match opl_midi.temperament_named(n) with
-                   | some(t) -> t
+                   // Named tables all carry A=440; the pitch stays whatever
+                   // the config file or `--pitch` says it is.
+                   | some(t) -> opl_midi.at_pitch(t, cfg.tuning.a4)
                    | none ->
                        io.write(alloca("Tuning: no temperament named %s{n} — known:"),
                                 stdout)
@@ -333,23 +558,21 @@ let open_tuning = (args: str[]) ->
                            io.write(alloca(" %s{opl_midi.temperaments[i].name}"),
                                     stdout)
                        io.write("\n", stdout)
-                       default_tuning()
+                       cfg.tuning
     match arg_after(args, "--pitch") with
-    | none -> opl_midi.at_pitch(base, default_pitch())
+    | none -> base
     | some(h) ->
         match text.parse_f64(h) with
         | ok(hz) ->
-            // A pitch standard has to be a frequency in the audible part of
-            // the range for the F-number arithmetic downstream to mean
-            // anything; the bounds are generous rather than musical.
-            if hz >= 100.0 && hz <= 1000.0 then opl_midi.at_pitch(base, hz)
+            if hz >= config.min_pitch && hz <= config.max_pitch then
+                opl_midi.at_pitch(base, hz)
             else
-                io.write(alloca("Tuning: --pitch %s{h} is not between 100 and 1000 Hz\n"),
+                io.write(alloca("Tuning: --pitch %s{h} is not between %.0f{config.min_pitch} and %.0f{config.max_pitch} Hz\n"),
                          stdout)
-                opl_midi.at_pitch(base, default_pitch())
+                base
         | err(e) ->
             io.write(alloca("Tuning: --pitch %s{h} is not a number\n"), stdout)
-            opl_midi.at_pitch(base, default_pitch())
+            base
 
 // The music for a whole run, as a playlist.
 //
@@ -408,7 +631,14 @@ let main = (args: str[]) ->
     io.write("  F11         Toggle fullscreen\n", stdout)
     io.write("  ESC         Quit\n", stdout)
     io.write("  C (splash)  Clear best score\n\n", stdout)
-    io.write("Saved games live in ~/.fuzzel-fobble/save<N>.txt\n\n", stdout)
+    io.write("Saved games live in ~/.fuzzel-fobble/save<N>.txt\n", stdout)
+    io.write("Settings live in ~/.fuzzel-fobble/config\n\n", stdout)
+
+    // Read before the window opens, because what is in it is not only the
+    // audio's business — it is the file every future setting goes in, and
+    // the one line it may print about itself belongs with the rest of the
+    // startup text rather than after a window has appeared.
+    let cfg = open_config()
 
     gfx.open(game.logical_w, game.logical_h, c"Fuzzel Fobble")
 
@@ -446,7 +676,7 @@ let main = (args: str[]) ->
     // callback. `set_temperament` is safe mid-phrase, but only from whoever
     // owns the chip.
     let music = opl_midi.init(44100, first, kit)
-    let tuning = open_tuning(args)
+    let tuning = open_tuning(args, cfg)
     opl_midi.set_temperament(music, tuning)
     io.write(alloca("Tuning: %s{tuning.name}, A=%.1f{tuning.a4} Hz\n"), stdout)
     let s = snd.init(44100, music)

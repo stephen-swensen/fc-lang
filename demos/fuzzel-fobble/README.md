@@ -53,8 +53,8 @@ Both scripts forward their arguments to the game:
 | --- | --- |
 | `--music <path>` | Play one Standard MIDI File instead of the notebook |
 | `--bank <path>` | Load a `.op2`/`.wopl`/`.ibk`/`.sbi` instrument bank instead of the built-in one |
-| `--tuning <name>` | `equal`, `werckmeister3`, `kirnberger3` (default), `vallotti`, `young2`, `meantone` |
-| `--pitch <hz>` | The A above middle C — 415.3 by default, `--pitch 440` for modern concert pitch |
+| `--tuning <name>` | `equal` (default), `werckmeister3`, `kirnberger3`, `vallotti`, `young2`, `meantone` |
+| `--pitch <hz>` | The A above middle C — 440 by default, `--pitch 415.3` for baroque chamber pitch |
 
 The music is an ordinary Standard MIDI File, loaded at startup rather than
 compiled in, so any `.mid` can be dropped in and heard as an OPL2 would have
@@ -63,8 +63,40 @@ change to. A file that will not load costs the music and nothing else — the
 game says which way it failed and runs on, with effects intact. So does a
 tuning name it doesn't know, or a bank file it can't read.
 
-Both builds share the best-score file (`~/.fuzzel-fobble/highscore.txt`) and
-the nine saved games next to it.
+The tuning flags override the settings file described below, for the run they
+are given on.
+
+Both builds share the best-score file (`~/.fuzzel-fobble/highscore.txt`), the
+nine saved games next to it, and the settings file beside those.
+
+## Settings
+
+`~/.fuzzel-fobble/config` — one setting per line, `//` for a comment, blank
+lines ignored. The game writes it on a first run and never touches it again,
+so it arrives as a document of everything that can be set, with the defaults
+spelled out and the alternatives listed beside them, and an edit you make to it
+survives every later run. Delete it to get the original back.
+
+```
+tuning equal
+pitch 440.0
+```
+
+`tuning` is one of the six names in the flags table, and `pitch` is the
+frequency of the A above middle C, anywhere from 100 to 1000 Hz. The two are
+independent: any of the tunings can be sounded at any pitch.
+
+What belongs here is a setting you would want to make once rather than type at
+every launch, which is exactly what a tuning is — while `--tuning` and
+`--pitch` stay the way to hear two of them against each other, which is the
+only way to judge either.
+
+A line that is wrong costs only that line: an unknown name, a pitch that isn't
+a number or isn't in range, a setting this build has never heard of — each says
+so on stdout and leaves the rest of the file standing. That is the opposite of
+how a saved game is read, and deliberately: a save is a snapshot of a running
+game and half of one is worse than none, while a config file is written by hand
+and a typo in it should not cost you the file.
 
 ## Controls
 
@@ -167,7 +199,8 @@ it over `~/.fuzzel-fobble/save1.txt` and press `L` then `1`.
   the geometry is new; after that, reading the angle is the skill. The
   `CLEAR.` screen tells you it is going.
 - Best score persists to `~/.fuzzel-fobble/highscore.txt`; games persist to
-  `~/.fuzzel-fobble/save<N>.txt`, one per slot.
+  `~/.fuzzel-fobble/save<N>.txt`, one per slot; settings live in
+  `~/.fuzzel-fobble/config`.
 
 ## Special bubbles
 
@@ -700,40 +733,41 @@ told not to.
 
 ### The tuning
 
-Everything here is Bach, and none of it was written for equal temperament —
+The game plays in **equal temperament at A = 440 Hz**, because that is what a
+modern ear is tuned to and a game that opened by sounding subtly wrong to most
+people would have spent its first impression on a history lesson. Everything
+below is one line of `~/.fuzzel-fobble/config` away, and worth hearing.
+
+Everything here is Bach, and none of it was written for equal temperament,
 which was a theoretical curiosity in 1725 and did not become the default until
-the nineteenth century. The game plays in **Kirnberger III**.
+the nineteenth century. Twelve pure fifths overshoot seven octaves by about a
+quarter of a semitone, and a tuning system is a decision about where to put
+that error. Equal temperament spreads it evenly, so nothing is pure, nothing is
+bad, and all twelve keys sound the same. A *well* temperament does not: in
+Kirnberger III, C–E is a pure major third, the flat keys stay near it, and the
+remote keys tighten. That unevenness is the point — the notebook wanders from F
+to C minor and back, and in a well temperament those keys do not sound alike.
 
-Twelve pure fifths overshoot seven octaves by about a quarter of a semitone,
-and a tuning system is a decision about where to put that error. Equal
-temperament spreads it evenly, so nothing is pure, nothing is bad, and all
-twelve keys sound the same. Kirnberger III does not: C–E is a pure major
-third, the flat keys stay near it, and the remote keys tighten. That unevenness
-is the point — the notebook wanders from F to C minor and back, and in a well
-temperament those keys do not sound alike.
+Of the readings on offer, **Kirnberger III** (`tuning kirnberger3`) has the
+best claim to being *Bach's*. Johann Kirnberger studied with him, published
+this tuning as what he had been taught, and said so in print while people who
+had known Bach were alive to contradict him. Werckmeister III is what a
+recording more often means by "Bach's tuning", and it is the next line down.
+`demos/shared/README.md` has the full set and the arithmetic behind each.
 
-Of the readings on offer it has the best claim to being *Bach's*. Johann
-Kirnberger studied with him, published this tuning as what he had been taught,
-and said so in print while people who had known Bach were alive to contradict
-him. Werckmeister III is what a recording more often means by "Bach's tuning",
-and `--tuning werckmeister3` is one flag away; so is `--tuning equal`, which is
-how this sounded before. `demos/shared/README.md` has the full set and the
-arithmetic behind each.
+**`pitch 415.3`** drops the whole thing a semitone, to roughly where this music
+was played. That one is a convention standing in for a fact nobody has: there
+was no pitch standard in 1725. Pitch was a local matter, set by whatever organ
+or wind band a town already owned, and surviving instruments of the period
+range over nearly a whole tone. Bach's Leipzig ran two at once — the organs at
+Chorton, around A=465, and everything else at a Kammerton roughly a tone below,
+which is why he transposed organ parts to meet the players. The notebook is
+domestic keyboard music, a clavichord or harpsichord in the house, so Kammerton
+is its pitch, and A=415 is the modern early-music convention for it. It is also
+exactly a semitone down, which makes it a transposition rather than a smear.
 
-**And it plays at A = 415.3 Hz**, a semitone below modern concert pitch. That
-one is a convention standing in for a fact nobody has: there was no pitch
-standard in 1725. Pitch was a local matter, set by whatever organ or wind band
-a town already owned, and surviving instruments of the period range over nearly
-a whole tone. Bach's Leipzig ran two at once — the organs at Chorton, around
-A=465, and everything else at a Kammerton roughly a tone below, which is why he
-transposed organ parts to meet the players. The notebook is domestic keyboard
-music, a clavichord or harpsichord in the house, so Kammerton is its pitch, and
-A=415 is the modern early-music convention for it. It is also exactly a
-semitone down, which makes it a transposition rather than a smear.
-
-`--pitch 440` puts the tunes back where your ear expects them. Pitch and
-temperament are independent axes — any of the six tunings can be sounded at any
-pitch, so the two flags do not interact.
+Pitch and temperament are independent axes — any of the six tunings can be
+sounded at any pitch, so the two settings do not interact.
 
 How much survives the hardware: the OPL2 tunes by a 10-bit F-number, which
 gives it a grid 1.7 to 3.4 cents wide over the range these pieces use. The
