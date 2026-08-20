@@ -3968,6 +3968,18 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, ")(uintptr_t)");
             emit_expr(e->cast.operand, out);
             fprintf(out, ")");
+        } else if (e->cast.target && e->cast.operand->type &&
+                   e->cast.target->kind == TYPE_SLICE &&
+                   type_eq_ignore_const(e->cast.target, e->cast.operand->type)) {
+            /* A slice's constness rides its element type, not its header, so
+             * a const-add widening (u8[] -> const u8[]) leaves the C type
+             * exactly as it was.  The cast is then a struct cast to its own
+             * type: a no-op everywhere the C compiler tolerates it, and
+             * *rejected* in the one place it doesn't — a static initializer,
+             * where a cast stops the expression being a constant one.  Emit
+             * the operand.  (pass2 still needs the node: wrap_widen is what
+             * carries provenance through for escape analysis.) */
+            emit_expr(e->cast.operand, out);
         } else {
             fprintf(out, "((");
             emit_type(e->cast.target, out);
@@ -6390,6 +6402,16 @@ static void collect_const_backings(Expr *e, bool rodata) {
     if (!e) return;
     switch (e->kind) {
     case EXPR_ARRAY_LIT: {
+        /* Children first.  A backing array's initializer names the backing
+         * arrays of any slice literals nested inside it, and at C file scope
+         * a name must be declared before it is used — so the nested ones have
+         * to be emitted first.  g_const_backings is emitted in order, so
+         * post-order collection *is* dependency order.  Collecting the outer
+         * array first produced C that referenced a `static const` object
+         * declared later in the file: rejected by the C compiler, with fcc
+         * itself exiting 0. */
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            collect_const_backings(e->array_lit.elems[i], rodata);
         /* Empty arrays don't need a backing — we emit a NULL/0 slice at
          * the use site.  C11 rejects zero-length aggregate initializers. */
         if (e->array_lit.elem_count > 0) {
@@ -6401,8 +6423,6 @@ static void collect_const_backings(Expr *e, bool rodata) {
             DA_APPEND(g_const_backings, g_const_backing_count,
                       g_const_backing_cap, e);
         }
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            collect_const_backings(e->array_lit.elems[i], rodata);
         break;
     }
     case EXPR_SLICE_LIT:

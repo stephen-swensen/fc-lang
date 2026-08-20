@@ -272,6 +272,68 @@ let open_bank = (args: str[]) ->
     | some(path) -> load_bank_file(path)
     | none -> opl_bank_gm.make()
 
+// The tuning everything here is played in, unless `--tuning` says otherwise.
+//
+// Every piece the game plays is Bach — the notebook on the levels, and the
+// game's own arrangement of the Minuet in G on the title screen — and none of
+// it was written for equal temperament, which was a theoretical curiosity in
+// 1725 and did not become the default until the nineteenth century. Kirnberger
+// III is the reading with the best claim to being *Bach's*: Johann Kirnberger
+// studied with him, published this tuning as what he had been taught, and said
+// so in print while people who had known Bach were alive to contradict him.
+// What it sounds like: C-E is a pure major third and the flat keys stay close
+// to it, while the remote keys tighten — which is most of the point, since the
+// notebook wanders from F to C minor and back.
+//
+// `--tuning equal` is the way back to how this sounded before, and the other
+// names in `opl_midi.temperaments` are all offered.
+//
+// A function rather than a constant because a file-level initializer has to be
+// a C constant expression, and another module's constant is not one.
+let default_tuning = () -> opl_midi.kirnberger3
+
+// `--tuning <name>` picks a temperament by name and `--pitch <hz>` the pitch
+// standard the A above middle C is tuned to.
+//
+// Neither is a rebuild for the same reason `--music` isn't: hearing two
+// tunings against each other back to back is the only way to judge either, and
+// on this chip the difference is a few cents per note. `--pitch 415` is
+// roughly Bach's own Leipzig, a semitone below modern concert pitch; anything
+// from a scordatura joke to A=466 is equally available.
+//
+// A name or a number that doesn't work says so and falls back, rather than
+// leaving somebody wondering why nothing changed.
+let open_tuning = (args: str[]) ->
+    let base = match arg_after(args, "--tuning") with
+               | none -> default_tuning()
+               | some(n) ->
+                   match opl_midi.temperament_named(n) with
+                   | some(t) -> t
+                   | none ->
+                       io.write(alloca("Tuning: no temperament named %s{n} — known:"),
+                                stdout)
+                       for i in 0i64..opl_midi.temperaments.len do
+                           io.write(alloca(" %s{opl_midi.temperaments[i].name}"),
+                                    stdout)
+                       io.write("\n", stdout)
+                       default_tuning()
+    match arg_after(args, "--pitch") with
+    | none -> base
+    | some(h) ->
+        match text.parse_f64(h) with
+        | ok(hz) ->
+            // A pitch standard has to be a frequency in the audible part of
+            // the range for the F-number arithmetic downstream to mean
+            // anything; the bounds are generous rather than musical.
+            if hz >= 100.0 && hz <= 1000.0 then opl_midi.at_pitch(base, hz)
+            else
+                io.write(alloca("Tuning: --pitch %s{h} is not between 100 and 1000 Hz\n"),
+                         stdout)
+                base
+        | err(e) ->
+            io.write(alloca("Tuning: --pitch %s{h} is not a number\n"), stdout)
+            base
+
 // The music for a whole run, as a playlist.
 //
 // `--music <path>` picks a different Standard MIDI File, and it means *that
@@ -362,7 +424,15 @@ let main = (args: str[]) ->
                     io.write("Audio: running without music\n", stdout)
                     opl_midi.song { events = alloc(opl_midi.event[0] {})!,
                                     division = 480, length = 0 }
-    let s = snd.init(44100, opl_midi.init(44100, first, kit))
+    // Tuned before the device opens, which is the last moment this thread may
+    // touch the player at all — from `audio_start` on it belongs to the audio
+    // callback. `set_temperament` is safe mid-phrase, but only from whoever
+    // owns the chip.
+    let music = opl_midi.init(44100, first, kit)
+    let tuning = open_tuning(args)
+    opl_midi.set_temperament(music, tuning)
+    io.write(alloca("Tuning: %s{tuning.name}, A=%.1f{tuning.a4} Hz\n"), stdout)
+    let s = snd.init(44100, music)
     // Before the device opens, which is the last moment this thread may touch
     // the playlist: from here it is the audio callback's.
     opl_audio.set_playlist(s, pl.songs)

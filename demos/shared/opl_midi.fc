@@ -970,6 +970,165 @@ module opl_midi =
         free(b.patches)
 
     // ============================================================
+    // Temperament
+    // ============================================================
+
+    // A tuning: what each of the twelve pitch classes is worth, and what the
+    // A above middle C is worth in hertz.
+    //
+    // Equal temperament — every semitone the same size, every key the same
+    // colour — is a default rather than an obvious truth, and it is not the
+    // one the keyboard music of Bach's lifetime was written for. Twelve pure
+    // fifths overshoot seven octaves by the Pythagorean comma, about a
+    // quarter of a semitone, and every tuning is a decision about where to
+    // put that error. Equal temperament spreads it evenly, so nothing is pure
+    // and nothing is bad. A *well* temperament spreads it unevenly: the
+    // common keys come out near-pure and the remote ones tense, all twelve
+    // remain playable, and the difference between them is a colour a composer
+    // can write for. Meantone, older still, buys pure thirds in eight keys by
+    // making the other four unusable.
+    //
+    // The chip does not care. It is handed a frequency, and a frequency is
+    // exactly what a temperament changes.
+    //
+    // ```fc
+    // opl_midi.set_temperament(p, opl_midi.werckmeister3)
+    // opl_midi.set_temperament(p, opl_midi.at_pitch(opl_midi.vallotti, opl_midi.baroque_a))
+    // ```
+    //
+    // How much of this survives the hardware: the OPL2 tunes by a 10-bit
+    // F-number, and the player keeps that number between 512 and 1023 for
+    // every note from G1 up, so one step is between 1.7 and 3.4 cents and
+    // rounding costs at most half of that. The tables below reach ±27 cents
+    // and the interval differences they exist to create are larger still —
+    // Werckmeister III's major thirds span 18 cents end to end — so the
+    // character comes through, on a grid roughly a cent wide.
+    struct temperament =
+        name: const str
+
+        // Cents to add to each pitch class's equal-tempered pitch, C first,
+        // twelve entries. A cent is a hundredth of an equal-tempered
+        // semitone, so these are small numbers; ±30 covers everything here.
+        //
+        // Published tables read zero at C, and these are copied in that form
+        // so they can be checked against one. `freq_of` subtracts the A entry
+        // as it reads, which re-anchors the table on the note a tuner
+        // actually sets from a fork — so `a4` below always means what it
+        // says, whichever temperament is loaded, and switching between two of
+        // them moves the colours without moving the pitch.
+        cents: const f64[]
+
+        // The pitch standard: the frequency of A above middle C, MIDI note
+        // 69. Independent of the temperament — any table can be sounded at
+        // any pitch — which is why it is a field here and `at_pitch` is a
+        // one-liner.
+        a4: f64
+
+    // Modern concert pitch, and the pitch standard every table below carries
+    // until something says otherwise.
+    let concert_a = 440.0
+
+    // A representative baroque chamber pitch: a semitone below modern, which
+    // is roughly where Bach's Leipzig sat. There was no standard — pitch was
+    // a local fact, and surviving instruments from the period range over
+    // nearly a whole tone — so this is a convention, not a measurement.
+    let baroque_a = 415.3047
+
+    // The twelve deviations, C first: C C# D Eb E F F# G G# A Bb B.
+    //
+    // Every table below is the tuner's recipe worked out in cents, and every
+    // one of them is a rule about the twelve fifths: a pure fifth is 701.955
+    // cents, the Pythagorean comma the circle has to absorb is 23.460, and
+    // the syntonic comma that a pure major third asks for is 21.506. What
+    // distinguishes the temperaments is which fifths give up how much.
+
+    // Equal: the comma spread evenly, every fifth 2 cents narrow, every third
+    // 14 cents wide, every key identical. Here as the neutral element and as
+    // the thing to A/B against.
+    private let cents_equal = f64[12] {
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }
+
+    // Werckmeister III (1691) — Andreas Werckmeister's "correct temperament
+    // no. 1", and the one a recording most often means by "Bach's tuning".
+    // Four fifths (C-G, G-D, D-A, B-F#) narrow by a quarter comma each, the
+    // other eight pure. C, F and G major come out calm, the sharp keys
+    // Pythagorean and bright.
+    private let cents_werckmeister3 = f64[12] {
+         0.000,  -9.775,  -7.820,  -5.865,  -9.775,  -1.955,
+       -11.730,  -3.910,  -7.820, -11.730,  -3.910,  -7.820 }
+
+    // Kirnberger III (1779) — Johann Kirnberger studied with Bach and said
+    // more than once that he was writing down what he had been taught, which
+    // is the strongest claim any of these has to being the actual tuning.
+    // C-G-D-A-E narrow by a quarter of the *syntonic* comma, so C-E is a pure
+    // major third; F#-C# absorbs the leftover schisma; the rest are pure.
+    private let cents_kirnberger3 = f64[12] {
+         0.000,  -9.775,  -6.843,  -5.865, -13.686,  -1.955,
+        -9.776,  -3.422,  -7.820, -10.265,  -3.910, -11.731 }
+
+    // Vallotti (1754) — six consecutive fifths, F through B, narrow by a
+    // sixth of a comma; the other six pure. The gentlest of the four and the
+    // one most used by modern period ensembles, because it flatters
+    // everything and offends nothing.
+    private let cents_vallotti = f64[12] {
+         0.000,  -5.865,  -3.910,  -1.955,  -7.820,   1.955,
+        -7.820,  -1.955,  -3.910,  -5.865,   0.000,  -9.775 }
+
+    // Young II (1800) — Vallotti rotated one fifth sharper, so the six
+    // narrowed fifths run C through F#. Same recipe, key colours shifted:
+    // the sharp side pays a little more and the flat side a little less.
+    private let cents_young2 = f64[12] {
+         0.000,  -9.775,  -3.910,  -5.865,  -7.820,  -1.955,
+       -11.730,  -1.955,  -7.820,  -5.865,  -3.910,  -9.775 }
+
+    // Quarter-comma meantone (16th century) — eleven fifths narrow by a
+    // quarter of the syntonic comma, giving eight pure major thirds, and the
+    // twelfth fifth swallows everything left over: G#-Eb comes out 36 cents
+    // wide and howls. It is here as the foil rather than as a choice. It is
+    // gorgeous in C, G, D, F and Bb and it is *why* well temperament was
+    // invented: half the notebook — the E flat march, the C minor minuet —
+    // reaches keys this tuning cannot play.
+    private let cents_meantone = f64[12] {
+         0.000, -23.951,  -6.843,  10.265, -13.686,   3.422,
+       -20.529,  -3.422, -27.373, -10.265,   6.843, -17.108 }
+
+    let equal = temperament {
+        name = "equal",         cents = cents_equal,         a4 = concert_a }
+    let werckmeister3 = temperament {
+        name = "werckmeister3", cents = cents_werckmeister3, a4 = concert_a }
+    let kirnberger3 = temperament {
+        name = "kirnberger3",   cents = cents_kirnberger3,   a4 = concert_a }
+    let vallotti = temperament {
+        name = "vallotti",      cents = cents_vallotti,      a4 = concert_a }
+    let young2 = temperament {
+        name = "young2",        cents = cents_young2,        a4 = concert_a }
+    let meantone = temperament {
+        name = "meantone",      cents = cents_meantone,      a4 = concert_a }
+
+    // Every temperament here, in the order a menu should offer them: the
+    // default first, then the well temperaments oldest to newest, then the
+    // one that is a demonstration rather than an option. `temperament_named`
+    // reads this, and so should anything that wants to list or cycle them —
+    // it is the one place the set is written down.
+    let temperaments = temperament[6] {
+        equal, werckmeister3, kirnberger3, vallotti, young2, meantone }
+
+    // Look one up by the name it carries, for a command-line flag or a
+    // settings file. Exact match, no aliases: the names are short and lower
+    // case precisely so they can be typed.
+    let temperament_named = (name: const str) ->
+        let mut found = none(temperament)
+        for i in 0i64..temperaments.len do
+            if temperaments[i].name == name then found = some(temperaments[i])
+        found
+
+    // The same temperament sounded at a different pitch standard. The two are
+    // independent axes and this is what keeps them that way — `werckmeister3`
+    // at 415 is still Werckmeister III.
+    let at_pitch = (t: temperament, a4: f64) ->
+        temperament { name = t.name, cents = t.cents, a4 = a4 }
+
+    // ============================================================
     // Player state
     // ============================================================
 
@@ -1033,6 +1192,11 @@ module opl_midi =
         voices: voice[9]
         serial: u32
 
+        // What the keyboard is tuned to. `equal` until `set_temperament`
+        // says otherwise, so a caller that never asks gets exactly what this
+        // player always did.
+        tuning: temperament
+
         // Whether the chip is in rhythm mode, which decides both where a
         // percussion note goes and how many melodic voices there are.
         use_rhythm: bool
@@ -1082,9 +1246,28 @@ module opl_midi =
     // Pitch
     // ============================================================
 
-    // Fractional MIDI note number to frequency, A440.
-    private let freq_of = (note_f: f64) ->
-        440.0 * math.pow(2.0, (note_f - 69.0) / 12.0)
+    // Fractional MIDI note number to frequency, equal-tempered, at a given
+    // pitch standard. The one place in the file where an octave is a doubling
+    // and A is A.
+    private let et_freq = (a4: f64, note_f: f64) ->
+        a4 * math.pow(2.0, (note_f - 69.0) / 12.0)
+
+    // The frequency a tempered note sounds at.
+    //
+    // `note` is the written note — the thing that has a pitch class, and so
+    // the only thing a temperament has an opinion about. `extra` is
+    // everything continuous that follows it: pitch bend, and the few cents of
+    // detune the second half of a dual-voice patch carries. Bend slides the
+    // note off its own tempered pitch by equal-tempered semitones, which is
+    // what bending a real tuned keyboard would do, and what keeps a bend of
+    // zero exactly where the table put it.
+    //
+    // The `- cents[9]` is the re-anchoring the struct's comment describes: A
+    // is pitch class 9, and subtracting its own deviation makes A the note
+    // the table leaves alone. Everything else moves relative to it.
+    private let freq_of = (t: temperament, note: i32, extra: f64) ->
+        let pc = ((note % 12) + 12) % 12
+        et_freq(t.a4, (f64) note + extra + (t.cents[pc] - t.cents[9]) / 100.0)
 
     // Frequency to the chip's (block, F-number) pair, per
     //     f = fnum * 2^(block-1) * 49716 / 2^19.
@@ -1114,12 +1297,21 @@ module opl_midi =
         // Zero on every voice but the second of a dual-voice pair, where it is
         // the whole point: the two sound the same note a few cents apart.
         let det = (f64) ins.detune / 32.0
+        // A fixed-pitch patch is percussion (or a bank pretending to be), and
+        // a drum is not on the keyboard: it takes the pitch standard, since
+        // tuning the ensemble down should take the whole ensemble, but not
+        // the temperament, which is a statement about intervals a drum has
+        // none of.
         if ins.fixed_note > 0 then
-            block_fnum(freq_of((f64) ins.fixed_note + (f64) ins.transpose + det))
+            block_fnum(et_freq(p.tuning.a4,
+                               (f64) (ins.fixed_note + ins.transpose) + det))
         else
             let ch = p.channels[vc.midi_ch]
             let semis = (f64) ch.bend * (f64) ch.bend_range / 8192.0
-            block_fnum(freq_of((f64) vc.note + (f64) ins.transpose + semis + det))
+            // Transpose is part of the written note — a patch that transposes
+            // by anything but an octave sounds a different pitch class, and
+            // the temperament has to see the one that sounds.
+            block_fnum(freq_of(p.tuning, vc.note + ins.transpose, semis + det))
 
     // ============================================================
     // Level
@@ -1280,19 +1472,27 @@ module opl_midi =
             bd.m_char, bd.c_char, bd.m_scale, bd.c_scale,
             bd.m_atk,  bd.c_atk,  bd.m_sus,   bd.c_sus,
             bd.m_wave, bd.c_wave, bd.n_conn)
-        // Three channels, three pitches — and only three, because the hi-hat
-        // shares channel 7 with the snare and the cymbal shares channel 8
-        // with the tom.
-        let bd_n = if bd.fixed_note > 0 then bd.fixed_note else 36
+        tune_rhythm(p)
+
+    // The three rhythm channels' pitches — and only three, because the hi-hat
+    // shares channel 7 with the snare and the cymbal shares channel 8 with
+    // the tom.
+    //
+    // On their own because a change of pitch standard has to redo exactly
+    // this and nothing else: reprogramming the kit around it would reset the
+    // tom, which `strike_rhythm` retunes per hit.
+    private let tune_rhythm = (p: player*) ->
+        let bd_n = if p.kit.rhythm[0].fixed_note > 0 then p.kit.rhythm[0].fixed_note
+                   else 36
         let hh_n = if p.kit.rhythm[4].fixed_note > 0 then p.kit.rhythm[4].fixed_note
                    else 84
         let tt_n = if p.kit.rhythm[2].fixed_note > 0 then p.kit.rhythm[2].fixed_note
                    else 48
-        let { bblk, bfn } = block_fnum(freq_of((f64) bd_n))
+        let { bblk, bfn } = block_fnum(et_freq(p.tuning.a4, (f64) bd_n))
         opl2.set_pitch(p.chip, 6, bblk, bfn)
-        let { hblk, hfn } = block_fnum(freq_of((f64) hh_n))
+        let { hblk, hfn } = block_fnum(et_freq(p.tuning.a4, (f64) hh_n))
         opl2.set_pitch(p.chip, 7, hblk, hfn)
-        let { tblk, tfn } = block_fnum(freq_of((f64) tt_n))
+        let { tblk, tfn } = block_fnum(et_freq(p.tuning.a4, (f64) tt_n))
         opl2.set_pitch(p.chip, 8, tblk, tfn)
 
     // Strike one drum: level it for the note's velocity, tune it if it is the
@@ -1321,7 +1521,8 @@ module opl_midi =
         // with the cymbal, which is detuned as a side effect — inaudible,
         // because what the cymbal plays is mostly noise.
         if rv == 2 then
-            let { blk, fnv } = block_fnum(freq_of((f64) note + (f64) ins.transpose))
+            let { blk, fnv } = block_fnum(
+                et_freq(p.tuning.a4, (f64) (note + ins.transpose)))
             opl2.set_pitch(p.chip, 8, blk, fnv)
         opl2.rhythm_strike(p.chip, rhythm_voice_of(rv))
 
@@ -1619,6 +1820,7 @@ module opl_midi =
         p.kit = kit
         p.us_quarter = 500000
         p.looping = true
+        p.tuning = equal
         // Velocity index to total-level offset. TL is attenuation in 0.75 dB
         // steps counting down from 0, so a linear 0..1 level becomes
         // -20*log10(level)/0.75 steps of attenuation. Index 0 is silence
@@ -1691,6 +1893,26 @@ module opl_midi =
     // loops, and a one-shot is the special case.
     let set_loop = (p: player*, on: bool) ->
         p.looping = on
+
+    // Tune the keyboard. Safe at any time, including mid-phrase: every
+    // sounding note is retuned in place and the rhythm channels follow the
+    // new pitch standard, so a piece can change temperament under itself
+    // without an articulation or a stolen voice.
+    //
+    // A table shorter than twelve entries is not a tuning, and a player that
+    // held one would abort on the first note off the end of it. This is the
+    // door, so this is where that is decided: such a table is declined and
+    // the player keeps what it had. There is no way to report it and nothing
+    // useful the caller could do — `temperament_named` is how a name becomes
+    // a temperament, and everything it can return is twelve long.
+    let set_temperament = (p: player*, t: temperament) ->
+        if t.cents.len < 12i64 then return
+        p.tuning = t
+        for v in 0..9 do
+            if p.voices[v].keyed then
+                let { blk, fnv } = voice_pitch(p, v)
+                opl2.set_pitch(p.chip, v, blk, fnv)
+        if p.use_rhythm then tune_rhythm(p)
 
     // True once a non-looping song has run past its end tick.
     let finished = (p: player*) -> p.at_end

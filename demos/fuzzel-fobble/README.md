@@ -41,18 +41,27 @@ packages on Linux (`libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev
 libxcursor-dev libxi-dev` on Debian/Ubuntu), nothing extra on MSYS2, and the
 Xcode command line tools on macOS.
 
-Both scripts forward their arguments to the game, and the one argument the
-game takes is `--music`:
+Both scripts forward their arguments to the game:
 
 ```
 ./demos/fuzzel-fobble/run-sdl2.sh --music ~/some-other-song.mid
+./demos/fuzzel-fobble/run-sdl2.sh --tuning equal
+./demos/fuzzel-fobble/run-sdl2.sh --tuning werckmeister3 --pitch 415
 ```
+
+| Flag | What it does |
+| --- | --- |
+| `--music <path>` | Play one Standard MIDI File instead of the notebook |
+| `--bank <path>` | Load a `.op2`/`.wopl`/`.ibk`/`.sbi` instrument bank instead of the built-in one |
+| `--tuning <name>` | `equal`, `werckmeister3`, `kirnberger3` (default), `vallotti`, `young2`, `meantone` |
+| `--pitch <hz>` | The A above middle C — 440 by default, ~415 for baroque pitch |
 
 The music is an ordinary Standard MIDI File, loaded at startup rather than
 compiled in, so any `.mid` can be dropped in and heard as an OPL2 would have
 played it. Paths are relative to the repository root, which the run scripts
 change to. A file that will not load costs the music and nothing else — the
-game says which way it failed and runs on, with effects intact.
+game says which way it failed and runs on, with effects intact. So does a
+tuning name it doesn't know, or a bank file it can't read.
 
 Both builds share the best-score file (`~/.fuzzel-fobble/highscore.txt`) and
 the nine saved games next to it.
@@ -688,6 +697,39 @@ bank. Nothing corrects for that. The minuet's balance lives in its own CC7
 volumes because it is ours to edit; a downloaded file's does not, and inventing
 a trim for someone else's engraving would be the player managing a level it was
 told not to.
+
+### The tuning
+
+Everything here is Bach, and none of it was written for equal temperament —
+which was a theoretical curiosity in 1725 and did not become the default until
+the nineteenth century. The game plays in **Kirnberger III**.
+
+Twelve pure fifths overshoot seven octaves by about a quarter of a semitone,
+and a tuning system is a decision about where to put that error. Equal
+temperament spreads it evenly, so nothing is pure, nothing is bad, and all
+twelve keys sound the same. Kirnberger III does not: C–E is a pure major
+third, the flat keys stay near it, and the remote keys tighten. That unevenness
+is the point — the notebook wanders from F to C minor and back, and in a well
+temperament those keys do not sound alike.
+
+Of the readings on offer it has the best claim to being *Bach's*. Johann
+Kirnberger studied with him, published this tuning as what he had been taught,
+and said so in print while people who had known Bach were alive to contradict
+him. Werckmeister III is what a recording more often means by "Bach's tuning",
+and `--tuning werckmeister3` is one flag away; so is `--tuning equal`, which is
+how this sounded before. `demos/shared/README.md` has the full set and the
+arithmetic behind each.
+
+`--pitch 415` is the other axis, and roughly Bach's own Leipzig: a semitone
+below modern concert pitch. It is independent of the temperament — any of the
+six can be sounded at any pitch.
+
+How much survives the hardware: the OPL2 tunes by a 10-bit F-number, which
+gives it a grid 1.7 to 3.4 cents wide over the range these pieces use. The
+deviations are up to 14 cents and the interval differences larger still, so the
+character comes through with about a cent of rounding on each note. Percussion
+is exempt from the temperament and follows only the pitch standard — a drum has
+no intervals to temper.
 
 ### Effects
 

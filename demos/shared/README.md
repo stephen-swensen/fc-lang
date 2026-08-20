@@ -530,6 +530,63 @@ that reads a bank — both demos' `--bank`, `midi_render`, `bank_probe` — take
 path, so nothing depends on it existing. Put a `README` beside whatever you drop
 in naming the licence you got it under.
 
+### Temperament: what the keyboard is tuned to
+
+A player tunes itself equal-tempered at A = 440 and will go on doing that
+untouched. `set_temperament` changes both halves of that:
+
+```fc
+opl_midi.set_temperament(p, opl_midi.werckmeister3)
+opl_midi.set_temperament(p, opl_midi.at_pitch(opl_midi.vallotti, opl_midi.baroque_a))
+```
+
+Twelve pure fifths overshoot seven octaves by the Pythagorean comma — about a
+quarter of a semitone — and every tuning system is a decision about where to
+put that error. Equal temperament spreads it evenly, so nothing is pure and
+nothing is bad and all twelve keys sound alike; it is a nineteenth-century
+default rather than a timeless one. A **well temperament** spreads it
+unevenly: common keys come out near-pure, remote ones tense, all twelve stay
+playable, and the difference between them is a colour composers before about
+1800 wrote for. **Meantone**, older still, buys eight pure major thirds by
+making the other four keys unusable.
+
+```fc
+struct temperament =
+    name: const str
+    cents: const f64[]      // 12 deviations from equal, C first
+    a4: f64                 // pitch standard: the A above middle C, in Hz
+```
+
+Six are provided, and `temperaments` is the slice of all of them in menu
+order — the one place the set is written down, and what `temperament_named`
+reads for a command-line flag:
+
+| Name | What it is |
+| --- | --- |
+| `equal` | The default, and the thing to A/B against |
+| `werckmeister3` | Werckmeister III (1691), what a recording usually means by "Bach's tuning" |
+| `kirnberger3` | Kirnberger III (1779), published by a pupil of Bach as what he was taught |
+| `vallotti` | Vallotti (1754), the gentlest — modern period ensembles' default |
+| `young2` | Young II (1800), Vallotti rotated one fifth sharper |
+| `meantone` | Quarter-comma meantone — eight pure thirds and a howling wolf at G♯–E♭ |
+
+The tables are published-form, reading zero at C; the player re-anchors them on
+A as it reads, so `a4` always means what it says and switching temperaments
+moves the colours without moving the pitch. `at_pitch` is the other axis:
+`baroque_a` (415.3 Hz, a semitone below modern, roughly Bach's Leipzig) applies
+to any of the six.
+
+**Percussion is exempt.** A drum takes the pitch standard — tuning the ensemble
+down should take the whole ensemble — but not the temperament, which is a
+statement about intervals a drum has none of.
+
+**What the chip does to it.** The OPL2 tunes by a 10-bit F-number, and the
+player keeps that number between 512 and 1023 for every note from G1 up, so one
+step is 1.7–3.4 cents and rounding costs at most half of that. The tables reach
+±27 cents and the interval differences they exist to create are larger still —
+Werckmeister III's major thirds span 18 cents end to end — so the character
+comes through on a grid roughly a cent wide.
+
 ### Driving the player
 
 ```fc
@@ -540,7 +597,13 @@ let resume   = (p: player*)
 let set_loop = (p: player*, on: bool)   // on by default
 let finished = (p: player*) -> bool
 let advance  = (p: player*)             // one output sample of clock
+let set_temperament = (p: player*, t: temperament)
 ```
+
+`set_temperament` is safe at any time, mid-phrase included: every sounding note
+is retuned in place, so nothing is re-articulated and no voice is stolen. Like
+everything else here it is the chip owner's to call — in a game that means
+before `audio_start`, or through the engine's command ring.
 
 `advance` moves the clock and dispatches whatever that reveals; it does **not**
 produce a sample. The caller pulls audio from `p.chip` with `opl2.sample`.
@@ -594,7 +657,16 @@ cc -std=c11 -o /tmp/mr /tmp/mr.c -lm
 A third argument sets the length in seconds — ask for more than the song has
 and looping turns on, which is how you audition the wrap. A fourth loads a
 `.op2`/`.ibk`/`.sbi` bank in place of the built-in one, which is how two banks
-get compared on the same piece.
+get compared on the same piece; `-` there means the built-in bank.
+
+A fifth names a temperament, optionally with a pitch standard after an `@`.
+That is the pair of commands a tuning has to be judged by, since the whole
+difference is a few cents per note:
+
+```
+/tmp/mr music/minuet.mid /tmp/eq.wav 20 - equal
+/tmp/mr music/minuet.mid /tmp/kb.wav 20 - kirnberger3@415
+```
 
 **For the bank itself**, `tools/bank_probe.fc` plays every patch under
 identical conditions and reports two numbers per voice: its loudness, measured

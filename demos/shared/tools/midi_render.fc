@@ -11,7 +11,16 @@
 // `seconds` defaults to the song's own length, so a piece renders exactly once
 // through unless told otherwise; ask for longer and looping shows you the
 // wrap. A fourth argument loads a `.op2`, `.wopl`, `.ibk` or `.sbi` bank in place of
-// the built-in one, which is how two banks get compared on the same piece.
+// the built-in one, which is how two banks get compared on the same piece; `-`
+// there means the built-in bank and is how the fifth argument gets reached.
+//
+// The fifth is a temperament — `equal` unless named, and any name in
+// `opl_midi.temperaments` — with an optional pitch standard after an `@`:
+//
+//     midi_render bwv114.mid /tmp/eq.wav  - - equal
+//     midi_render bwv114.mid /tmp/kb.wav  - - kirnberger3@415
+//
+// which is the pair of commands a tuning has to be judged by.
 //
 // Levels are reported, not managed. A game mixes this against sound effects
 // and puts a soft knee after the sum (see `opl_audio.fc`); a tool that quietly
@@ -102,8 +111,11 @@ let ticks_per_second = (division: i32) ->
 // The bank named as the fourth argument, or the built-in one. A bank file
 // replaces the built-in entirely rather than merging with it, so two banks
 // can be compared on the same piece without a rebuild.
+//
+// `-` is the built-in bank spelled out, so the fifth argument can be reached
+// without one.
 let choose_bank = (args: str[]) ->
-    if args.len <= 4i64 then ok(opl_bank_gm.make())
+    if args.len <= 4i64 || args[4] == "-" then ok(opl_bank_gm.make())
     else
         let bb = match io.read_all(args[4]) with
                  | ok(b) -> b
@@ -111,9 +123,44 @@ let choose_bank = (args: str[]) ->
         defer free(bb)
         opl_midi.load_bank(bb)
 
+// The temperament named as the fifth argument, optionally with a pitch
+// standard after an `@`: `vallotti`, `kirnberger3@415`, `equal@466`.
+//
+// This is the whole reason the tool grew a fifth argument. A tuning is a few
+// cents per note and the only way to judge one is to hear two renderings of
+// the same piece back to back, which is a pair of commands rather than a pair
+// of game launches.
+let choose_tuning = (args: str[]) ->
+    if args.len <= 5i64 then opl_midi.equal
+    else
+        let parts = text.split(args[5], "@")
+        defer free(parts)
+        let base = match opl_midi.temperament_named(parts[0]) with
+                   | some(t) -> t
+                   | none ->
+                       io.write(alloca("tuning: no temperament named %s{parts[0]} — known:"),
+                                stderr)
+                       for i in 0i64..opl_midi.temperaments.len do
+                           io.write(alloca(" %s{opl_midi.temperaments[i].name}"), stderr)
+                       io.write("\n", stderr)
+                       opl_midi.equal
+        if parts.len < 2i64 then base
+        else
+            match text.parse_f64(parts[1]) with
+            | ok(hz) ->
+                if hz >= 100.0 && hz <= 1000.0 then opl_midi.at_pitch(base, hz)
+                else
+                    io.write(alloca("tuning: A=%s{parts[1]} is not between 100 and 1000 Hz\n"),
+                             stderr)
+                    base
+            | err(e) ->
+                io.write(alloca("tuning: A=%s{parts[1]} is not a number\n"), stderr)
+                base
+
 let main = (args: str[]) ->
     if args.len < 3i64 then
-        io.write("usage: midi_render <in.mid> <out.wav> [seconds] [bank-file]\n", stderr)
+        io.write("usage: midi_render <in.mid> <out.wav> [seconds] [bank-file|-] [tuning[@hz]]\n",
+                 stderr)
         return 1
     let in_path = args[1]
     let out_path = args[2]
@@ -142,6 +189,9 @@ let main = (args: str[]) ->
 
     let p = opl_midi.init(rate, tune, kit)
     defer opl_midi.free_player(p)
+
+    let tuning = choose_tuning(args)
+    opl_midi.set_temperament(p, tuning)
 
     // The song's own length in seconds. A tempo change later on moves the
     // real duration, so this is a default rather than a measurement — which
@@ -195,6 +245,7 @@ let main = (args: str[]) ->
     // nine melodic voices and six, and between a drum kit made of noise and
     // one made of an impression of noise.
     io.write(alloca("bank %s{kit.name}: %d{(i32) kit.patches.len} instruments, rhythm mode %s{if p.use_rhythm then "on" else "off"} (%d{p.vmax} melodic voices)\n"), stdout)
+    io.write(alloca("tuning %s{tuning.name}, A=%.2f{tuning.a4} Hz\n"), stdout)
     io.write(alloca("rendered %d{frames} frames (%.2f{secs} s) at %d{rate} Hz to %s{out_path}\n"), stdout)
     io.write(alloca("peak %d{peak} of 32767, %d{clipped} clipped samples, %d{(i32) p.steals} voice steals\n"), stdout)
     0
