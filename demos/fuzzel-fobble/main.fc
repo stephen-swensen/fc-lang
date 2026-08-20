@@ -292,14 +292,31 @@ let open_bank = (args: str[]) ->
 // a C constant expression, and another module's constant is not one.
 let default_tuning = () -> opl_midi.kirnberger3
 
+// And the pitch it is sounded at: `opl_midi.baroque_a`, a semitone below
+// modern concert pitch.
+//
+// This one is a convention standing in for a fact nobody has. There was no
+// pitch standard in 1725 — it was a local matter, set by whatever organ or
+// wind band a town already owned, and surviving instruments of the period
+// range over nearly a whole tone. Bach's Leipzig had two at once: the organs
+// sat at Chorton, about A=465, and everything else at a Kammerton roughly a
+// tone below, which is why he transposed organ parts to meet the players.
+// The notebook is domestic keyboard music — a clavichord or harpsichord in
+// the house — so Kammerton is its pitch, and A=415 is the modern early-music
+// convention for it. It has the convenient property of being exactly a
+// semitone down, so it is a transposition rather than a smear.
+//
+// `--pitch 440` is modern concert pitch, for anyone who wants the tunes where
+// their ear expects them.
+let default_pitch = () -> opl_midi.baroque_a
+
 // `--tuning <name>` picks a temperament by name and `--pitch <hz>` the pitch
-// standard the A above middle C is tuned to.
+// standard the A above middle C is tuned to. The two are independent: any
+// temperament can be sounded at any pitch, so the flags do not interact.
 //
 // Neither is a rebuild for the same reason `--music` isn't: hearing two
 // tunings against each other back to back is the only way to judge either, and
-// on this chip the difference is a few cents per note. `--pitch 415` is
-// roughly Bach's own Leipzig, a semitone below modern concert pitch; anything
-// from a scordatura joke to A=466 is equally available.
+// on this chip the difference is a few cents per note.
 //
 // A name or a number that doesn't work says so and falls back, rather than
 // leaving somebody wondering why nothing changed.
@@ -318,7 +335,7 @@ let open_tuning = (args: str[]) ->
                        io.write("\n", stdout)
                        default_tuning()
     match arg_after(args, "--pitch") with
-    | none -> base
+    | none -> opl_midi.at_pitch(base, default_pitch())
     | some(h) ->
         match text.parse_f64(h) with
         | ok(hz) ->
@@ -329,10 +346,10 @@ let open_tuning = (args: str[]) ->
             else
                 io.write(alloca("Tuning: --pitch %s{h} is not between 100 and 1000 Hz\n"),
                          stdout)
-                base
+                opl_midi.at_pitch(base, default_pitch())
         | err(e) ->
             io.write(alloca("Tuning: --pitch %s{h} is not a number\n"), stdout)
-            base
+            opl_midi.at_pitch(base, default_pitch())
 
 // The music for a whole run, as a playlist.
 //

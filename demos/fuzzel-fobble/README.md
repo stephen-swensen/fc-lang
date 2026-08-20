@@ -46,7 +46,7 @@ Both scripts forward their arguments to the game:
 ```
 ./demos/fuzzel-fobble/run-sdl2.sh --music ~/some-other-song.mid
 ./demos/fuzzel-fobble/run-sdl2.sh --tuning equal
-./demos/fuzzel-fobble/run-sdl2.sh --tuning werckmeister3 --pitch 415
+./demos/fuzzel-fobble/run-sdl2.sh --tuning werckmeister3 --pitch 440
 ```
 
 | Flag | What it does |
@@ -54,7 +54,7 @@ Both scripts forward their arguments to the game:
 | `--music <path>` | Play one Standard MIDI File instead of the notebook |
 | `--bank <path>` | Load a `.op2`/`.wopl`/`.ibk`/`.sbi` instrument bank instead of the built-in one |
 | `--tuning <name>` | `equal`, `werckmeister3`, `kirnberger3` (default), `vallotti`, `young2`, `meantone` |
-| `--pitch <hz>` | The A above middle C — 440 by default, ~415 for baroque pitch |
+| `--pitch <hz>` | The A above middle C — 415.3 by default, `--pitch 440` for modern concert pitch |
 
 The music is an ordinary Standard MIDI File, loaded at startup rather than
 compiled in, so any `.mid` can be dropped in and heard as an OPL2 would have
@@ -720,9 +720,20 @@ and `--tuning werckmeister3` is one flag away; so is `--tuning equal`, which is
 how this sounded before. `demos/shared/README.md` has the full set and the
 arithmetic behind each.
 
-`--pitch 415` is the other axis, and roughly Bach's own Leipzig: a semitone
-below modern concert pitch. It is independent of the temperament — any of the
-six can be sounded at any pitch.
+**And it plays at A = 415.3 Hz**, a semitone below modern concert pitch. That
+one is a convention standing in for a fact nobody has: there was no pitch
+standard in 1725. Pitch was a local matter, set by whatever organ or wind band
+a town already owned, and surviving instruments of the period range over nearly
+a whole tone. Bach's Leipzig ran two at once — the organs at Chorton, around
+A=465, and everything else at a Kammerton roughly a tone below, which is why he
+transposed organ parts to meet the players. The notebook is domestic keyboard
+music, a clavichord or harpsichord in the house, so Kammerton is its pitch, and
+A=415 is the modern early-music convention for it. It is also exactly a
+semitone down, which makes it a transposition rather than a smear.
+
+`--pitch 440` puts the tunes back where your ear expects them. Pitch and
+temperament are independent axes — any of the six tunings can be sounded at any
+pitch, so the two flags do not interact.
 
 How much survives the hardware: the OPL2 tunes by a 10-bit F-number, which
 gives it a grid 1.7 to 3.4 cents wide over the range these pieces use. The
