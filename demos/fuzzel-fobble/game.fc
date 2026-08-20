@@ -108,6 +108,7 @@ struct game_state =
     angle: f64              // degrees; 0 = straight up, negative = left
     aim_dir: i32            // -1, 0, +1: the direction the current press holds
     aim_hold: i32           // frames since that press, capped once the ramp ends
+    aim_center: bool        // swinging back to vertical, until it lands or is taken over
     cur_color: i32
     next_color: i32
 
@@ -284,20 +285,43 @@ module game =
     //
     // What is left after both of those is a question of *range*, and the answer
     // is much narrower than it first looks. The two ends started 17 times
-    // apart and are now 7, because a curve that has to climb 17-fold in 55
-    // frames is a steep curve wherever you put the bend in it — too slow to be
-    // going anywhere at the bottom, too quick to stop at the top. Closing the
-    // gap from both sides leaves the middle where it was: three quarters of a
-    // second of hold moves 30 degrees, the same as it did before, and it is
-    // the approach to that figure and the departure from it that changed.
+    // apart and are now 4, because a curve that has to climb 17-fold is a
+    // steep curve wherever you put the bend in it — too slow to be going
+    // anywhere at the bottom, too quick to stop at the top.
     //
-    // A full traverse is 104 frames against the flat 1.7's 92 — the one thing
-    // this costs, and the rarest thing anybody does with the aim.
+    // `aim_creep` is exactly `aim_step`, which is not a coincidence and is the
+    // clearest way to say what a hold is: the press, repeating once a frame,
+    // and then accelerating. That is auto-repeat's own definition, and pinning
+    // the bottom of the sweep to the size of a press means the two controls
+    // meet instead of being two unrelated speeds either side of a delay.
+    //
+    // Frozen Bubble is the useful yardstick for the top half, because a flat
+    // 0.03 rad per frame at 50 Hz is what the genre's reference implementation
+    // decided a hold is worth. It crosses half the arc in 0.91 s; this reaches
+    // full speed in 0.67 s and crosses the same half in 0.93 s, so a hold is
+    // worth the same as that game's — while a *press* is still worth 0.55
+    // degrees against its 1.72, which is the whole point and the half Frozen
+    // Bubble never had.
     let aim_step = 0.55       // one press
-    let aim_creep = 0.30      // where a hold starts moving
+    let aim_creep = 0.55      // where a hold starts moving: the press, repeating
     let aim_fast = 2.2        // where a hold settles
     let aim_delay = 10        // frames held before it starts moving at all
-    let aim_ramp = 55         // frames from aim_creep to aim_fast
+    let aim_ramp = 30         // frames from aim_creep to aim_fast
+
+    // Recentring is not aiming and does not use the curve above. The curve
+    // exists so that a player can stop the barrel where they mean to; this
+    // has a known place to stop and no need to be steered into it, so it
+    // runs at one brisk rate — the width of the whole arc in under half a
+    // second — and snaps the last step rather than creeping up on zero.
+    //
+    // What it is *for* is repeatability. An incremental aim has no datum:
+    // every shot is adjusted from wherever the last one left the barrel, so
+    // no shot can be described, remembered, or repeated except as a feeling
+    // in the hand. One key back to vertical turns the next shot into three
+    // taps left of straight up, which is a thing a player can learn. Frozen
+    // Bubble has had this since 2002 and it is the only part of that game's
+    // aim worth stealing.
+    let aim_center_speed = 3.0
 
     // The aim guide walks the live shot's substep (shot_speed / shot_substeps =
     // 3 px) so it can't disagree with it, and draws one dot in nine — the same
@@ -336,8 +360,11 @@ module game =
     let metal_pct = 5        // per launcher reload
 
     // The aim guide is a tutorial device: it draws the bounce for you while you
-    // learn the geometry, and comes off after this level.
-    let guide_levels = 1
+    // learn the geometry, and comes off after this level. Two levels rather
+    // than one because a single board is barely long enough to notice the
+    // bounce, let alone read one — and the level it comes off on is the level
+    // that has to be played without it.
+    let guide_levels = 2
 
     // The sight, which is what is left once it has. Past the guide levels the
     // only thing on screen that says where the barrel points is the barrel,
@@ -1191,6 +1218,7 @@ module game =
         w.game.angle = 0.0
         w.game.aim_dir = 0
         w.game.aim_hold = 0
+        w.game.aim_center = false
         w.game.idle_timer = 0
         w.game.level_frames = 0
         w.game.popup_timer = 0
@@ -1561,6 +1589,7 @@ module game =
         w.game.angle = fclamp(st.angle, -aim_limit, aim_limit)
         w.game.aim_dir = 0
         w.game.aim_hold = 0
+        w.game.aim_center = false
         w.game.cur_color = st.cur_color
         w.game.next_color = st.next_color
         w.game.idle_timer = st.idle_timer
@@ -1810,6 +1839,30 @@ module game =
                     w.game.aim_hold = w.game.aim_hold + 1
                 w.game.angle = w.game.angle
                              + (f64) w.game.aim_dir * aim_sweep(w.game.aim_hold)
+
+            // Back to the datum. Latched on the press rather than run off the
+            // held key, because "go to vertical" is one instruction and not a
+            // thing you should have to keep asking for — and taken back the
+            // moment an aim key says otherwise, since a player correcting
+            // mid-swing means the swing, not the correction, is what they have
+            // changed their mind about.
+            if plat.tap(inp, plat.center) then
+                w.game.aim_center = true
+            if dir != 0 || press != 0 then
+                w.game.aim_center = false
+
+            if w.game.aim_center then
+                if w.game.angle > -aim_center_speed && w.game.angle < aim_center_speed then
+                    // The last step is a snap, not a step. Walking the final
+                    // fraction would leave the barrel a hair off the one angle
+                    // this key exists to name, and a datum that is nearly the
+                    // datum is not one.
+                    w.game.angle = 0.0
+                    w.game.aim_center = false
+                else if w.game.angle > 0.0 then
+                    w.game.angle = w.game.angle - aim_center_speed
+                else
+                    w.game.angle = w.game.angle + aim_center_speed
 
             w.game.angle = fclamp(w.game.angle, -aim_limit, aim_limit)
             update_shot(w, rng, s)

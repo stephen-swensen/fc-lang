@@ -103,6 +103,7 @@ and a typo in it should not cost you the file.
 | Key | Action |
 |-----|--------|
 | Left / Right (or A, D) | Aim — a press nudges, a hold sweeps |
+| Up (or W) | Swing the launcher back to straight up |
 | SPACE | Fire (also starts / restarts) |
 | ENTER | Start / restart |
 | TAB | Swap the loaded bubble with the next one |
@@ -195,9 +196,10 @@ it over `~/.fuzzel-fobble/save1.txt` and press `L` then `1`.
   readout in the left panel is that number, falling while you watch.
 - The launcher is only ever loaded with a colour still on the board, so you
   can never be handed a dead shot.
-- **The aim guide only runs on level 1.** It draws the bounce for you while
-  the geometry is new; after that, reading the angle is the skill. The
-  `CLEAR.` screen tells you it is going.
+- **The aim guide only runs on the first two levels.** It draws the bounce for
+  you while the geometry is new; after that, reading the angle is the skill —
+  and the dotted sight along the barrel is what you read it with. The `CLEAR.`
+  screen tells you the guide is going.
 - Best score persists to `~/.fuzzel-fobble/highscore.txt`; games persist to
   `~/.fuzzel-fobble/save<N>.txt`, one per slot; settings live in
   `~/.fuzzel-fobble/config`.
@@ -848,8 +850,8 @@ and the genre has always answered generously.
 
 **The aim keys are read by duration, not by being down.** A press moves the
 barrel exactly one small step however long the finger stays on it; holding
-past ten frames starts a sweep that crawls at half that step per frame and
-takes a second to settle into full speed. This is
+past ten frames starts a sweep that begins as that same step repeating once a
+frame and takes two thirds of a second to settle into full speed. This is
 keyboard auto-repeat, and it is here for the reason auto-repeat exists: a key
 is either down or up, so the only way one key delivers both a repeatable
 nudge and a fast traverse is to read *how long* the press lasted. A flat rate
@@ -882,12 +884,29 @@ The last thing to fall out was *range*, and it turned out to be much narrower
 than it first looked. The two ends of the sweep started seventeen times apart,
 and a curve that has to climb seventeen-fold is steep wherever you put the
 bend in it — too slow to be going anywhere at the bottom, too quick to stop
-at the top. Closing the gap from both sides to a factor of seven leaves the
-middle exactly where it was: three quarters of a second of hold moves thirty
-degrees, the same as before. Only the approach to that figure and the
-departure from it changed. A full traverse costs twelve frames against the
-flat rate it replaced — 104 against 92 — which is the one thing any of this
-costs, and the rarest thing anybody does with the aim.
+at the top. They are now four times apart, and the bottom one is exactly the
+size of a press: a hold *is* the press repeating once a frame, and then
+accelerating, which is auto-repeat's own definition and means the two controls
+meet rather than being unrelated speeds either side of a delay.
+
+Frozen Bubble is the useful yardstick for the top half, since a flat 0.03 rad
+per frame at 50 Hz is what the genre's reference implementation decided a hold
+is worth. It crosses half the arc in 0.91 s; this reaches full speed in 0.67 s
+and crosses the same half in 0.93 s. So a hold here is worth what a hold is
+worth there — while a *press* is worth 0.55° against its 1.72°, which is the
+whole point and the half Frozen Bubble never had.
+
+**A key back to the datum.** An incremental aim has no reference point:
+every shot is adjusted from wherever the last one left the barrel, so no shot
+can be described, remembered or repeated except as a feeling in the hand.
+Making the aim finer does not fix that — it makes each adjustment smaller
+without giving you anywhere to measure it from. Up (or W) swings the launcher
+back to vertical at one brisk rate, snapping the last step rather than
+creeping up on zero, and any aim key takes it back mid-swing. That turns the
+next shot into "three taps left of straight up", which is a thing a player can
+learn. Frozen Bubble has had this since 2002; it is the one part of that
+game's aim handling worth taking, and its deadband snap is why the barrel
+lands *on* vertical rather than near it.
 
 **The sight is the barrel, drawn long enough to read.** Aim finer than the
 instrument you read it off and you have not gained anything: 64 px of barrel

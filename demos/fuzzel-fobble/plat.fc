@@ -4,7 +4,7 @@
 // depend on. It fixes two things:
 //
 //   * what a frame of input looks like, in the game's vocabulary rather than
-//     any library's — nine actions and a quit, no key codes;
+//     any library's — named actions and a quit, no key codes;
 //   * what a backend has to provide, which is the `gfx` module tabulated at
 //     the foot of this file.
 //
@@ -54,6 +54,12 @@ module plat =
     let clear_best = 256
     let save       = 512
     let load       = 1024
+    // Swing the launcher back to straight up. Not an aiming key — an aiming
+    // key adjusts from wherever you happen to be, which is why an incremental
+    // aim is so hard to repeat a shot with. This one is a *datum*: it gets you
+    // to a known angle so the next shot can be described as three taps left of
+    // vertical rather than as wherever the last one left the barrel.
+    let center     = 2048
 
     // Is this action being held? / did it go down this frame?
     let down = (inp: const input*, action: i32) -> inp.held & action != 0

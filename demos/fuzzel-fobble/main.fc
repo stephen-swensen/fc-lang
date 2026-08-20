@@ -620,6 +620,7 @@ let main = (args: str[]) ->
 #end
     io.write("Controls:\n", stdout)
     io.write("  Left/Right  Aim (tap to nudge, hold to sweep)\n", stdout)
+    io.write("  Up / W      Swing the launcher back to straight up\n", stdout)
     io.write("  SPACE       Fire\n", stdout)
     io.write("  ENTER       Start / restart\n", stdout)
     io.write("  TAB         Swap current and next bubble\n", stdout)

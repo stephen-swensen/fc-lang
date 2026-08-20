@@ -167,6 +167,8 @@ module gfx =
         latch(inp, raylib.key_a,     plat.aim_left)
         latch(inp, raylib.key_right, plat.aim_right)
         latch(inp, raylib.key_d,     plat.aim_right)
+        latch(inp, raylib.key_up,    plat.center)
+        latch(inp, raylib.key_w,     plat.center)
         latch(inp, raylib.key_space, plat.fire)
         latch(inp, raylib.key_enter, plat.start)
         latch(inp, raylib.key_tab,   plat.swap)

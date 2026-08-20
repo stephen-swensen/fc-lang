@@ -102,6 +102,7 @@ module gfx =
     private let action_for = (k: i32) ->
         if k == sdl2.key_left || k == sdl2.key_a then plat.aim_left
         else if k == sdl2.key_right || k == sdl2.key_d then plat.aim_right
+        else if k == sdl2.key_up || k == sdl2.key_w then plat.center
         else if k == sdl2.key_space then plat.fire
         else if k == sdl2.key_return then plat.start
         else if k == sdl2.key_tab then plat.swap
