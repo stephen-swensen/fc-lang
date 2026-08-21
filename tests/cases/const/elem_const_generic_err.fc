@@ -1,0 +1,9 @@
+// Inference absorbs the element's const only where the container adds one —
+// a plain `'a*[]` parameter still refuses a slice of read-only views.
+let mutable = (s: 'a*[]) ->
+    (i32) s.len
+
+let main = (args: str[]) ->
+    let mut x = 1
+    let cx = (const i32*) &x
+    mutable(const i32*[2] { cx, cx })

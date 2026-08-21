@@ -1,0 +1,11 @@
+// The two spellings are distinct types and the diagnostic says so: before the
+// element-const slice had a name of its own, this read "expected const str[],
+// got const str[]". Dropping the container's const is a strip, not a widen.
+let elem_const = (s: (const str)[]) ->
+    (i32) s.len
+
+let read_only = (s: const str[]) ->
+    elem_const(s)
+
+let main = (args: str[]) ->
+    read_only(const str[2] { "a", "bc" })

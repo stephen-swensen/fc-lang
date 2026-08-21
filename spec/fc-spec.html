@@ -1190,7 +1190,7 @@ Since FC has no type annotations on `let` bindings, local variable types are alw
 
 #### Implicit coercion
 
-Non-const implicitly widens to const (the safe direction). Const to non-const requires an explicit cast:
+Non-const implicitly widens to const (the safe direction), and a container that gains const may drop it from its element type — `(const str)[]` widens to `const str[]` (§Deep const). Const to non-const requires an explicit cast:
 
 ```fc
 let f = (s: const str) -> s.len
@@ -1239,9 +1239,33 @@ let f = (n: const node*) ->
 
 Deep const chains naturally: `const_ptr.a.b.c.d.e` — every pointer dereference in the chain preserves const, and every value field access inherits the write restriction from the enclosing const dereference.
 
-`.ptr` on a const slice gives a const pointer: if `s` is `const i32[]`, then `s.ptr` is `const i32*`. Loading a reference *out of* a read-only slice is const too — the element type of a `const T[]` carries the restriction, so an element cannot be laundered into a writable view.
+`.ptr` on a const slice gives a const pointer: if `s` is `const i32[]`, then `s.ptr` is `const i32*`. Loading a reference *out of* a read-only slice is const too — the element type of a `const T[]` carries the restriction, so an element cannot be laundered into a writable view. A dereference obeys the same rule: `*p` where `p` is `const str*` is a `const str`, and where `p` is `const i32*` it is an ordinary `i32`, since a value pointee needs no type change to be unwritable.
 
 The same chain runs from a module constant, which is a read-only **root** rather than a read-only view: `cfg.a.b.c` and `cfg.rows[i].data` are frozen at every depth, and any pointer or slice they yield is const. The chain stops where the path leaves the constant's own storage — at a dereference of an address the constant holds (§Module constants are read-only).
+
+##### Const on the container, const on the element
+
+`const` is a prefix over the type that follows it, and a slice is a type that has an element type, so the qualifier can land in either of two places — and they mean different things:
+
+| Type | Slots | An element reads as |
+| --- | --- | --- |
+| `str[]` | writable | `str` |
+| `(const str)[]` | writable | `const str` |
+| `const str[]` | read-only | `const str` |
+
+`const str[]` is the read-only *view*: no slot may be assigned. `(const str)[]` is a writable array **of** read-only views — the shape a table of string literals takes, since a string literal is a `const str` and does not narrow to `str`. Parenthesizing the element is what separates the two, exactly as it does for an element that is a function type (`((i32) -> i32)[]`); without parens the `const` binds to the whole slice. The same pair exists one level down for pointers (`(const str)*` versus `const str*`) and for any element type that is itself a reference.
+
+Both writable forms widen to the read-only one, and neither widens to the other:
+
+```fc
+let read_only = (s: const str[]) -> s.len
+
+let mut words = const str[3] { "a", "bc", "def" }   // (const str)[]
+words[0] = "wxyz"          // ok — the slot is writable
+read_only(words)           // ok — widens to const str[]
+```
+
+Adding const to the container is what permits dropping it from the element: the read-only slice forbids the slot write and still hands the element back as `const str`, so it grants strictly less. The reverse — `str[]` to `(const str)[]` — is **not** a widen, and is rejected: it would park a read-only element in a slot another holder still reads as writable. An explicit cast spells either direction, as it does for every const conversion.
 
 #### Write rejection
 
@@ -3475,7 +3499,7 @@ There is no partial-list initialization. If you want all elements to hold a spec
 
 The declared length must be a compile-time constant, and it must not be negative — `u8[-4] { }` and `u8[1 - 5] { }` are compile errors, whether the length is written concretely or reached through a const parameter (`u32['n - 4] { }` is judged per instantiation). Zero is legal: `i32[0] { }` is the empty-slice literal, matching `default(i32[])`.
 
-The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[2] { … }`), or a parenthesized function type (`((i32) -> i32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A generic instantiation is equally usable as the element type, whether its arguments are types or const values (`box<i32>[2] { … }`, `wide<64>[2] { }`). The element type may also be `const`-qualified — `const str[3] { "a", "bc", "def" }` is the spelling a slice of string literals takes, since a string literal is a `const str` and does not narrow to `str`.
+The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[2] { … }`), or a parenthesized function type (`((i32) -> i32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A generic instantiation is equally usable as the element type, whether its arguments are types or const values (`box<i32>[2] { … }`, `wide<64>[2] { }`). The element type may also be `const`-qualified — `const str[3] { "a", "bc", "def" }` is the spelling a slice of string literals takes, since a string literal is a `const str` and does not narrow to `str`. The literal head names an *element* type, so what this builds is a `(const str)[]`: writable slots holding read-only views, which is also what `alloc(const str[n] { })` allocates. It widens to `const str[]` wherever a read-only slice is wanted (§Deep const).
 
 The declared element type is an **anchor**: each element is checked against it and widens to it under the usual rules (§Implicit Widening), exactly as a struct literal's fields widen to their declared field types. So `i64[3] { 1, 2, 3 }` takes `i32` literals, `f64[2] { 1.5f32, 2.5f32 }` takes `f32`s, `const str[2] { buf, "lit" }` mixes a `str` with a string literal, and `any*[2] { &a, &b }` takes typed pointers. Widening is one-directional as always — `i32[2] { 1i64, 2i64 }` and `str[2] { "a", "b" }` are errors, since narrowing and stripping `const` are not widens — and it does not descend into a composite element, so a slice of tuples needs its elements spelled exactly (`{i64, i64}[1] { { 1i64, 2i64 } }`). Inside a generic body a type-variable element type anchors nothing to widen toward: `'a` admits only `'a`.
 

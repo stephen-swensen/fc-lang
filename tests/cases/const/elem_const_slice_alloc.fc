@@ -1,0 +1,19 @@
+// The heap twin: a runtime-length table of read-only slots, filled in after
+// the fact. `alloc(str[n] { })` cannot hold string literals at all (they are
+// `const str` and do not narrow), so this spelling is the only one that works
+// — and it has to reach alloc's runtime-length path, not the slice-literal
+// one, which requires a compile-time length.
+let main = (args: str[]) ->
+    let n = (i32) args.len + 2
+    let mut titles = alloc(const str[n] { })!
+    titles[0] = "alpha"
+    titles[1] = args[0]
+    assert(titles[0].len == 5)
+    assert(titles.len == (i64) n)
+    free(titles)
+
+    // the stack form takes a runtime length too
+    let mut tmp = alloca(const str[n] { })
+    tmp[0] = "beta"
+    assert(tmp[0].len == 4)
+    0

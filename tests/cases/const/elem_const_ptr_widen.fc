@@ -1,0 +1,10 @@
+// The container-const-absorbs-element-const widen is not slice-only: a
+// pointer to a read-only view widens to a read-only pointer, since a load out
+// of the read-only one is const again (deep const).
+let read_only = (p: const str*) ->
+    (i32) (*p).len
+
+let main = (args: str[]) ->
+    let mut s = (const str) "abcd"
+    assert(read_only(&s) == 4)
+    0

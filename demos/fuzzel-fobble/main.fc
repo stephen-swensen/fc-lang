@@ -111,7 +111,7 @@ let load_song = (path: const str) ->
 // has no business knowing that this game gave them names.
 struct playlist =
     songs: opl_midi.song[]
-    titles: str[]
+    titles: (const str)[]
 
 // Read the notebook fetch-music.sh leaves in `dir`, with `first` — the
 // game's own tune, which the title screen plays — at the head of it.
@@ -139,7 +139,7 @@ let load_notebook = (dir: const str, first: opl_midi.song, first_title: const st
                   // here, and the game is complete without it.
                   io.write(alloca("Music: no notebook in %s{default_notebook} — the minuet plays every level (run fetch-music.sh)\n"), stdout)
                   return playlist { songs = alloc(opl_midi.song[1] { first })!,
-                                    titles = alloc(str[1] { text.copy(first_title) })! }
+                                    titles = alloc(const str[1] { first_title })! }
 
     // `src` is deliberately never freed. `text.split` hands back slices of it
     // rather than copies, so the titles below *are* this buffer, and they are
@@ -149,14 +149,16 @@ let load_notebook = (dir: const str, first: opl_midi.song, first_title: const st
     defer free(lines)
 
     // One more than the manifest can hold: entry 0 is the game's own tune.
+    //
+    // The titles are `(const str)[]`: writable slots holding read-only views.
+    // That is what lets the two sources of a title sit in one array — the
+    // caller's literal at entry 0, and `text.split`'s slices of `src` after
+    // it — without copying either. A plain `str[]` would take the slices and
+    // refuse the literal.
     let songs = alloc(opl_midi.song[lines.len + 1i64] {})!
-    let titles = alloc(str[lines.len + 1i64] {})!
+    let titles = alloc(const str[lines.len + 1i64] {})!
     songs[0] = first
-    // `text.copy` because the two sources of a title do not agree on type:
-    // a literal is a `const str` and `text.split` yields `str`. Copying the
-    // one literal is cheaper to read than laundering const on it, and this
-    // array outlives nothing it would have to be freed against.
-    titles[0] = text.copy(first_title)
+    titles[0] = first_title
     let mut n = 1i64
 
     for li in 0i64..lines.len do
@@ -596,16 +598,16 @@ let open_music = (args: str[]) ->
         | some(sg) ->
             io.write(alloca("Music: %s{path}\n"), stdout)
             playlist { songs = alloc(opl_midi.song[1] { sg })!,
-                       titles = alloc(str[1] { text.copy("") })! }
+                       titles = alloc(const str[1] { "" })! }
         | none -> playlist { songs = alloc(opl_midi.song[0] {})!,
-                             titles = alloc(str[0] {})! }
+                             titles = alloc(const str[0] {})! }
     | none ->
         match load_song(default_music) with
         | some(sg) ->
             io.write(alloca("Music: %s{default_music}\n"), stdout)
             load_notebook(default_notebook, sg, "MINUET IN G - BWV ANH. 114")
         | none -> playlist { songs = alloc(opl_midi.song[0] {})!,
-                             titles = alloc(str[0] {})! }
+                             titles = alloc(const str[0] {})! }
 
 let main = (args: str[]) ->
 #if backend != "sdl2" && backend != "raylib"

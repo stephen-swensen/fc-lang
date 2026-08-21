@@ -1,0 +1,8 @@
+// The read-only slice rejects the slot write its element-const twin allows,
+// which is the observable difference between the two types.
+let fill = (s: const str[]) ->
+    s[0] = "zz"
+    (i32) s.len
+
+let main = (args: str[]) ->
+    fill(const str[2] { "a", "bc" })

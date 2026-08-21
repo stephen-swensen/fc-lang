@@ -234,6 +234,7 @@ static const char *g_fn_attr = "static __attribute__((unused)) ";
 static bool g_int_lit_hex = false;
 
 static void emit_type(Type *t, FILE *out);
+static void emit_elem_type(Type *t, FILE *out);
 static void emit_indent(FILE *out);
 static void emit_expr(Expr *e, FILE *out);
 static Type *resolve_struct_stub(Type *t);
@@ -738,7 +739,7 @@ static void emit_fn_backing_decls(FILE *out) {
         Expr *e = g_fn_backings[i];
         emit_indent(out);
         if (e->kind == EXPR_ARRAY_LIT) {
-            emit_type(e->array_lit.elem_type, out);
+            emit_elem_type(e->array_lit.elem_type, out);
             fprintf(out, " %s[%" PRIu64 "];\n",
                     e->array_lit.codegen_backing_name,
                     e->array_lit.size_expr->int_lit.value);
@@ -1149,6 +1150,80 @@ static void emit_fn_type_suffix(Type *t, FILE *out);
 
 static void emit_type_ident(Type *t, FILE *out);
 
+/* Spell a slice's element type in C *modulo* its top-level `const`.
+ *
+ * The C slice struct is named after its element by emit_type_ident, which
+ * never prints a qualifier — so `(const i32*)[]` (writable slots holding
+ * read-only views) and `const i32*[]` (a read-only slice) share the one name
+ * fc_slice_int32_t_ptr. Every position that spells the element must therefore
+ * drop the qualifier too — the struct member, a literal's backing array, an
+ * alloca'd one — or the two disagree on whether `ptr` is `const int32_t**` and
+ * whichever definition is emitted first silently wins the other's storage.
+ *
+ * Dropping it loses nothing. FC enforces const itself, and the C projection
+ * cannot model what FC means anyway: the *read-only* slice is the one whose
+ * member would come out non-const, while the writable-slot form would be the
+ * const one. Keeping the qualifier out of slice storage also keeps writes to a
+ * slot free of qualified/unqualified aliasing. */
+static void emit_elem_type(Type *t, FILE *out);
+
+/* True when a cast only moves `const` around *and* the C conversion happens
+ * anyway, so the cast itself can be dropped. Two shapes qualify:
+ *
+ *  - a slice, whose constness never reaches its C type at all — fc_slice_T is
+ *    spelled modulo const, elements included — so every const variant is one
+ *    C type. Emitting the cast would make it a struct cast to its own type: a
+ *    no-op everywhere the C compiler tolerates it, and *rejected* in the one
+ *    place it doesn't — a static initializer, where a cast stops the
+ *    expression being a constant one.
+ *  - a plain top-level const-add on a pointer with an otherwise identical
+ *    pointee, which C performs implicitly at every assignment and argument.
+ *    Dropping it also keeps a `(const int32_t*)&x` out of a store into slice
+ *    storage, whose element type is spelled modulo const (emit_elem_type) and
+ *    would report the cast as discarding a qualifier the slot never had.
+ *
+ * A pointer const-*strip* is excluded — C genuinely needs that one spelled —
+ * as is a const-add that also rearranges the pointee's own qualifier
+ * (`(const i32*)* -> const i32**`), whose two C types are not implicitly
+ * convertible either way.
+ *
+ * (pass2 still needs the cast node in every case: wrap_widen is what carries
+ * provenance through for escape analysis.) */
+static bool cast_is_const_only_noop(Type *to, Type *from) {
+    if (!to || !from || to->kind != from->kind) return false;
+    if (to->kind == TYPE_SLICE) return type_eq_ignore_const(to, from);
+    if (to->kind == TYPE_POINTER)
+        return to->is_const && !from->is_const &&
+               type_eq(to->pointer.pointee, from->pointer.pointee);
+    return false;
+}
+
+/* True when an element's `const` would actually show up in its C spelling —
+ * pointers and any*, since a slice element like `const str` already emits as a
+ * plain fc_str. A value of such a type needs an explicit strip when it is
+ * stored into slice storage, which is spelled modulo const. */
+static bool elem_const_shows_in_c(Type *t) {
+    return t && t->is_const && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR);
+}
+
+/* Emit the cast that strips it, for a store into slice storage. */
+static void emit_elem_store_cast(Type *elem_type, FILE *out) {
+    if (!elem_const_shows_in_c(elem_type)) return;
+    fprintf(out, "(");
+    emit_elem_type(elem_type, out);
+    fprintf(out, ")");
+}
+
+static void emit_elem_type(Type *t, FILE *out) {
+    if (t && t->is_const) {
+        Type bare = *t;
+        bare.is_const = false;
+        emit_type(&bare, out);
+        return;
+    }
+    emit_type(t, out);
+}
+
 static void emit_type(Type *t, FILE *out) {
     /* Handle type variable substitution during monomorphized emission */
     if (g_subst && t->kind == TYPE_TYPE_VAR) {
@@ -1178,8 +1253,14 @@ static void emit_type(Type *t, FILE *out) {
     case TYPE_UNRESOLVED: fprintf(out, "void");   break; /* defensive: patched before codegen */
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
     case TYPE_POINTER:
-        if (t->is_const) fprintf(out, "const ");
+        /* East const: the qualifier binds to the *pointee*, which may itself be
+         * a pointer. Spelling it west (`const int32_t**`) reads in C as
+         * "pointer to pointer to const int" — a different type, which permits
+         * the `*p = q` FC rejects and rejects the `int32_t**` argument FC
+         * accepts. `int32_t* const*` is what FC means; for a value pointee
+         * `int32_t const*` is just `const int32_t*` spelled the other way. */
         emit_type(t->pointer.pointee, out);
+        if (t->is_const) fprintf(out, " const");
         fprintf(out, "*");
         break;
     case TYPE_SLICE:
@@ -3969,16 +4050,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->cast.operand, out);
             fprintf(out, ")");
         } else if (e->cast.target && e->cast.operand->type &&
-                   e->cast.target->kind == TYPE_SLICE &&
-                   type_eq_ignore_const(e->cast.target, e->cast.operand->type)) {
-            /* A slice's constness rides its element type, not its header, so
-             * a const-add widening (u8[] -> const u8[]) leaves the C type
-             * exactly as it was.  The cast is then a struct cast to its own
-             * type: a no-op everywhere the C compiler tolerates it, and
-             * *rejected* in the one place it doesn't — a static initializer,
-             * where a cast stops the expression being a constant one.  Emit
-             * the operand.  (pass2 still needs the node: wrap_widen is what
-             * carries provenance through for escape analysis.) */
+                   cast_is_const_only_noop(e->cast.target, e->cast.operand->type)) {
             emit_expr(e->cast.operand, out);
         } else {
             fprintf(out, "((");
@@ -4346,7 +4418,7 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, "){ .ptr = ");
                 if (e->array_lit.codegen_backing_rodata) {
                     fprintf(out, "(");
-                    emit_type(e->array_lit.elem_type, out);
+                    emit_elem_type(e->array_lit.elem_type, out);
                     fprintf(out, "*)");
                 }
                 fprintf(out, "%s, .len = ", e->array_lit.codegen_backing_name);
@@ -4374,13 +4446,13 @@ static void emit_expr(Expr *e, FILE *out) {
         } else {
             snprintf(arrname, sizeof arrname, "_arr%d", tid);
             tgt = arrname;
-            emit_type(e->array_lit.elem_type, out);
+            emit_elem_type(e->array_lit.elem_type, out);
             fprintf(out, " *%s = (", tgt);
-            emit_type(e->array_lit.elem_type, out);
+            emit_elem_type(e->array_lit.elem_type, out);
             fprintf(out, "*)__builtin_alloca(fc_to_size(");
             emit_expr(e->array_lit.size_expr, out);
             fprintf(out, ") * sizeof(");
-            emit_type(e->array_lit.elem_type, out);
+            emit_elem_type(e->array_lit.elem_type, out);
             fprintf(out, ")); ");
         }
         if (e->array_lit.elem_count == 0) {
@@ -4391,12 +4463,13 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, "memset(%s, 0, fc_to_size(", tgt);
                 emit_expr(e->array_lit.size_expr, out);
                 fprintf(out, ") * sizeof(");
-                emit_type(e->array_lit.elem_type, out);
+                emit_elem_type(e->array_lit.elem_type, out);
                 fprintf(out, ")); ");
             }
         } else {
             for (int i = 0; i < e->array_lit.elem_count; i++) {
                 fprintf(out, "%s[%d] = ", tgt, i);
+                emit_elem_store_cast(e->array_lit.elem_type, out);
                 emit_expr(e->array_lit.elems[i], out);
                 fprintf(out, "; ");
             }
@@ -4433,11 +4506,11 @@ static void emit_expr(Expr *e, FILE *out) {
             int tid = temp_counter++;
             fprintf(out, "({ ");
             /* ptr first (left-to-right) */
-            emit_type(e->slice_lit.elem_type, out);
+            emit_elem_type(e->slice_lit.elem_type, out);
             fprintf(out, " *_sp%d = ", tid);
             if (const_ptr) {
                 fprintf(out, "(");
-                emit_type(e->slice_lit.elem_type, out);
+                emit_elem_type(e->slice_lit.elem_type, out);
                 fprintf(out, "*)");
             }
             emit_expr(e->slice_lit.ptr_expr, out);
@@ -4462,7 +4535,7 @@ static void emit_expr(Expr *e, FILE *out) {
         /* Cast away const if source pointer is const (FC tracks constness at slice level) */
         if (const_ptr) {
             fprintf(out, "(");
-            emit_type(e->slice_lit.elem_type, out);
+            emit_elem_type(e->slice_lit.elem_type, out);
             fprintf(out, "*)");
         }
         emit_expr(e->slice_lit.ptr_expr, out);
@@ -5295,13 +5368,13 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, "({ int64_t _asz%d = (int64_t)", tid);
                 emit_expr(e->alloc_expr.size_expr, out);
                 fprintf(out, "; ");
-                emit_type(e->alloc_expr.alloc_type, out);
+                emit_elem_type(e->alloc_expr.alloc_type, out);
                 fprintf(out, "* _aptr%d = (", tid);
-                emit_type(e->alloc_expr.alloc_type, out);
+                emit_elem_type(e->alloc_expr.alloc_type, out);
                 fprintf(out, "*)__builtin_alloca(fc_to_size(_asz%d) * sizeof(", tid);
-                emit_type(e->alloc_expr.alloc_type, out);
+                emit_elem_type(e->alloc_expr.alloc_type, out);
                 fprintf(out, ")); memset(_aptr%d, 0, fc_to_size(_asz%d) * sizeof(", tid, tid);
-                emit_type(e->alloc_expr.alloc_type, out);
+                emit_elem_type(e->alloc_expr.alloc_type, out);
                 fprintf(out, ")); (");
                 emit_type(e->type, out);
                 fprintf(out, "){ .ptr = _aptr%d, .len = _asz%d }; })", tid, tid);
@@ -5335,11 +5408,11 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "({ int64_t _asz%d = (int64_t)", tid);
             emit_expr(e->alloc_expr.size_expr, out);
             fprintf(out, "; ");
-            emit_type(e->alloc_expr.alloc_type, out);
+            emit_elem_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "* _aptr%d = (", tid);
-            emit_type(e->alloc_expr.alloc_type, out);
+            emit_elem_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "*)calloc(fc_alloc_n(_asz%d), sizeof(", tid);
-            emit_type(e->alloc_expr.alloc_type, out);
+            emit_elem_type(e->alloc_expr.alloc_type, out);
             fprintf(out, ")); _aptr%d ? (", tid);
             emit_type(e->type, out);
             fprintf(out, "){ .value = (");
@@ -5403,21 +5476,22 @@ static void emit_expr(Expr *e, FILE *out) {
             int64_t size = ie->array_lit.size_expr->int_lit.value;
             int ec = ie->array_lit.elem_count;
             fprintf(out, "({ ");
-            emit_type(elem_type, out);
+            emit_elem_type(elem_type, out);
             if (ec == 0) {
                 fprintf(out, " *_ap%d = (", tid);
-                emit_type(elem_type, out);
+                emit_elem_type(elem_type, out);
                 fprintf(out, "*)calloc(%d, sizeof(", (int)(size > 0 ? size : 1));
             } else {
                 fprintf(out, " *_ap%d = (", tid);
-                emit_type(elem_type, out);
+                emit_elem_type(elem_type, out);
                 fprintf(out, "*)malloc(%d * sizeof(", (int)size);
             }
-            emit_type(elem_type, out);
+            emit_elem_type(elem_type, out);
             fprintf(out, ")); ");
             fprintf(out, "_ap%d ? (", tid);
             for (int i = 0; i < ec; i++) {
                 fprintf(out, "_ap%d[%d] = ", tid, i);
+                emit_elem_store_cast(elem_type, out);
                 emit_expr(ie->array_lit.elems[i], out);
                 fprintf(out, ", ");
             }
@@ -5594,22 +5668,35 @@ static void emit_expr(Expr *e, FILE *out) {
          * &(target) is well-defined for every assignment target (it is an
          * lvalue), and the index/field lowering inside it is already
          * left-to-right. */
+        /* A slice's element storage is spelled modulo const (emit_elem_type),
+         * so a store into a slot has to strip the qualifier the value carries:
+         * the slot's C type never had it. Only a writable slice of read-only
+         * views ((const i32*)[]) reaches here — a read-only slice rejects the
+         * assignment in pass2. */
+        bool slice_slot = e->assign.target->kind == EXPR_INDEX &&
+                          e->assign.target->index.object->type &&
+                          e->assign.target->index.object->type->kind == TYPE_SLICE &&
+                          elem_const_shows_in_c(e->assign.target->type);
         if (!g_const_context &&
             (expr_has_side_effects(e->assign.value) ||
              expr_has_side_effects(e->assign.target))) {
             int tid = temp_counter++;
             fprintf(out, "({ ");
-            emit_type(e->assign.target->type, out);
+            if (slice_slot) emit_elem_type(e->assign.target->type, out);
+            else emit_type(e->assign.target->type, out);
             fprintf(out, " *_at%d = &(", tid);
             emit_expr(e->assign.target, out);
             fprintf(out, "); ");
-            emit_type(e->assign.value->type, out);
+            if (slice_slot) emit_elem_type(e->assign.value->type, out);
+            else emit_type(e->assign.value->type, out);
             fprintf(out, " _av%d = ", tid);
+            if (slice_slot) emit_elem_store_cast(e->assign.value->type, out);
             emit_expr(e->assign.value, out);
             fprintf(out, "; *_at%d = _av%d; })", tid, tid);
         } else {
             emit_expr(e->assign.target, out);
             fprintf(out, " = ");
+            if (slice_slot) emit_elem_store_cast(e->assign.value->type, out);
             emit_expr(e->assign.value, out);
         }
         break;
@@ -8224,7 +8311,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "struct fc_slice_");
         emit_type_ident(s->slice.elem, out);
         fprintf(out, "_s { ");
-        emit_type(s->slice.elem, out);
+        emit_elem_type(s->slice.elem, out);
         fprintf(out, "* ptr; int64_t len; };\n");
     }
 
@@ -8528,7 +8615,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
              * at the use site casts away a const nothing can reach. */
             fprintf(out, al->array_lit.codegen_backing_rodata
                          ? "static const " : "static ");
-            emit_type(al->array_lit.elem_type, out);
+            emit_elem_type(al->array_lit.elem_type, out);
             fprintf(out, " %s[] = {", al->array_lit.codegen_backing_name);
             for (int j = 0; j < al->array_lit.elem_count; j++) {
                 if (j > 0) fprintf(out, ", ");

@@ -1,0 +1,20 @@
+// Generic inference sees the same rule: a const container absorbs a const
+// element, so a generic callee accepts what its non-generic twin accepts.
+let elem_const = (s: (const 'a*)[]) ->
+    (i32) s.len
+
+let read_only = (s: const 'a*[]) ->
+    (i32) s.len
+
+let read_only_val = (s: const 'a[]) ->
+    (i32) s.len
+
+let main = (args: str[]) ->
+    let mut x = 1
+    let cx = (const i32*) &x
+    let ps = const i32*[2] { cx, cx }
+
+    assert(elem_const(ps) == 2)
+    assert(read_only(ps) == 2)
+    assert(read_only_val(const str[3] { "a", "bc", "def" }) == 3)
+    0

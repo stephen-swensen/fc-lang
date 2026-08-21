@@ -503,11 +503,11 @@ unreachable-code detection, would make this *more* silent, not less; not pursued
 
 ---
 
-## BUG: `const T[N] { … }` builds a type no annotation can name — OPEN
+## BUG: `const T[N] { … }` unusable in every annotated position — FIXED 2026-08-20
 
 Found 2026-08-19 while writing a `str[]` of playlist titles in
-`demos/fuzzel-fobble/main.fc`. Nothing in the tree uses the form, so nothing is broken
-today; the demo worked around it with a plain `str[]` and `text.copy`.
+`demos/fuzzel-fobble/main.fc`, which worked around it with a plain `str[]` and
+`text.copy` — a heap copy of static data to satisfy the type system.
 
 §Slices & Strings → Allocation specifies both the form and the reason it exists:
 
@@ -515,60 +515,96 @@ today; the demo worked around it with a plain `str[]` and `text.copy`.
 > the spelling a slice of string literals takes, since a string literal is a `const str`
 > and does not narrow to `str`.
 
-The literal parses and emits. What it cannot do is reach anywhere `const str[]` is
-written — parameter, struct field, stack or heap:
+The literal parsed and emitted, but could not be passed anywhere `const str[]` was
+written — reporting `expected const str[], got const str[]`.
 
-```fc
-let take = (s: const str[]) -> (i32) s.len
-let main = (args: str[]) ->
-    take(const str[3] { "a", "bc", "def" })     // the spec's own example
-```
+**Two types, one spelling.** `const` in an *annotation* is a prefix over the whole
+type that follows (`parse_type`), so `const str[]` sets `is_const` on the **slice**.
+A slice-literal head names an **element** type, so `const str[3] { … }` builds a
+non-const slice whose **element** is const. Both are real, both are useful, and
+`type_name` rendered both `const str[]` — which is where the unreadable diagnostic
+came from.
 
-```
-error: argument 1: expected const str[], got const str[]
-```
+**Resolution: keep both types; they were already in the language.** `const` in FC is a
+view qualifier that attaches only to a reference type (`apply_const` rejects value
+types), and reference types nest — a writable struct with a `name: const str` field is
+already exactly "writable slot, read-only view", and `(const str)[]` is its slice twin.
+Collapsing them would make slices the one container that erases a view nested inside
+it, and would delete the only sound way to build a table of string literals. The
+annotation spelling `(const str)[]` already parsed; what was missing was a name in
+diagnostics, the widen, and the codegen to back it.
 
-**One token sequence, two parses.** `const` in an *annotation* is a prefix over the whole
-type that follows (`parse_type`, `src/parser.c`): `const str[]` parses `str[]` first, and
-`apply_const` then sets `is_const` on the **outer slice**. `const` in a *slice literal*
-(`case TOK_CONST` → `at_slice_literal` → `parse_type`) is handed only `const str` — the
-`[` after it is followed by an integer rather than `]`, so the type-suffix loop stops
-before it — and `parse_array_lit_body` builds a non-const slice whose **element** is
-const. Two different `Type` trees; one C representation (`fc_slice_fc_str` for both); and
-`type_name` renders both `const str[]`, which is where the unreadable diagnostic comes
-from. That second half is separable and worth fixing either way: a diagnostic that prints
-one spelling for two types cannot be right.
+The three types form a lattice, and the edge that was missing is the safe one:
 
-The difference is observable — writes. `a[0] = "z"` compiles on the literal's type and is
-rejected on the annotation's ("cannot assign through const pointer/slice"), for the same
-binding form.
+| Type | Slots | An element reads as | Widens to |
+| --- | --- | --- | --- |
+| `str[]` | writable | `str` | `const str[]` |
+| `(const str)[]` | writable | `const str` | `const str[]` |
+| `const str[]` | read-only | `const str` | — |
 
-Three symptoms, one cause:
+`str[] → (const str)[]` stays rejected: it is C's `char** → const char**` hole.
 
-1. The spec's documented spelling is unusable in every annotated position.
-2. It breaks monotonicity: `str[]` widens to `const str[]` and is accepted, while the
-   strictly *more* const literal is rejected. Adding const to a value takes it from
-   legal to illegal.
-3. `alloc(const str[n] { })` with a runtime `n` reports "slice literal length must be a
-   compile-time constant", while `alloc(str[n] { })` is fine — the const spelling never
-   reaches `alloc`'s runtime-length path.
+- **types.c `type_name`** parenthesizes a const inner under a `*`, `[]`, or `[N]`
+  suffix, so the two print as `(const str)[]` and `const str[]` (and a pointer to a
+  read-only view no longer prints `const const str*`). Options and results need no
+  parens — `const` distributes into them, so `const str?` *is* the option of `const str`.
+- **types.c `widen_repr_preserving`** lets a container's const-add absorb the element's
+  own const (`elem_const_absorbed`). Adding const to the container is what permits
+  dropping it from the element: the target forbids the slot write and deep const hands
+  the element back const on every load, so it grants strictly less.
+- **pass2.c `unify`** applies the same rule during generic inference (`absorbed_elem`),
+  so a generic callee accepts what its non-generic twin accepts — without it,
+  `(const i32*)[]` failed to bind `'a` against `const 'a*[]`.
+- **pass2.c dereference** now propagates deep const: `*p` on a `const str*` is a
+  `const str`. §Deep const already said "every pointer dereference in the chain
+  preserves const" — indexing a `const T[]` did it, deref did not — and the pointer
+  half of the widen is sound only because of it.
+- **parser.c `alloc`** accepts a `const` target, so `alloc(const str[n] { })` reaches
+  the runtime-length path instead of being parsed as a nested slice literal (which
+  requires a compile-time length). This was the third reported symptom.
+- **parser.c cast** admits a parenthesized element type: `((const T)[]) x`. `const`
+  never starts an expression, so `((const` can only be a type; every other `((` stays
+  an expression and is not probed.
 
-Not `str`-specific: `const i32*[2] { &a, &b }` fails identically against `const i32*[]`.
-An explicit `(const str[])` cast is accepted and emits a no-op C cast, which is both the
-workaround and the proof that the two types are one at the machine.
+**Pre-existing codegen bugs surfaced by the fix** (both reproduce on the previous build
+through the `(const str[])` cast the entry itself documented as the workaround):
 
-**The repair is a design decision, not just a fix.** §Deep const gives a slice one const
-knob, not two — "the element type of a `const T[]` carries the restriction" — so under
-the spec there is a single type here and the literal must simply produce it. But the type
-the literal accidentally builds is the *useful* one for the case that found this:
-allocate an array of string-literal slots and fill them in. Collapse the two and
-`const str[N] { … }` yields a read-only slice, so the exhaustive-element form in the spec
-still works while a fillable array of `const str` becomes unspellable — you would build
-it as `str[]` and cast, which is what fuzzel-fobble does. Worth settling before touching
-the parser: either the spec's one-knob model holds and the literal is repaired to match,
-or FC admits `const` on an element position as distinct from `const` on the slice, in
-which case the annotation grammar needs a spelling for it and `type_name` needs to tell
-them apart.
+- **The C slice struct disagreed with its own name.** `emit_type_ident` never prints a
+  qualifier, so `(const i32*)[]` and `const i32*[]` share `fc_slice_int32_t_ptr` — but
+  the struct *body* spelled the element with `emit_type`, so whichever form was emitted
+  first decided whether `ptr` was `const int32_t**`, and the other one's backing array
+  no longer matched (`-Werror=incompatible-pointer-types`). Every position that spells
+  a slice's element in C now goes through `emit_elem_type`, which drops the top-level
+  const: the member, a literal's backing array, an alloca'd or calloc'd one. Nothing is
+  lost — FC enforces const itself, and the C projection cannot model what FC means
+  anyway, since the *read-only* slice is the one whose member comes out non-const.
+  Stores into that storage strip the qualifier explicitly (`emit_elem_store_cast`), so
+  no write goes through a differently-qualified lvalue.
+- **A const pointer to a pointer emitted the wrong C type.** `const i32**` (a read-only
+  pointer to an `i32*`) was spelled west as `const int32_t**`, which reads in C as
+  "pointer to pointer to const int" — permitting the `*p = q` FC rejects and rejecting
+  the `int32_t**` argument FC accepts. `emit_type` now spells pointer const east
+  (`int32_t* const*`); for a value pointee `int32_t const*` is just `const int32_t*`
+  the other way round.
+
+Also emitted: a cast that only moves `const` around is now dropped for pointers as it
+already was for slices — C performs that qualification change implicitly at every
+assignment and argument.
+
+Tests: `const/elem_const_slice` (both types named, slot write, both widens, element
+reads back const), `elem_const_ptr_slice` and `elem_const_ptr_widen` (the non-`str`
+twin, and the pointer-level widen), `elem_const_slice_alloc` (runtime-length heap and
+stack tables, filled after allocation), `elem_const_option_widen`,
+`elem_const_struct_field`, `elem_const_slice_uses` (for-loops, subslices, index),
+`elem_const_slice_cast` (both cast directions, and `((a + b))` still an expression),
+`elem_const_generic` / `elem_const_generic_err` (inference absorbs the element const
+only where the container adds one), `elem_const_slice_widen_err` (the `char**` hole
+stays closed), `elem_const_slice_strip_err` (the diagnostic that used to read
+`expected const str[], got const str[]`), `elem_const_slice_write_err`,
+`const/deref_deep_const{,_err}`, and `const/cast_strip_ptr` — a gap the work exposed:
+`const/cast_strip` covered only the *slice* strip, whose C type is unchanged either
+way, so nothing held the pointer strip's cast in place. `spec/examples.fc` shows the
+pair under Const.
 
 ---
 

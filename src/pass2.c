@@ -2562,6 +2562,20 @@ static Type *check_match(CheckCtx *ctx, Expr *e);
 
 /* ---- Generic unification ---- */
 
+/* A const container absorbs a const element: matching `(const i32*)[]`
+ * against `const 'a*[]` must still bind 'a = i32. This is the inference-side
+ * face of the same rule type_can_widen applies to concrete types — the target
+ * forbids writing the slot, and deep const hands the element back const on
+ * every load — so the two must agree or a generic callee rejects an argument
+ * its non-generic twin accepts. Only the element's *own* qualifier is dropped,
+ * and only when the container adds one. */
+static Type *absorbed_elem(Arena *arena, Type *container, Type *param_elem, Type *arg_elem) {
+    if (container->is_const && arg_elem && arg_elem->is_const &&
+        param_elem && !param_elem->is_const)
+        return type_strip_const(arena, arg_elem);
+    return arg_elem;
+}
+
 /* Unify a (possibly generic) parameter type against a concrete argument type.
  * Binds type variables in var_names/bindings. Returns true on success. */
 static bool unify(Arena *arena, Type *param_type, Type *arg_type,
@@ -2630,14 +2644,18 @@ static bool unify(Arena *arena, Type *param_type, Type *arg_type,
             if (param_type->is_const && !arg_type->is_const) { /* non-const→const ok */ }
             else return false;
         }
-        return unify(arena, param_type->pointer.pointee, arg_type->pointer.pointee,
+        return unify(arena, param_type->pointer.pointee,
+                     absorbed_elem(arena, param_type, param_type->pointer.pointee,
+                                   arg_type->pointer.pointee),
                      var_names, bindings, var_count);
     case TYPE_SLICE:
         if (param_type->is_const != arg_type->is_const) {
             if (param_type->is_const && !arg_type->is_const) { /* non-const→const ok */ }
             else return false;
         }
-        return unify(arena, param_type->slice.elem, arg_type->slice.elem,
+        return unify(arena, param_type->slice.elem,
+                     absorbed_elem(arena, param_type, param_type->slice.elem,
+                                   arg_type->slice.elem),
                      var_names, bindings, var_count);
     case TYPE_OPTION:
         return unify(arena, param_type->option.inner, arg_type->option.inner,
@@ -5503,6 +5521,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
             e->type = ot->pointer.pointee;
+            /* Deep const through the dereference (§Deep const: "every pointer
+             * dereference in the chain preserves const"): a reference loaded
+             * out of a read-only pointer must not launder itself into a
+             * writable one — the same rule indexing a `const T[]` applies to
+             * its elements. A no-op for value pointees, which are simply not
+             * writable and need no type change. */
+            if (ot->is_const) e->type = type_make_const(ctx->arena, e->type);
         } else {
             diag_error(e->loc, "unsupported unary operator");
             e->type = type_error();

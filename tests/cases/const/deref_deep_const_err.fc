@@ -1,0 +1,10 @@
+// The loaded view cannot be laundered into a writable one.
+let want_mut = (s: str) ->
+    (i32) s.len
+
+let launder = (p: const str*) ->
+    want_mut(*p)
+
+let main = (args: str[]) ->
+    let mut s = "ab"
+    launder(&s)

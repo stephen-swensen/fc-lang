@@ -1,0 +1,12 @@
+// The widen composes through an option, like every other
+// representation-preserving widen.
+let read_only = (s: const str[]?) ->
+    match s with
+    | some(v) -> (i32) v.len
+    | none -> 0
+
+let main = (args: str[]) ->
+    let words = const str[2] { "a", "bc" }
+    assert(read_only(some(words)) == 2)
+    assert(read_only(none((const str)[])) == 0)
+    0

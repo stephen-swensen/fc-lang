@@ -1,0 +1,8 @@
+// The unsound direction stays closed: a writable slice does not widen to one
+// whose elements are read-only. Parking a const element in a slot another
+// holder still reads as writable is C's `char** -> const char**` hole.
+let elem_const = (s: (const str)[]) ->
+    (i32) s.len
+
+let main = (args: str[]) ->
+    elem_const(args)

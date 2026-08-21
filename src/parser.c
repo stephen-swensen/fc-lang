@@ -2072,7 +2072,11 @@ static Expr *parse_prefix(Parser *p) {
         }
         if (try_cast || peek_at(p, 1)->kind == TOK_TYPE_VAR ||
             peek_at(p, 1)->kind == TOK_ERROR_KW ||
-            peek_at(p, 1)->kind == TOK_CONST) {
+            peek_at(p, 1)->kind == TOK_CONST ||
+            /* ((const T)[]) x — a parenthesized element type under a suffix.
+             * `const` never starts an expression, so `((const` can only be a
+             * type; every other `((` stays an expression and is not probed. */
+            (peek_at(p, 1)->kind == TOK_LPAREN && peek_at(p, 2)->kind == TOK_CONST)) {
             /* Try to parse as cast with backtracking */
             int save = p->pos;
             advance_p(p); /* ( */
@@ -2574,8 +2578,14 @@ static Expr *parse_prefix(Parser *p) {
          * Unknown identifiers followed by < need a tentative parse for generic
          * type args (the <> ambiguity is inherent to the grammar). */
         Token *first = current(p);
+        /* `const` can only begin a type — `alloc(const str[n] { })` allocates n
+         * slots holding read-only views, the heap twin of the `const str[N]
+         * { ... }` literal. Without it here the whole form fell into the
+         * expression path and was parsed as a nested slice literal, which
+         * requires a compile-time length, so the const spelling could not
+         * reach alloc's runtime-length path at all. */
         bool is_type = (first->kind == TOK_VOID || first->kind == TOK_TYPE_VAR ||
-                        first->kind == TOK_ERROR_KW);
+                        first->kind == TOK_ERROR_KW || first->kind == TOK_CONST);
         bool try_type = false;
         int save = 0;
 

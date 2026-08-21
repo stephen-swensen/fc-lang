@@ -189,6 +189,7 @@ Type *type_copy(Arena *a, Type *t);
  * by mono name canonicalization and must not alias a live/template subtree. */
 Type *type_deep_copy(Arena *a, Type *t);
 Type *type_make_const(Arena *a, Type *t);
+Type *type_strip_const(Arena *a, Type *t);
 
 /* Queries */
 bool type_is_integer(Type *t);

@@ -1,0 +1,17 @@
+// The pointer half of §Explicit casts: freezing is implicit in C and needs no
+// spelling, stripping is not and does. Both directions must survive the
+// round trip through the emitted C.
+let main = (args: str[]) ->
+    let mut x = 42
+    let cp = (const i32*) &x        // freeze
+    assert(*cp == 42)
+
+    let mp = (i32*) cp              // strip — the escape hatch
+    *mp = 7
+    assert(x == 7)
+
+    // and once more through a pointer whose pointee is itself a reference
+    let mut s = (const str) "abcd"
+    let cps = &s                    // const (const str)*
+    assert((*cps).len == 4)
+    0

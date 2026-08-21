@@ -176,6 +176,11 @@ module c_files from "stdio.h" =
     extern fopen: (const cstr, const cstr) -> any*! from errno(null)
     extern remove: (const cstr) -> void! from errno(-1)
 
+// A read-only slice parameter: `const str[]` takes both a plain `str[]` and a
+// slice whose elements are themselves read-only (see Const, below).
+let count_titles = (ts: const str[]) ->
+    (i32) ts.len
+
 // ============================================================
 // Entry point — main receives command-line args as str[]
 // Return value becomes the process exit code.
@@ -988,6 +993,15 @@ let main = (args: str[]) ->
     let cmbuf = (const i32[]) mbuf
     // cmbuf[0] = 7              // would be a compile error
     assert(cmbuf[0] == 99)
+
+    // `const` on the container and `const` on the element are two types.
+    // A slice-literal head names an *element* type, so this is a writable
+    // array of read-only views — the shape a table of string literals takes,
+    // since a literal is a `const str` and does not narrow to `str`.
+    let mut titles = const str[2] { "alpha", "beta" }   // (const str)[]
+    titles[0] = "gamma"          // the slot is writable...
+    // titles[0][0] = 65u8       // ...the string it holds is not
+    assert(count_titles(titles) == 2)                  // widens to const str[]
 
     // --------------------------------------------------------
     // Escape analysis — the compiler rejects dangling pointers

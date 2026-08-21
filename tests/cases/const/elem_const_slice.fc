@@ -1,0 +1,28 @@
+// `const str[N] { ... }` declares a const *element* type: the slots stay
+// writable, the strings they hold are read-only. `(const str)[]` is the
+// annotation that names it — `const str[]` is the other type, a read-only
+// slice — and the more-const value widens to the read-only one.
+let read_only = (s: const str[]) ->
+    (i32) s.len
+
+let elem_const = (s: (const str)[]) ->
+    (i32) s[0].len
+
+let main = (args: str[]) ->
+    let mut words = const str[3] { "a", "bc", "def" }
+
+    // the literal's own type, named exactly
+    assert(elem_const(words) == 1)
+
+    // a slot is writable — the read-only view it holds is not
+    words[0] = "wxyz"
+    assert(words[0].len == 4)
+
+    // widens to the read-only slice, which a plain str[] also widens to
+    assert(read_only(words) == 3)
+    assert(read_only(args) == (i32) args.len)
+
+    // an element reads back const either way
+    let taken = (s: const str) -> (i32) s.len
+    assert(taken(words[1]) == 2)
+    0

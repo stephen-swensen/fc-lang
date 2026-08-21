@@ -254,6 +254,17 @@ Type *type_deep_copy(Arena *a, Type *t) {
     }
 }
 
+/* Drop a top-level `const` (the inverse of type_make_const). Only
+ * pointer/slice/any* carry the qualifier, so everything else is returned as
+ * it is. */
+Type *type_strip_const(Arena *a, Type *t) {
+    if (!t || !t->is_const) return t;
+    Type *c = arena_alloc(a, sizeof(Type));
+    *c = *t;
+    c->is_const = false;
+    return c;
+}
+
 Type *type_make_const(Arena *a, Type *t) {
     if (!t) return NULL;
     if (t->is_const) return t;
@@ -543,6 +554,18 @@ static char *const_expr_print(char *acc, Expr *e) {
     }
 }
 
+/* `const` is a prefix in FC's type grammar while `*`, `[]`, and `[N]` are
+ * suffixes, so a const-qualified inner type has to be parenthesized under a
+ * suffix: `(const str)[]` — a slice whose *elements* are read-only strings —
+ * is a different type from `const str[]`, a read-only slice of strings
+ * (§Deep const). Printing both the same way produced diagnostics that read
+ * "expected const str[], got const str[]". Options and results need no parens:
+ * `const` in an annotation distributes into them (`const str?` *is* the option
+ * of `const str`), so there is no second reading to separate. */
+static bool name_is_const_prefixed(const char *s) {
+    return strncmp(s, "const ", 6) == 0;
+}
+
 const char *type_name(Type *t) {
     if (!t) return "<null-type>";
     /* Handle const types */
@@ -550,10 +573,16 @@ const char *type_name(Type *t) {
         if (is_str_type(t)) return "const str";
         if (is_cstr_type(t)) return "const cstr";
         if (t->kind == TYPE_ANY_PTR) return "const any*";
-        if (t->kind == TYPE_POINTER)
-            TN_PUBLISH(4, str_sprintf("const %s*", type_name(t->pointer.pointee)));
-        if (t->kind == TYPE_SLICE)
-            TN_PUBLISH(4, str_sprintf("const %s[]", type_name(t->slice.elem)));
+        if (t->kind == TYPE_POINTER) {
+            const char *in = type_name(t->pointer.pointee);
+            TN_PUBLISH(4, name_is_const_prefixed(in) ? str_sprintf("const (%s)*", in)
+                                                     : str_sprintf("const %s*", in));
+        }
+        if (t->kind == TYPE_SLICE) {
+            const char *in = type_name(t->slice.elem);
+            TN_PUBLISH(4, name_is_const_prefixed(in) ? str_sprintf("const (%s)[]", in)
+                                                     : str_sprintf("const %s[]", in));
+        }
         return "const ?";
     }
     if (t->alias) return t->alias;
@@ -565,20 +594,29 @@ const char *type_name(Type *t) {
     if (is_cstr_type(t)) return "cstr";
     /* For compound types, build a recursive name */
     switch (t->kind) {
-    case TYPE_POINTER:
-        TN_PUBLISH(4, str_sprintf("%s*", type_name(t->pointer.pointee)));
-    case TYPE_SLICE:
-        TN_PUBLISH(4, str_sprintf("%s[]", type_name(t->slice.elem)));
+    case TYPE_POINTER: {
+        const char *in = type_name(t->pointer.pointee);
+        TN_PUBLISH(4, name_is_const_prefixed(in) ? str_sprintf("(%s)*", in)
+                                                 : str_sprintf("%s*", in));
+    }
+    case TYPE_SLICE: {
+        const char *in = type_name(t->slice.elem);
+        TN_PUBLISH(4, name_is_const_prefixed(in) ? str_sprintf("(%s)[]", in)
+                                                 : str_sprintf("%s[]", in));
+    }
     case TYPE_OPTION:
         TN_PUBLISH(4, str_sprintf("%s?", type_name(t->option.inner)));
     case TYPE_RESULT:
         TN_PUBLISH(4, str_sprintf("%s!", type_name(t->result.inner)));
-    case TYPE_FIXED_ARRAY:
+    case TYPE_FIXED_ARRAY: {
+        const char *in = type_name(t->fixed_array.elem);
+        bool par = name_is_const_prefixed(in);
         if (t->fixed_array.size_ref)
-            TN_PUBLISH(4, str_sprintf("%s[%s]", type_name(t->fixed_array.elem),
-                                      type_name(t->fixed_array.size_ref)));
-        TN_PUBLISH(4, str_sprintf("%s[%lld]", type_name(t->fixed_array.elem),
-                                  (long long)t->fixed_array.size));
+            TN_PUBLISH(4, par ? str_sprintf("(%s)[%s]", in, type_name(t->fixed_array.size_ref))
+                              : str_sprintf("%s[%s]", in, type_name(t->fixed_array.size_ref)));
+        TN_PUBLISH(4, par ? str_sprintf("(%s)[%lld]", in, (long long)t->fixed_array.size)
+                          : str_sprintf("%s[%lld]", in, (long long)t->fixed_array.size));
+    }
     case TYPE_CONST_INT:
         TN_PUBLISH(4, str_sprintf("%lld", (long long)t->const_int.value));
     case TYPE_CONST_EXPR:
@@ -645,6 +683,27 @@ const char *type_name(Type *t) {
     }
 }
 
+/* Adding `const` to the container lets the *element* drop its own `const`:
+ * `(const T)[] → const T[]`, and the pointer analogue `(const T)* → const T*`.
+ * The target grants a subset of the source's permissions — it forbids writing
+ * the slot, and deep const re-adds the qualifier on every load out of a
+ * read-only view (§Deep const), so the element still reads back as `const T`.
+ * Without this edge the more-const value is the one that gets rejected:
+ * `str[]` widens to `const str[]` while `(const str)[]` — the type a slice of
+ * string literals has — does not.
+ *
+ * The reverse direction is *not* a widen and is deliberately absent: `T[] →
+ * (const T)[]` would let a read-only element be parked in a slot that another
+ * holder still reads as writable, which is C's `char** → const char**` hole. */
+static bool elem_const_absorbed(Type *from_elem, Type *to_elem) {
+    if (type_eq(from_elem, to_elem)) return true;
+    if (!from_elem || !to_elem) return false;
+    if (!from_elem->is_const || to_elem->is_const) return false;
+    Type bare = *from_elem;
+    bare.is_const = false;
+    return type_eq(&bare, to_elem);
+}
+
 /* A representation-preserving widen changes no bits: it only adds `const`, or
  * widens a typed pointer to `any*` (a plain pointer cast). It never changes a
  * value's size. These are the pointer/slice/`any*` cases of widening; the
@@ -662,10 +721,10 @@ static bool widen_repr_preserving(Type *from, Type *to) {
     /* non-const pointer/slice/any* → const pointer/slice/any* */
     if (to->is_const && !from->is_const) {
         if (from->kind == TYPE_POINTER && to->kind == TYPE_POINTER &&
-            type_eq(from->pointer.pointee, to->pointer.pointee))
+            elem_const_absorbed(from->pointer.pointee, to->pointer.pointee))
             return true;
         if (from->kind == TYPE_SLICE && to->kind == TYPE_SLICE &&
-            type_eq(from->slice.elem, to->slice.elem))
+            elem_const_absorbed(from->slice.elem, to->slice.elem))
             return true;
         if (from->kind == TYPE_ANY_PTR && to->kind == TYPE_ANY_PTR)
             return true;

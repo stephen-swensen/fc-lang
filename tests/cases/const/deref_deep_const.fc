@@ -1,0 +1,24 @@
+// A dereference preserves const, the same way indexing a `const T[]` does:
+// a reference loaded out of a read-only pointer stays read-only. For a value
+// pointee there is nothing to change — it is simply not writable.
+let read_view = (p: const str*) ->
+    let s = *p              // const str, not str
+    (i32) s.len
+
+let read_value = (p: const i32*) ->
+    *p                      // i32 — value pointees need no type change
+
+let read_slice_of_ptr = (p: const i32**) ->
+    let inner = *p          // const i32*
+    *inner
+
+let main = (args: str[]) ->
+    let mut s = (const str) "abcd"
+    assert(read_view(&s) == 4)
+
+    let mut x = 7
+    assert(read_value(&x) == 7)
+
+    let mut ip = &x
+    assert(read_slice_of_ptr(&ip) == 7)
+    0

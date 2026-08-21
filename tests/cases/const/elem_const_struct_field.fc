@@ -1,0 +1,13 @@
+// A struct field can hold the element-const slice, and the field's own
+// writability is independent of its elements' — the same relation a
+// `name: const str` field already has.
+struct book =
+    titles: (const str)[]
+
+let main = (args: str[]) ->
+    let mut b = book { titles = const str[2] { "a", "bc" } }
+    b.titles[0] = "wxyz"
+    assert(b.titles[0].len == 4)
+    b.titles = const str[1] { "z" }
+    assert(b.titles.len == 1)
+    0

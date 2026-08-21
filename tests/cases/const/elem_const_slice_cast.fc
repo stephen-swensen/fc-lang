@@ -1,0 +1,16 @@
+// Both spellings are castable in both directions — const casts are the
+// escape hatch, and a parenthesized element type is a legal cast target.
+let main = (args: str[]) ->
+    let words = const str[2] { "a", "bc" }
+    let ro = (const str[]) words
+    assert(ro.len == 2)
+
+    let mut back = ((const str)[]) ro
+    back[0] = "wxyz"
+    assert(back[0].len == 4)
+
+    // `((` still opens a plain expression everywhere else
+    let a = 2
+    let b = 3
+    assert(((a + b)) * 2 == 10)
+    0
