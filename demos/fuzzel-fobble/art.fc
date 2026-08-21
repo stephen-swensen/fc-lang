@@ -490,33 +490,37 @@ module art =
         draw_label_value("BONUS", (const str) bonus_str, 40, 600,
                          255u8, (u8) bg, 90u8)
 
-        // --- Right panel: what's coming, and how long you have ---
+        // --- Right panel: controls ---
+        // The keys sit at the top, level with SCORE across the way, because
+        // they are the one block that never changes: read once, then ignore.
+        // The two save lines carry their `+N` because "S SAVE" would read as a
+        // key that saves on its own.
         let rx = field_x1 + 40
-        draw_text("NEXT", rx, 200, 3, 110u8, 150u8, 210u8)
-        gfx.disc(rx + 44, 262, 34, 26u8, 30u8, 52u8, 255u8)
-        draw_bubble(rx + 44, 262, w.game.next_color, 255u8, w.game.show_symbols)
+        draw_text("ARROWS AIM", rx, 200, 2, 100u8, 120u8, 170u8)
+        draw_text("SPACE FIRE", rx, 225, 2, 100u8, 120u8, 170u8)
+        draw_text("TAB SWAP", rx, 250, 2, 100u8, 120u8, 170u8)
+        draw_text("P PAUSE", rx, 275, 2, 100u8, 120u8, 170u8)
+        draw_text("K MARKS", rx, 300, 2, 100u8, 120u8, 170u8)
+        draw_text("S+N SAVE", rx, 325, 2, 100u8, 120u8, 170u8)
+        draw_text("L+N LOAD", rx, 350, 2, 100u8, 120u8, 170u8)
+        draw_text("ESC QUIT", rx, 375, 2, 100u8, 120u8, 170u8)
 
-        draw_text("DROP IN", rx, 340, 3, 110u8, 150u8, 210u8)
-        // One pip per shot left before the ceiling grinds down.
+        // --- Right panel: how long you have ---
+        draw_text("DROP IN", rx, 460, 3, 110u8, 150u8, 210u8)
+        // One pip per shot left before the ceiling grinds down. Ten pips is the
+        // longest fuse, so two rows of six is the whole range; no number, since
+        // counting a handful of pips is what the pips are for.
         for i in 0..w.game.shots_left do
             let px = rx + (i % 6) * 32
-            let py = 372 + (i / 6) * 32
+            let py = 492 + (i / 6) * 32
             gfx.disc(px + 10, py + 10, 9, 120u8, 200u8, 255u8, 230u8)
-        let left_str = "%d{w.game.shots_left}"
-        draw_text((const str) left_str, rx, 440, 4, 200u8, 220u8, 255u8)
 
-        // --- Right panel: controls ---
-        // Eight lines where there were six, so the block starts higher and
-        // steps a little tighter. The two save lines carry their `+N` because
-        // "S SAVE" would read as a key that saves on its own.
-        draw_text("ARROWS AIM", rx, 478, 2, 100u8, 120u8, 170u8)
-        draw_text("SPACE FIRE", rx, 503, 2, 100u8, 120u8, 170u8)
-        draw_text("TAB SWAP", rx, 528, 2, 100u8, 120u8, 170u8)
-        draw_text("P PAUSE", rx, 553, 2, 100u8, 120u8, 170u8)
-        draw_text("K MARKS", rx, 578, 2, 100u8, 120u8, 170u8)
-        draw_text("S+N SAVE", rx, 603, 2, 100u8, 120u8, 170u8)
-        draw_text("L+N LOAD", rx, 628, 2, 100u8, 120u8, 170u8)
-        draw_text("ESC QUIT", rx, 653, 2, 100u8, 120u8, 170u8)
+        // --- Right panel: what's coming ---
+        // The queued bubble rides the launcher's own line, so the shot in the
+        // barrel and the shot behind it read as one row across the board.
+        draw_text("NEXT", rx, shooter_y - 62, 3, 110u8, 150u8, 210u8)
+        gfx.disc(rx + 44, shooter_y, 34, 26u8, 30u8, 52u8, 255u8)
+        draw_bubble(rx + 44, shooter_y, w.game.next_color, 255u8, w.game.show_symbols)
 
     // ============================================================
     // Overlays
