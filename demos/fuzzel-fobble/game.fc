@@ -256,13 +256,15 @@ module game =
     // degrees: 54 px off across the board at close raft range, 72 at arm's
     // length, more than a bubble either way. The 24 px lane through a
     // one-bubble hole was not something you aimed at, it was something you
-    // landed in. `aim_step` is 0.75 — 4 px at the near rows, 10 px out where a
-    // bounce puts you — so that lane is three or four distinct places to put a
-    // shot, one press apart, and the tolerance `collide_d2` was widened to
-    // offer is finally a tolerance the controls can reach. (It shipped at
-    // 0.55, which kept five or six places in the lane but priced every
-    // ordinary correction at more presses than it was worth; play showed the
-    // lane survives the coarser press, so the routine shot got cheaper.)
+    // landed in. `aim_step` is 1.4 — 7 px at the near rows, 18 px out where a
+    // bounce puts you — and the tolerance `collide_d2` was widened to offer
+    // is a tolerance the controls can reach. (It shipped at 0.55, which kept
+    // five or six places in the lane but priced every ordinary correction at
+    // more presses than it was worth; 0.75 traded some of those places for
+    // cheaper routine shots; and the release snap below is what bought the
+    // rest of the coarsening: once a sweep lands exactly on a press mark,
+    // reaching a given mark is a matter of releasing anywhere in the window
+    // after it, not of counting small presses.)
     //
     // The sweep between those two ends is where the control actually lives,
     // and its shape matters more than either end does. It starts at
@@ -292,21 +294,35 @@ module game =
     // steep curve wherever you put the bend in it — too slow to be going
     // anywhere at the bottom, too quick to stop at the top.
     //
-    // `aim_creep` is exactly `aim_step`, which is not a coincidence and is the
-    // clearest way to say what a hold is: the press, repeating once a frame,
-    // and then accelerating. That is auto-repeat's own definition, and pinning
-    // the bottom of the sweep to the size of a press means the two controls
-    // meet instead of being two unrelated speeds either side of a delay.
+    // `aim_creep` is exactly half `aim_step`, which is not a coincidence
+    // either: the slow end of a hold crosses one press mark every two frames,
+    // so what a hold does is still counted out in presses — just at a rate a
+    // finger can follow. The release snap (`aim_snap`) is the other half of
+    // that bargain: however fast the sweep was moving when the key came up,
+    // the barrel settles on the *last press mark it crossed*, so a hold is
+    // worth a whole number of presses, always, and every rest position the
+    // aim keys can produce sits on the same lattice of `aim_step` multiples
+    // that recentring's zero anchors.
+    //
+    // The snap always undershoots. Rounding to the *nearest* mark would give
+    // half the release window to the mark behind and half to the mark ahead,
+    // which hands reaction lag — you release after you see the barrel where
+    // you want it, never before — straight back to the player as overshoot.
+    // Snapping backward makes the whole press-width after a mark land on that
+    // mark: late is free. It also settles the edge of the arc, where the mark
+    // ahead can lie past `aim_limit` and the only forward option would be
+    // clamping to a non-mark — undershooting means the barrel never comes to
+    // rest off the lattice at all.
     //
     // Frozen Bubble is the useful yardstick for the top half, because a flat
     // 0.03 rad per frame at 50 Hz is what the genre's reference implementation
     // decided a hold is worth. It crosses half the arc in 0.91 s; this reaches
     // full speed in 0.67 s and crosses the same half in 0.92 s, so a hold is
-    // worth the same as that game's — while a *press* is still worth 0.75
+    // worth the same as that game's — while a *press* is still worth 1.4
     // degrees against its 1.72, which is the whole point and the half Frozen
     // Bubble never had.
-    let aim_step = 0.75       // one press
-    let aim_creep = 0.75      // where a hold starts moving: the press, repeating
+    let aim_step = 1.4        // one press
+    let aim_creep = 0.7       // where a hold starts moving: half a press per frame
     let aim_fast = 2.2        // where a hold settles
     let aim_delay = 10        // frames held before it starts moving at all
     let aim_ramp = 30         // frames from aim_creep to aim_fast
@@ -1189,6 +1205,19 @@ module game =
             let t = if raw >= 1.0 then 1.0 else raw
             aim_creep + (aim_fast - aim_creep) * t * t * (3.0 - 2.0 * t)
 
+    // Where the barrel comes to rest when a press ends. `dir` is the way the
+    // press was travelling; the answer is the last press mark — a whole
+    // multiple of `aim_step` from vertical — the barrel crossed going that
+    // way, so the snap undershoots and never overshoots (see the essay at
+    // `aim_creep` for why that side). The nudge keeps a barrel already
+    // sitting on a mark from drifting off it: `k * step / step` need not
+    // round back to exactly `k`, and a hair under would otherwise floor to
+    // the mark before.
+    private let aim_snap = (angle: f64, dir: i32) ->
+        let steps = angle / aim_step
+        if dir > 0 then math.floor(steps + 0.000000001) * aim_step
+        else math.ceil(steps - 0.000000001) * aim_step
+
     let fire = (w: world*, rng: pcg_random*, s: opl_audio.audio*) ->
         if w.shot.active then
             return
@@ -1823,13 +1852,24 @@ module game =
                 // clock never carries across, because inheriting the last
                 // press's speed would send the barrel off at a sweep for
                 // somebody who has just overshot and tapped back to correct.
+                // If a press was already running (the other key tapped over
+                // it, or a same-frame release-and-repress), it ends here the
+                // same way a release ends it: snapped to its last mark, so
+                // the new press steps off the lattice, not off wherever the
+                // old sweep happened to be.
+                if w.game.aim_dir != 0 then
+                    w.game.angle = aim_snap(w.game.angle, w.game.aim_dir)
                 w.game.aim_dir = press
                 w.game.aim_hold = 0
                 w.game.angle = w.game.angle + (f64) press * aim_step
             else if dir != w.game.aim_dir then
                 // Released, or the other key took the direction over without
-                // an edge of its own. Either way the press that was running is
-                // over and the next hold starts from a standstill.
+                // an edge of its own. Either way the press that was running
+                // is over — the barrel keeps the last press mark it crossed
+                // (never the one ahead: `aim_snap`) — and the next hold
+                // starts from a standstill.
+                if w.game.aim_dir != 0 then
+                    w.game.angle = aim_snap(w.game.angle, w.game.aim_dir)
                 w.game.aim_dir = dir
                 w.game.aim_hold = 0
 
