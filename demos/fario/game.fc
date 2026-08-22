@@ -195,6 +195,16 @@ struct world =
     game: game_state
     cam_x: f64
 
+    // The scroll cache's work orders (see gfx.fc's "The scroll cache").
+    // `set_tile` is the one place a tile ever changes, so it is the one
+    // producer: each change queues its cell for a patch, and art.fc drains
+    // the queue into the cached tile layer before drawing the frame.
+    // `bg_all` asks for the whole level instead — a level load, or a queue
+    // that overflowed and stopped being cheaper than starting over.
+    bg_dirty: i32[]     // packed col * 15 + row
+    n_bg_dirty: i32
+    bg_all: bool
+
 module game =
     // ============================================================
     // Constants
@@ -294,9 +304,23 @@ module game =
         else if row < 0 || row >= rows then '.'
         else w.tiles[row * w.game.lw + col]
 
+    let max_bg_dirty = 96
+
+    // Queue a cell for the scroll cache. Past the cap a rebuild is cheaper
+    // than the patches, so the queue collapses into `bg_all`.
+    let mark_bg = (w: world*, col: i32, row: i32) ->
+        if w.bg_all then return
+        if w.n_bg_dirty >= max_bg_dirty then
+            w.bg_all = true
+        else
+            w.bg_dirty[w.n_bg_dirty] = col * rows + row
+            w.n_bg_dirty = w.n_bg_dirty + 1
+
     let set_tile = (w: world*, col: i32, row: i32, ch: u8) ->
         if col >= 0 && col < w.game.lw && row >= 0 && row < rows then
-            w.tiles[row * w.game.lw + col] = ch
+            if w.tiles[row * w.game.lw + col] != ch then
+                w.tiles[row * w.game.lw + col] = ch
+                mark_bg(w, col, row)
 
     let solid = (ch: u8) ->
         (ch == '#' || ch == 'x' || ch == 'B' || ch == '?' || ch == 'M' ||
@@ -499,6 +523,7 @@ module game =
                 else if ch == 'D' then
                     w.game.door_x = (f64) (col * tile)
                 w.tiles[row * w.game.lw + col] = ch
+        w.bg_all = true
 
     // Whether this level plays by water rules.
     let in_water = (w: world*) ->
@@ -587,6 +612,10 @@ module game =
         w.game.bump_col = col
         w.game.bump_row = row
         w.game.bump_timer = 12
+        // While the bump runs, the cell is animated: out of the cache, drawn
+        // live at its offset. mark_bg with the timer set erases it; the
+        // matching repaint is queued when the timer runs out (see `step`).
+        mark_bg(w, col, row)
 
     private let hit_block = (w: world*, rng: pcg_random*, s: opl_audio.audio*,
                              col: i32, row: i32) ->
@@ -1790,6 +1819,8 @@ module game =
         w.particles = alloc(particle[max_particles] { })!
         w.popups = alloc(popup[max_popups] { })!
         w.coin_pops = alloc(coin_pop[max_coin_pops] { })!
+        w.bg_dirty = alloc(i32[max_bg_dirty] { })!
+        w.bg_all = true
 
         w.game.high_score = load_high_score()
         w.game.max_level = load_progress()
@@ -1862,6 +1893,9 @@ module game =
         update_coin_pops(w)
         if w.game.bump_timer > 0 then
             w.game.bump_timer = w.game.bump_timer - 1
+            // The bump has landed: back into the cache it goes.
+            if w.game.bump_timer == 0 then
+                mark_bg(w, w.game.bump_col, w.game.bump_row)
         if w.game.prompt_timer > 0 then
             w.game.prompt_timer = w.game.prompt_timer - 1
             if w.game.prompt_timer == 0 then

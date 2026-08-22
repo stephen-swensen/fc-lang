@@ -104,8 +104,11 @@ fi
 make -s
 FCC="$(make -s print-bin)"
 
+# -O2 matters here: the game shares its process with two emulated OPL2
+# chips rendering on the audio thread, and an unoptimised build spends
+# real frame budget on both.
 "$FCC" "@demos/fario/fario.rsp" -o "$OUTDIR/fario.c"
-cc -std=c11 -Wall -Werror -I"$RAYLIB_SRC" \
+cc -std=c11 -O2 -Wall -Werror -I"$RAYLIB_SRC" \
    -o "$BIN" "$OUTDIR/fario.c" "$LIB" "${RL_LIBS[@]}"
 
 # Arguments are forwarded to the game — e.g. `./run.sh --level 4` opens the

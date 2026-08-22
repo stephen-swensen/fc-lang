@@ -8,6 +8,7 @@
 // version of each; the comments here keep only the punchlines.
 
 import raylib from shared::
+import rlgl from shared::
 import opl_audio from shared::
 import opl_dev from shared::
 import io from std::
@@ -61,6 +62,78 @@ module gfx =
 
     let set_title = (t: const cstr) ->
         raylib.set_title(t)
+
+    // The last frame's wall time, for a `--stats` readout.
+    let frame_ms = () -> raylib.frame_time() * 1000.0f32
+
+    // ============================================================
+    // The scroll cache
+    //
+    // John Carmack's adaptive tile refresh (Commander Keen, 1990), restated
+    // for a GPU: never redraw the tile layer. It is rendered once, whole,
+    // into a texture the size of the entire level; scrolling is one textured
+    // quad blitted at the camera's offset; and when a tile actually changes
+    // — a brick breaks, a coin is taken, a plank drops — only that cell is
+    // erased and repainted. On the EGA the trick was panning the CRT start
+    // address and repainting changed tiles; here the texture is the start
+    // address and the erase is a custom blend. Same idea, thirty-six years
+    // on: draw what changed, not what's visible.
+    //
+    // What lives in the cache is art.fc's business (it keeps animated tiles
+    // out and draws them live); this is only the mechanism.
+    // ============================================================
+
+    private let mut bg = default(raylib.render_texture)
+    private let mut bg_w = 0
+    private let mut bg_h = 0
+
+    // (Re)make the cache for a level of this pixel size. Cheap when the
+    // size already matches — the caller repaints either way.
+    let bg_resize = (wpx: i32, hpx: i32) ->
+        if bg_w == wpx && bg_h == hpx then return
+        if bg_w > 0 then
+            raylib.unload_render_texture(bg)
+        bg = raylib.load_render_texture(wpx, hpx)
+        // Point sampling: the blit is 1:1, and the letterbox pass already
+        // owns the one resample this game does.
+        raylib.set_texture_filter(bg.texture, raylib.filter_point)
+        bg_w = wpx
+        bg_h = hpx
+
+    // Painting into the cache. Not nestable with frame_begin/frame_end —
+    // raylib texture modes do not stack — so art updates the cache before
+    // opening the frame.
+    let bg_begin = () -> raylib.begin_texture_mode(bg)
+    let bg_end = () -> raylib.end_texture_mode()
+
+    let bg_clear = () ->
+        raylib.clear_background(rgba(0u8, 0u8, 0u8, 0u8))
+
+    // Erase a region back to *transparent* — the parallax sky has to show
+    // through where a tile used to be, so painting over is not enough.
+    // (ONE, ZERO) blending makes the draw replace the destination, alpha
+    // included; ordinary alpha blending would leave the old pixels standing
+    // under a zero-alpha source.
+    let bg_erase = (x: i32, y: i32, w: i32, h: i32) ->
+        rlgl.set_blend_factors(rlgl.factor_one, rlgl.factor_zero, rlgl.func_add)
+        raylib.begin_blend_mode(raylib.blend_custom)
+        raylib.fill_rect(x, y, w, h, rgba(0u8, 0u8, 0u8, 0u8))
+        raylib.end_blend_mode()
+
+    // The scroll itself: one quad, sourcing the visible window of the
+    // level at the camera's offset. Negative source height for the same
+    // reason frame_end's blit uses it — a GL framebuffer's rows run
+    // bottom-up. Whole pixels, so the cache and the sprites (which truncate
+    // their own coordinates) can never disagree by a subpixel.
+    let bg_blit = (src_x: f64) ->
+        let sx = (f32) ((i32) src_x)
+        raylib.draw_texture_pro(bg.texture,
+            raylib.rect { x = sx, y = 0.0f32,
+                          width = (f32) logical_w, height = -(f32) logical_h },
+            raylib.rect { x = 0.0f32, y = 0.0f32,
+                          width = (f32) logical_w, height = (f32) logical_h },
+            raylib.vec2 { x = 0.0f32, y = 0.0f32 }, 0.0f32,
+            rgba(255u8, 255u8, 255u8, 255u8))
 
     // Runs on miniaudio's audio thread; `buffer` is mono i16 at the engine's
     // rate, `frames` is whatever the resampler wants this call.

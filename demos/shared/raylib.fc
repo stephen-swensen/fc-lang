@@ -90,6 +90,8 @@ module raylib from "raylib.h" =
     // --- Blend modes ---
     extern BLEND_ALPHA as blend_alpha: i32
     extern BLEND_ALPHA_PREMULTIPLY as blend_premultiplied: i32
+    // Uses the factors set with rlgl.set_blend_factors below.
+    extern BLEND_CUSTOM as blend_custom: i32
 
     // --- Keys ---
     // raylib key codes are the printable ASCII value for character keys and
@@ -234,3 +236,16 @@ module raylib from "raylib.h" =
     extern ResumeAudioStream as resume_audio_stream: (audio_stream) -> void
     extern SetAudioStreamCallback as set_audio_stream_callback: (audio_stream, any*) -> void
     extern SetAudioStreamBufferSizeDefault as set_audio_buffer_size: (i32) -> void
+
+// A sliver of rlgl — raylib's GL layer, whose header ships beside raylib.h —
+// for the one thing the high-level API cannot say: custom blend factors.
+// (ONE, ZERO) makes a draw *replace* the destination, alpha included, which
+// is how a cached render texture gets a region erased back to transparent
+// rather than painted over. Set the factors, then draw inside
+// begin_blend_mode(raylib.blend_custom). See fario's gfx.bg_erase for the
+// worked example.
+module rlgl from "rlgl.h" =
+    extern RL_ZERO as factor_zero: i32
+    extern RL_ONE as factor_one: i32
+    extern RL_FUNC_ADD as func_add: i32
+    extern rlSetBlendFactors as set_blend_factors: (i32, i32, i32) -> void

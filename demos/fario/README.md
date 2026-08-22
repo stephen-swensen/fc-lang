@@ -141,6 +141,32 @@ pixel through one shared palette, with character remapping for the suit
 variants (fire Fario, the star shimmer, the 1-up's green) — the same
 text-as-data move the level maps make.
 
+## The scroll, the Carmack way
+
+The side-scroll uses John Carmack's adaptive tile refresh (the 1990 trick
+behind Commander Keen), restated for a GPU: **never redraw the tile
+layer**. The level's static tiles are painted once into a texture the size
+of the whole level; each frame, scrolling is a single textured quad blitted
+at the camera's offset; and when a tile genuinely changes — a brick breaks,
+a coin is taken, a block is spent, a bridge plank drops — only that cell is
+erased back to transparent (a custom-blend rectangle) and repainted. On the
+EGA the trick was panning the CRT start address and repainting the changed
+tiles; here the texture is the start address. Same idea, thirty-six years
+on: draw what changed, not what's visible.
+
+The pieces: `game.set_tile` is the one place a tile ever changes, so it is
+the one producer of patch orders (`world.bg_dirty`); `art.refresh_cache`
+drains them into the cache before each frame opens; and the handful of
+tiles that *animate* — the pulsing `?` family, lava, the axe, the flagpole,
+whichever single cell is mid-bump — stay out of the cache and are drawn
+live over the blit. Sprites are also drawn as horizontal runs rather than
+per-pixel rectangles, a further 3-5x cut in draw calls for identical
+output.
+
+`./run.sh --stats` prints a frame-time line every five seconds (average
+and worst, in ms). Under vsync at 60 Hz, healthy is an average of ~16.7
+with a worst close behind it.
+
 ## FC features demonstrated
 
 - **Enums** (`theme`, `ent_kind`) driving exhaustive `match` dispatch for

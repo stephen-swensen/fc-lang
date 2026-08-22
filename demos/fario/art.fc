@@ -183,16 +183,35 @@ module art =
     // Stamp a sprite: `cell` logical pixels per art pixel, mirrored when
     // `flip`, characters re-suited first. Rows may vary in width; short
     // rows simply end early.
+    //
+    // Runs, not pixels: consecutive cells of one colour become one rect.
+    // Pixel art is mostly flat spans — a sprite row is typically two to
+    // four runs, not sixteen pixels — so this is a 3-5x cut in quads for
+    // identical output.
     let stamp = (rws: const (const str)[], px: i32, py: i32, cell: i32,
                  flip: bool, suit: i32) ->
         for row in 0i64..rws.len do
             let line = rws[row]
-            for col in 0i64..line.len do
+            let mut col = 0i64
+            loop
+                if col >= line.len then break
                 let src = if flip then line[line.len - 1i64 - col] else line[col]
-                let { cr, cg, cb, ca } = pal(resuit(suit, src))
-                if ca != 0u8 then
+                let ch = resuit(suit, src)
+                let { cr, cg, cb, ca } = pal(ch)
+                if ca == 0u8 then
+                    col = col + 1i64
+                else
+                    let mut run = 1i64
+                    loop
+                        let nxt = col + run
+                        if nxt >= line.len then break
+                        let s2 = if flip then line[line.len - 1i64 - nxt]
+                                 else line[nxt]
+                        if resuit(suit, s2) != ch then break
+                        run = run + 1i64
                     gfx.fill(px + (i32) col * cell, py + (i32) row * cell,
-                             cell, cell, cr, cg, cb, ca)
+                             cell * (i32) run, cell, cr, cg, cb, ca)
+                    col = col + run
 
     // ============================================================
     // Sprites. All face RIGHT; `stamp` mirrors for left.
@@ -1029,19 +1048,77 @@ module art =
                                        255u8, (u8) imin(a, 255), 120u8)
 
     // ============================================================
-    // The tile pass
+    // The tile pass — adaptive tile refresh, GPU edition
+    //
+    // The static tiles live in a level-sized cached texture (gfx's "scroll
+    // cache"); scrolling is one blit of its visible window, and only cells
+    // game.fc marked dirty get erased and repainted. What stays out of the
+    // cache is anything that moves or pulses per frame — the `?` family,
+    // lava, the axe, the flagpole, and whichever single cell is mid-bump —
+    // and those few are drawn live over the blit each frame.
     // ============================================================
 
-    private let draw_tiles = (w: world*, frame: i32) ->
+    // The tiles that animate, and so are drawn live rather than cached.
+    // 'U' rides along because a struck block becomes one mid-bump, and a
+    // cache repaint at the rest position under a live bump at the offset
+    // would draw the block twice.
+    private let live_tile = (ch: u8) ->
+        (ch == '?' || ch == 'M' || ch == 'S' || ch == '1' || ch == 'U' ||
+         ch == 'L' || ch == 'A' || ch == 'F')
+
+    private let bumping = (w: world*, col: i32, row: i32) ->
+        w.game.bump_timer > 0 && col == w.game.bump_col && row == w.game.bump_row
+
+    // Paint one cell into the cache, at its level-pixel position. Animated
+    // cells stay out — their erase is the whole of their patch.
+    private let paint_cell = (w: world*, col: i32, row: i32) ->
+        if col < 0 || col >= w.game.lw || row < 0 || row >= rows then return
+        let ch = tile_at(w, col, row)
+        if ch != '.' && !live_tile(ch) && !bumping(w, col, row) then
+            draw_tile(w, ch, col * tile, row * tile, col, row, 0)
+
+    // Bring the cache up to date with the grid. Runs before the frame
+    // opens — raylib texture modes do not nest.
+    //
+    // A patch erases a halo around the cell (a pipe cap's lip reaches 6 px
+    // into its neighbours, a bridge's rope 6 px above) and repaints the six
+    // cells that halo touches. Repainting an untouched neighbour redraws
+    // the same pixels it already has — static tiles are deterministic — so
+    // the patch can be generous instead of exact.
+    private let refresh_cache = (w: world*) ->
+        if w.bg_all then
+            gfx.bg_resize(w.game.lw * tile, rows * tile)
+            gfx.bg_begin()
+            gfx.bg_clear()
+            for row in 0..rows do
+                for col in 0..w.game.lw do
+                    paint_cell(w, col, row)
+            gfx.bg_end()
+            w.bg_all = false
+            w.n_bg_dirty = 0
+        else if w.n_bg_dirty > 0 then
+            gfx.bg_begin()
+            for i in 0..w.n_bg_dirty do
+                let id = w.bg_dirty[i]
+                let col = id / rows
+                let row = id % rows
+                gfx.bg_erase(col * tile - 6, row * tile - 8, tile + 12, tile + 8)
+                for r in (row - 1)..(row + 1) do
+                    for c in (col - 1)..(col + 2) do
+                        paint_cell(w, c, r)
+            gfx.bg_end()
+            w.n_bg_dirty = 0
+
+    // The few animated tiles in view, drawn over the blitted cache.
+    private let draw_live_tiles = (w: world*, frame: i32) ->
         let c0 = imax(tcol(w.cam_x) - 1, 0)
         let c1 = imin(c0 + 29, w.game.lw - 1)
         for row in 0..rows do
             for col in c0..(c1 + 1) do
                 let ch = tile_at(w, col, row)
-                if ch != '.' then
+                if ch != '.' && (live_tile(ch) || bumping(w, col, row)) then
                     let mut y = row * tile
-                    if w.game.bump_timer > 0 && col == w.game.bump_col &&
-                       row == w.game.bump_row then
+                    if bumping(w, col, row) then
                         let t = 12 - w.game.bump_timer
                         y = y - (t * (12 - t)) / 3
                     draw_tile(w, ch, (i32) ((f64) (col * tile) - w.cam_x), y,
@@ -1210,12 +1287,17 @@ module art =
     // ============================================================
 
     let render = (w: world*, frame: i32) ->
+        // The scroll cache first: it paints into its own texture, and
+        // texture modes do not nest with the frame's.
+        refresh_cache(w)
+
         let { skr, skg, skb } = sky_rgb(w.game.kind)
         gfx.frame_begin(skr, skg, skb)
 
         draw_backdrop(w, frame)
         draw_chompers(w, frame)
-        draw_tiles(w, frame)
+        gfx.bg_blit(w.cam_x)
+        draw_live_tiles(w, frame)
         draw_coin_pops(w)
         draw_ents(w, frame)
 

@@ -76,6 +76,18 @@ let open_music = () ->
                    | none -> silent_song()
     songs[0i64..4i64]
 
+// `--stats` prints a frame-time line every five seconds: the average and
+// the worst frame of the window, in milliseconds. Under vsync at 60 Hz a
+// healthy game averages ~16.7 with a worst not far above it; a worst that
+// spikes past ~17 is a skipped frame you can go looking for.
+let has_arg = (args: str[], flag: const str) ->
+    let mut i = 1i64
+    loop
+        if i >= args.len then break
+        if args[i] == flag then return true
+        i = i + 1i64
+    false
+
 // `--level N` starts the run picker at world N — a practice door, and the
 // debug door, in one flag. It unlocks the picker for this run only; the
 // earned frontier in ~/.fario/progress.txt is untouched.
@@ -136,6 +148,11 @@ let main = (args: str[]) ->
     let mut tune_now = tune_for(w.game.kind)
     let mut level_now = 0
 
+    let stats = has_arg(args, "--stats")
+    let mut stat_acc = 0.0
+    let mut stat_max = 0.0
+    let mut stat_n = 0
+
     loop
         gfx.pump(&inp)
         if inp.quit then break
@@ -154,6 +171,18 @@ let main = (args: str[]) ->
             gfx.set_title(c"Fario - World %d{level_now}")
 
         art.render(w, frame)
+
+        if stats then
+            let ms = (f64) gfx.frame_ms()
+            stat_acc = stat_acc + ms
+            if ms > stat_max then stat_max = ms
+            stat_n = stat_n + 1
+            if stat_n >= 300 then
+                io.write("stats: avg %.2f{stat_acc / (f64) stat_n} ms, worst %.2f{stat_max} ms over %d{stat_n} frames\n",
+                         stdout)
+                stat_acc = 0.0
+                stat_max = 0.0
+                stat_n = 0
 
     io.write("Final score: %d{w.game.score} (world %d{w.game.level})\n", stdout)
     gfx.close()
