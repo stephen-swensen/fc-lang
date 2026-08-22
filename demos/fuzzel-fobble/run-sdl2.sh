@@ -33,14 +33,14 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
         "$FCC" "$RSP" -o "$OUTDIR/fuzzel-fobble-sdl2.c"
-        gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fuzzel-fobble-sdl2.exe" "$OUTDIR/fuzzel-fobble-sdl2.c" -lmingw32 -lSDL2main -lSDL2 -lm
+        gcc -std=c11 -O2 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fuzzel-fobble-sdl2.exe" "$OUTDIR/fuzzel-fobble-sdl2.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fuzzel Fobble (SDL2)..."
         "$OUTDIR/fuzzel-fobble-sdl2.exe" "$@"
         echo "[exit: $?]"
         ;;
     *)
         "$FCC" "$RSP" -o /tmp/fuzzel-fobble-sdl2.c
-        cc -std=c11 -Wall -Werror -o /tmp/fuzzel-fobble-sdl2-bin /tmp/fuzzel-fobble-sdl2.c -lSDL2 -lm
+        cc -std=c11 -O2 -Wall -Werror -o /tmp/fuzzel-fobble-sdl2-bin /tmp/fuzzel-fobble-sdl2.c -lSDL2 -lm
         echo "Running Fuzzel Fobble (SDL2)..."
         /tmp/fuzzel-fobble-sdl2-bin "$@"
         echo "[exit: $?]"

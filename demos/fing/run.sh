@@ -16,12 +16,12 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
         "$FCC" "$RSP" -o "$OUTDIR/fing.c"
-        gcc -std=c11 -Wall -Werror -o "$OUTDIR/fing.exe" "$OUTDIR/fing.c" -lws2_32
+        gcc -std=c11 -O2 -Wall -Werror -o "$OUTDIR/fing.exe" "$OUTDIR/fing.c" -lws2_32
         "$OUTDIR/fing.exe" "$@"
         ;;
     *)
         "$FCC" "$RSP" -o /tmp/fing.c
-        cc -std=c11 -Wall -Werror -o /tmp/fing-bin /tmp/fing.c
+        cc -std=c11 -O2 -Wall -Werror -o /tmp/fing-bin /tmp/fing.c
 
         # ICMP sockets need cap_net_raw (same as /usr/bin/ping)
         if ! getcap /tmp/fing-bin 2>/dev/null | grep -q cap_net_raw; then

@@ -17,14 +17,14 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
         "$FCC" "$RSP" -o "$OUTDIR/fasteroids.c"
-        gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fasteroids.exe" "$OUTDIR/fasteroids.c" -lmingw32 -lSDL2main -lSDL2 -lm
+        gcc -std=c11 -O2 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fasteroids.exe" "$OUTDIR/fasteroids.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fasteroids..."
         "$OUTDIR/fasteroids.exe"
         echo "[exit: $?]"
         ;;
     *)
         "$FCC" "$RSP" -o /tmp/fasteroids.c
-        cc -std=c11 -Wall -Werror -o /tmp/fasteroids-bin /tmp/fasteroids.c -lSDL2 -lm
+        cc -std=c11 -O2 -Wall -Werror -o /tmp/fasteroids-bin /tmp/fasteroids.c -lSDL2 -lm
         echo "Running Fasteroids..."
         /tmp/fasteroids-bin
         echo "[exit: $?]"

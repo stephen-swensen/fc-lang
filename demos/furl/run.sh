@@ -14,12 +14,12 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
         "$FCC" "$RSP" -o "$OUTDIR/furl.c"
-        gcc -std=c11 -Wall -Werror -o "$OUTDIR/furl.exe" "$OUTDIR/furl.c" -lws2_32
+        gcc -std=c11 -O2 -Wall -Werror -o "$OUTDIR/furl.exe" "$OUTDIR/furl.c" -lws2_32
         "$OUTDIR/furl.exe" "$@"
         ;;
     *)
         "$FCC" "$RSP" -o /tmp/furl.c
-        cc -std=c11 -Wall -Werror -o /tmp/furl-bin /tmp/furl.c
+        cc -std=c11 -O2 -Wall -Werror -o /tmp/furl-bin /tmp/furl.c
         /tmp/furl-bin "$@"
         ;;
 esac

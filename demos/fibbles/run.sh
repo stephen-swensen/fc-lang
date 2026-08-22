@@ -18,14 +18,14 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         OUTDIR="${TEMP:-/tmp}"
         "$FCC" "$RSP" -o "$OUTDIR/fibbles.c"
-        gcc -std=c11 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fibbles.exe" "$OUTDIR/fibbles.c" -lmingw32 -lSDL2main -lSDL2 -lm
+        gcc -std=c11 -O2 -Wall -Werror -Dmain=SDL_main -o "$OUTDIR/fibbles.exe" "$OUTDIR/fibbles.c" -lmingw32 -lSDL2main -lSDL2 -lm
         echo "Running Fibbles..."
         "$OUTDIR/fibbles.exe"
         echo "[exit: $?]"
         ;;
     *)
         "$FCC" "$RSP" -o /tmp/fibbles.c
-        cc -std=c11 -Wall -Werror -o /tmp/fibbles-bin /tmp/fibbles.c -lSDL2 -lm
+        cc -std=c11 -O2 -Wall -Werror -o /tmp/fibbles-bin /tmp/fibbles.c -lSDL2 -lm
         echo "Running Fibbles..."
         /tmp/fibbles-bin
         echo "[exit: $?]"

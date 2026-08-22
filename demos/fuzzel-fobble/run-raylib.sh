@@ -134,7 +134,7 @@ FCC="$(make -s print-bin)"
 RSP="@demos/fuzzel-fobble/raylib.rsp"
 
 "$FCC" "$RSP" -o "$OUTDIR/fuzzel-fobble-raylib.c"
-cc -std=c11 -Wall -Werror -I"$RAYLIB_SRC" \
+cc -std=c11 -O2 -Wall -Werror -I"$RAYLIB_SRC" \
    -o "$BIN" "$OUTDIR/fuzzel-fobble-raylib.c" "$LIB" "${RL_LIBS[@]}"
 
 # Arguments are forwarded to the game, so `./run-raylib.sh --music other.mid`
