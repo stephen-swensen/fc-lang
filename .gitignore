@@ -28,8 +28,9 @@ scratch*/
 .DS_Store
 Thumbs.db
 
-# Vendored raylib source + build, fetched on demand by
-# demos/fuzzel-fobble/run-raylib.sh. Never committed.
+# Vendored raylib source + build, fetched on demand by the raylib demos'
+# run scripts (demos/fuzzel-fobble/run-raylib.sh, demos/fario/run.sh).
+# Never committed.
 /demos/shared/raylib/
 
 # Borrowed OPL instrument banks, for listening tests only. Not fetched by

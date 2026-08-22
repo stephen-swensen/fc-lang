@@ -1,0 +1,34 @@
+# Fario — the build.
+#
+# Used by run.sh (`fcc @demos/fario/fario.rsp`), and by the editor when
+# lsp.rsp points here. Paths are relative to this file.
+#
+# One backend only: this demo is raylib, so unlike fuzzel-fobble there is no
+# flag and no second gfx file — the file list below *is* the selection, for
+# the renderer and for opl_audio's device alike.
+
+# The backend, and the bindings only it needs.
+../shared/raylib.fc
+gfx.fc
+
+# The game.
+plat.fc
+levels.fc
+game.fc
+art.fc
+sound.fc
+main.fc
+
+# Sound engine, and the raylib device for it.
+../shared/opl2.fc
+../shared/opl_midi.fc
+../shared/opl_bank_gm.fc
+../shared/opl_audio.fc
+../shared/opl_audio_raylib.fc
+
+# stdlib modules this demo imports
+../../stdlib/io.fc
+../../stdlib/text.fc
+../../stdlib/sys.fc
+../../stdlib/math.fc
+../../stdlib/random.fc

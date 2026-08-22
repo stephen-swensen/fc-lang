@@ -1,0 +1,1934 @@
+// Fario — the rules.
+//
+// The tile grid, the little physics engine on top of it, every creature's
+// habits, the clocks, the scoring, and the saved games. Nothing in this file
+// draws anything, opens anything, or reads a key: it is handed one `input`
+// per frame (plat.fc) and one `world*` to evolve, and the one thing that
+// crosses the line the other way is sound — posting "play the stomp" to the
+// shared OPL2 engine is the game's business, which device that engine opens
+// is the backend's.
+//
+// The genre conventions here — variable-height jumps, stomping, blocks hit
+// from below, a countdown clock, a flagpole worth more the higher you grab
+// it — are the platform genre's own, the way fuzzel-fobble's ceiling and
+// turn clock are the bubble-shooter's. The numbers are this game's.
+
+import opl_audio from shared::
+import io from std::
+import text from std::
+import sys from std::
+import math from std::
+import pcg_random from std::random
+
+// ============================================================
+// Types
+// ============================================================
+
+union game_phase =
+    | splash
+    | playing
+    | paused
+    | dying         // the little hop and the fall off screen
+    | clearing      // flag slide / bridge collapse, walk-off, time tally
+    | game_over
+    | victory       // level 8's axe, taken
+
+// What the save/load key is waiting for — see fuzzel-fobble, which this
+// two-keystroke slot scheme is taken from whole.
+union slot_prompt =
+    | idle
+    | saving
+    | loading
+
+union slot_msg =
+    | quiet
+    | saved
+    | loaded
+    | empty_slot
+    | broken
+    | nothing_to_save
+
+// Everything that walks, swims, spins or waits in a level. `none_k` is what
+// a zeroed slot holds.
+enum ent_kind =
+    | none_k
+    | grumble       // walks, stomps flat
+    | snapper       // walks, turns at ledges, stomps into a shell
+    | shell         // the snapper's second life: kick it
+    | prickle       // spiked — no stomping, fire bounces off
+    | finn          // water: patrols on a sine
+    | jelly         // water: drifts up and down
+    | chomper       // rises out of a pipe on a clock
+    | firebar       // a spinning arm of flame on an anchor block
+    | boss          // Gnarl, level 8
+    | shroom        // powerup: grow
+    | flower        // powerup: fire
+    | star_pow      // powerup: invincible
+    | oneup         // powerup: a life
+
+struct ent =
+    kind: ent_kind
+    x: f64          // top-left of the hitbox
+    y: f64
+    vx: f64
+    vy: f64
+    w: f64
+    h: f64
+    dir: i32        // -1 left, +1 right
+    state: i32      // per-kind; 1 = squashed, 2 = flipped and falling (dead)
+    timer: i32
+    hp: i32         // boss health; a sliding shell's kill chain
+    base_y: f64     // chomper: the pipe mouth it rises from
+    alive: bool
+    active: bool    // woken when the camera first reaches it
+
+struct fireball =
+    x: f64
+    y: f64
+    vx: f64
+    vy: f64
+    timer: i32
+    alive: bool
+
+struct particle =
+    x: f64
+    y: f64
+    vx: f64
+    vy: f64
+    life: i32
+    max_life: i32
+    size: i32
+    r: u8
+    g: u8
+    b: u8
+
+// A score number floating up from where it was earned. val -1 means "1UP".
+struct popup =
+    x: i32
+    y: i32
+    val: i32
+    timer: i32
+
+// A coin bouncing out of a struck block.
+struct coin_pop =
+    x: f64
+    y: f64
+    timer: i32
+
+struct player =
+    x: f64          // top-left of the hitbox
+    y: f64
+    vx: f64
+    vy: f64
+    dir: i32
+    on_ground: bool
+    power: i32      // 0 small, 1 big, 2 fire
+    invuln: i32     // post-hurt mercy frames
+    star: i32       // invincibility frames
+    anim: i32       // walk-cycle clock, advanced by speed
+    fire_cool: i32
+
+struct game_state =
+    phase: game_phase
+    phase_timer: i32
+
+    level: i32
+    kind: theme
+    level_name: const str
+    lw: i32             // this level's width in tiles
+
+    score: i32
+    coins: i32
+    lives: i32
+    high_score: i32
+    new_high: bool
+
+    // The clock. `timer_units` is what the HUD shows; it loses one every
+    // `timer_tick` frames and kills at zero.
+    timer_units: i32
+    timer_acc: i32
+    time_warned: bool
+
+    // Geography noted at level load: where the midpoint checkpoint is, and
+    // where the door at the far end stands.
+    marker_x: f64
+    checkpoint_x: f64   // where a lost life resumes; the level start until
+                        // the marker is passed
+    door_x: f64
+
+    // The splash screen's level picker, and how far this player has ever got
+    // (persisted in ~/.fario/progress.txt).
+    select_level: i32
+    max_level: i32
+
+    // The clear cinematic: 0 sliding the pole, 1 walking off, 2 tallying
+    // time, 3 done-and-waiting; 10-11 are the castle bridge collapse.
+    clear_stage: i32
+
+    // One block-bump animation at a time, like the original.
+    bump_col: i32
+    bump_row: i32
+    bump_timer: i32
+
+    // Saved games (see fuzzel-fobble for the design).
+    prompt: slot_prompt
+    prompt_timer: i32
+    slot_bits: i32
+    msg: slot_msg
+    msg_slot: i32
+    msg_timer: i32
+
+// ============================================================
+// World — every scrap of mutable gameplay state, threaded explicitly.
+// Top-level so art.fc can name it without imports.
+// ============================================================
+
+struct world =
+    tiles: u8[]         // lw x 15, row-major
+    ents: ent[]
+    n_ents: i32
+    fireballs: fireball[]
+    particles: particle[]
+    popups: popup[]
+    coin_pops: coin_pop[]
+    p: player
+    game: game_state
+    cam_x: f64
+
+module game =
+    // ============================================================
+    // Constants
+    // ============================================================
+
+    let logical_w = 1280
+    let logical_h = 720
+
+    // One tile is 48 logical pixels; the 720-tall view is exactly the
+    // fifteen rows a map has, so a level only ever scrolls sideways.
+    let tile = 48
+    let rows = 15
+    let max_level_w = 256       // tiles; the maps top out around 176
+
+    let max_ents = 192
+    let max_fire = 2            // like the arcade ancestors: two in the air
+    let max_particles = 256
+    let max_popups = 8
+    let max_coin_pops = 8
+
+    // Ground movement. Two speeds — B held is running — with acceleration
+    // and friction low enough that momentum is the game.
+    let walk_max = 4.4
+    let run_max = 7.6
+    let accel_ground = 0.28
+    let accel_air = 0.22
+    let friction = 0.34
+
+    // Jumping. The impulse grows a little with ground speed, and holding A
+    // fights gravity while rising — release early and the jump is short.
+    let jump_v = -13.2
+    let jump_speed_bonus = 0.28     // times |vx|
+    let gravity_rise_held = 0.55
+    let gravity_rise = 1.25
+    let gravity_fall = 1.05
+    let fall_terminal = 13.0
+    let stomp_bounce = -8.5
+    let stomp_bounce_held = -12.5
+
+    // Swimming (water levels): everything is slower and softer, and A is a
+    // stroke rather than a jump.
+    let swim_gravity = 0.22
+    let swim_terminal = 3.0
+    let swim_stroke = -6.6
+    let swim_max = 3.8
+    let swim_accel = 0.15
+
+    // Hitboxes. The sprite is 48 wide; the box is narrower, which is the
+    // genre's oldest kindness (see fuzzel-fobble's collide_d2 note).
+    let p_w = 36.0
+    let p_h_small = 42.0
+    let p_h_big = 90.0
+
+    // The clock: one unit every `timer_tick` frames, warning at `time_low`.
+    let timer_tick = 24
+    let time_low = 100
+
+    // Enemy paces.
+    let grumble_speed = 1.3
+    let snapper_speed = 1.5
+    let prickle_speed = 1.6
+    let shell_speed = 9.0
+    let shroom_speed = 2.2
+    let star_bounce = -8.0
+    let boss_speed = 1.1
+    let boss_hp = 6
+
+    let star_frames = 620
+    let invuln_frames = 140
+    let fire_cooldown = 14
+
+    let save_slots = 9
+    let prompt_frames = 240
+    let msg_frames = 150
+
+    // ============================================================
+    // Small helpers
+    // ============================================================
+
+    let imin = (a: i32, b: i32) -> if a < b then a else b
+    let imax = (a: i32, b: i32) -> if a > b then a else b
+    let fclamp = (v: f64, lo: f64, hi: f64) ->
+        if v < lo then lo else if v > hi then hi else v
+    let fabs = (v: f64) -> if v < 0.0 then 0.0 - v else v
+
+    // ============================================================
+    // The grid
+    // ============================================================
+
+    let tcol = (px: f64) -> if px < 0.0 then -1 else (i32) (px / 48.0)
+    let trow = (py: f64) -> if py < 0.0 then -1 else (i32) (py / 48.0)
+
+    // Outside the level: the sides are walls, above and below are air —
+    // above so a high jump is legal, below so a pit is a pit.
+    let tile_at = (w: world*, col: i32, row: i32) ->
+        if col < 0 || col >= w.game.lw then '#'
+        else if row < 0 || row >= rows then '.'
+        else w.tiles[row * w.game.lw + col]
+
+    let set_tile = (w: world*, col: i32, row: i32, ch: u8) ->
+        if col >= 0 && col < w.game.lw && row >= 0 && row < rows then
+            w.tiles[row * w.game.lw + col] = ch
+
+    let solid = (ch: u8) ->
+        (ch == '#' || ch == 'x' || ch == 'B' || ch == '?' || ch == 'M' ||
+         ch == 'S' || ch == '1' || ch == 'U' || ch == '(' || ch == ')' ||
+         ch == '[' || ch == ']' || ch == '=' || ch == '_')
+
+    // Is any solid tile inside this rect?
+    let rect_solid = (w: world*, x: f64, y: f64, wd: f64, ht: f64) ->
+        let c0 = tcol(x)
+        let c1 = tcol(x + wd - 0.01)
+        let r0 = trow(y)
+        let r1 = trow(y + ht - 0.01)
+        let mut hit = false
+        for r in r0..(r1 + 1) do
+            for c in c0..(c1 + 1) do
+                if solid(tile_at(w, c, r)) then hit = true
+        hit
+
+    // ============================================================
+    // Particles and popups
+    // ============================================================
+
+    let spawn_burst = (w: world*, rng: pcg_random*, cx: f64, cy: f64,
+                       count: i32, size: i32, cr: u8, cg: u8, cb: u8,
+                       speed: f64) ->
+        let mut spawned = 0
+        for i in 0..max_particles do
+            if spawned >= count then break
+            if w.particles[i].life <= 0 then
+                let a = pcg_random.next_f64(rng) * 6.2831853
+                let s = (1.0 + pcg_random.next_f64(rng) * 3.0) * speed
+                w.particles[i].x = cx
+                w.particles[i].y = cy
+                w.particles[i].vx = math.cos(a) * s
+                w.particles[i].vy = math.sin(a) * s - 2.0
+                let life = 24 + (i32) (pcg_random.next_f64(rng) * 20.0)
+                w.particles[i].life = life
+                w.particles[i].max_life = life
+                w.particles[i].size = size
+                w.particles[i].r = cr
+                w.particles[i].g = cg
+                w.particles[i].b = cb
+                spawned = spawned + 1
+
+    let update_particles = (w: world*) ->
+        for i in 0..max_particles do
+            if w.particles[i].life > 0 then
+                w.particles[i].x = w.particles[i].x + w.particles[i].vx
+                w.particles[i].y = w.particles[i].y + w.particles[i].vy
+                w.particles[i].vy = w.particles[i].vy + 0.3
+                w.particles[i].life = w.particles[i].life - 1
+
+    let clear_particles = (w: world*) ->
+        for i in 0..max_particles do
+            w.particles[i].life = 0
+
+    let spawn_popup = (w: world*, x: f64, y: f64, val: i32) ->
+        for i in 0..max_popups do
+            if w.popups[i].timer <= 0 then
+                w.popups[i].x = (i32) x
+                w.popups[i].y = (i32) y
+                w.popups[i].val = val
+                w.popups[i].timer = 60
+                return
+
+    let update_popups = (w: world*) ->
+        for i in 0..max_popups do
+            if w.popups[i].timer > 0 then
+                w.popups[i].timer = w.popups[i].timer - 1
+                w.popups[i].y = w.popups[i].y - 1
+
+    // Score earned somewhere on screen: bank it and float the number.
+    let award = (w: world*, x: f64, y: f64, val: i32) ->
+        w.game.score = w.game.score + val
+        spawn_popup(w, x, y, val)
+
+    let award_life = (w: world*, s: opl_audio.audio*, x: f64, y: f64) ->
+        w.game.lives = w.game.lives + 1
+        spawn_popup(w, x, y, -1)
+        opl_audio.play(s, snd.sfx_oneup)
+
+    let add_coin = (w: world*, s: opl_audio.audio*, x: f64, y: f64) ->
+        w.game.coins = w.game.coins + 1
+        w.game.score = w.game.score + 200
+        opl_audio.play(s, snd.sfx_coin)
+        if w.game.coins >= 100 then
+            w.game.coins = w.game.coins - 100
+            award_life(w, s, x, y)
+
+    // ============================================================
+    // Entities: spawning
+    // ============================================================
+
+    private let add_ent = (w: world*, k: ent_kind, x: f64, y: f64,
+                           ew: f64, eh: f64) ->
+        if w.n_ents >= max_ents then return
+        let i = w.n_ents
+        w.n_ents = w.n_ents + 1
+        w.ents[i] = default(ent)
+        w.ents[i].kind = k
+        w.ents[i].x = x
+        w.ents[i].y = y
+        w.ents[i].w = ew
+        w.ents[i].h = eh
+        w.ents[i].dir = -1
+        w.ents[i].alive = true
+
+    // Drop a creature onto a map cell: feet on the cell's floor, centred.
+    private let spawn_at = (w: world*, k: ent_kind, col: i32, row: i32) ->
+        let cw = match k with
+                 | boss -> 88.0
+                 | _ -> 40.0
+        let ch = match k with
+                 | snapper -> 46.0
+                 | chomper -> 66.0
+                 | boss -> 88.0
+                 | _ -> 40.0
+        let x = (f64) (col * tile) + ((f64) tile - cw) * 0.5
+        let y = (f64) ((row + 1) * tile) - ch
+        add_ent(w, k, x, y, cw, ch)
+        let i = w.n_ents - 1
+        if i < 0 then return
+        match k with
+        | chomper ->
+            // Anchored over the pipe mouth: the marker sits above the left
+            // cap, so the pipe's centre is one tile-width to the right.
+            w.ents[i].x = (f64) (col * tile) + 48.0 - cw * 0.5
+            w.ents[i].base_y = (f64) ((row + 1) * tile)
+            w.ents[i].y = w.ents[i].base_y
+            w.ents[i].state = 0
+            w.ents[i].timer = 40
+        | firebar ->
+            // The anchor block's centre; the flames orbit it.
+            w.ents[i].x = (f64) (col * tile) + 24.0
+            w.ents[i].y = (f64) (row * tile) + 24.0
+        | boss ->
+            w.ents[i].hp = boss_hp
+        | _ -> void()
+
+    // ============================================================
+    // Level loading
+    // ============================================================
+
+    // Read a level's rows into the live grid, pulling the creatures out as
+    // spawns and the markers out as geography. `' '` and every creature
+    // letter become air; `r` leaves a hard block behind for its firebar.
+    let load_level = (w: world*, n: i32) ->
+        let d = levels.get(n)
+        w.game.level = n
+        w.game.kind = d.kind
+        w.game.level_name = d.name
+        w.game.timer_units = d.time
+        w.game.timer_acc = 0
+        w.game.time_warned = false
+
+        let mut lw = 0i64
+        for r in 0i64..d.rows.len do
+            if d.rows[r].len > lw then lw = d.rows[r].len
+        if lw > (i64) max_level_w then lw = (i64) max_level_w
+        w.game.lw = (i32) lw
+
+        w.n_ents = 0
+        w.game.marker_x = 0.0
+        w.game.checkpoint_x = 2.0 * 48.0
+        w.game.door_x = (f64) ((w.game.lw - 2) * tile)
+
+        for row in 0..rows do
+            let src = d.rows[row]
+            for col in 0..w.game.lw do
+                let raw = if (i64) col < src.len then src[col] else '.'
+                let mut ch = raw
+                if ch == ' ' then ch = '.'
+                if ch == 'g' then
+                    spawn_at(w, ent_kind.grumble, col, row)
+                    ch = '.'
+                else if ch == 't' then
+                    spawn_at(w, ent_kind.snapper, col, row)
+                    ch = '.'
+                else if ch == 'k' then
+                    spawn_at(w, ent_kind.prickle, col, row)
+                    ch = '.'
+                else if ch == 'f' then
+                    spawn_at(w, ent_kind.finn, col, row)
+                    ch = '.'
+                else if ch == 'j' then
+                    spawn_at(w, ent_kind.jelly, col, row)
+                    ch = '.'
+                else if ch == 'v' then
+                    spawn_at(w, ent_kind.chomper, col, row)
+                    ch = '.'
+                else if ch == 'G' then
+                    spawn_at(w, ent_kind.boss, col, row)
+                    ch = '.'
+                else if ch == 'r' then
+                    spawn_at(w, ent_kind.firebar, col, row)
+                    ch = 'x'
+                else if ch == '*' then
+                    w.game.marker_x = (f64) (col * tile)
+                    ch = '.'
+                else if ch == 'D' then
+                    w.game.door_x = (f64) (col * tile)
+                w.tiles[row * w.game.lw + col] = ch
+
+    // Whether this level plays by water rules.
+    let in_water = (w: world*) ->
+        match w.game.kind with
+        | water -> true
+        | _ -> false
+
+    // ============================================================
+    // The player: movement
+    // ============================================================
+
+    let p_h = (w: world*) -> if w.p.power > 0 then p_h_big else p_h_small
+
+    // Move horizontally and clamp against the grid. |dx| stays under a tile
+    // per frame, so one clamp is enough.
+    private let move_player_x = (w: world*, dx: f64) ->
+        let ht = p_h(w)
+        let nx = w.p.x + dx
+        if dx > 0.0 && rect_solid(w, nx + p_w - 0.01, w.p.y, 0.01, ht) then
+            w.p.x = (f64) (tcol(nx + p_w - 0.01) * tile) - p_w - 0.01
+            w.p.vx = 0.0
+        else if dx < 0.0 && rect_solid(w, nx, w.p.y, 0.01, ht) then
+            w.p.x = (f64) ((tcol(nx) + 1) * tile) + 0.01
+            w.p.vx = 0.0
+        else
+            w.p.x = nx
+        if w.p.x < 0.0 then
+            w.p.x = 0.0
+            w.p.vx = 0.0
+
+    // The block a rising head struck: of the tiles the head band overlaps,
+    // the one whose centre is nearest the player's — one bump per jump, the
+    // way the arcade did it.
+    private let head_block = (w: world*, y: f64) ->
+        let row = trow(y)
+        let c0 = tcol(w.p.x)
+        let c1 = tcol(w.p.x + p_w - 0.01)
+        let mid = w.p.x + p_w * 0.5
+        let mut best = -1
+        let mut best_d = 1.0e18
+        for c in c0..(c1 + 1) do
+            if solid(tile_at(w, c, row)) then
+                let d = fabs((f64) (c * tile) + 24.0 - mid)
+                if d < best_d then
+                    best_d = d
+                    best = c
+        { best, row }
+
+    private let move_player_y = (w: world*, rng: pcg_random*,
+                                 s: opl_audio.audio*, dy: f64) ->
+        let ht = p_h(w)
+        let ny = w.p.y + dy
+        w.p.on_ground = false
+        if dy > 0.0 && rect_solid(w, w.p.x, ny + ht - 0.01, p_w, 0.01) then
+            w.p.y = (f64) (trow(ny + ht - 0.01) * tile) - ht - 0.01
+            w.p.vy = 0.0
+            w.p.on_ground = true
+        else if dy < 0.0 && rect_solid(w, w.p.x, ny, p_w, 0.01) then
+            let { bc, br } = head_block(w, ny)
+            w.p.y = (f64) ((trow(ny) + 1) * tile) + 0.01
+            w.p.vy = 0.0
+            if bc >= 0 then
+                hit_block(w, rng, s, bc, br)
+        else
+            w.p.y = ny
+
+    // ============================================================
+    // Blocks struck from below
+    // ============================================================
+
+    // Anything standing on the struck block is flipped off it — the bump is
+    // a weapon, which is half of why bricks matter.
+    private let bump_riders = (w: world*, s: opl_audio.audio*,
+                               col: i32, row: i32) ->
+        let top = (f64) (row * tile)
+        for i in 0..w.n_ents do
+            if w.ents[i].alive && w.ents[i].state < 2 then
+                let e = &w.ents[i]
+                let feet = e.y + e.h
+                if feet > top - 6.0 && feet < top + 6.0 then
+                    if e.x + e.w > (f64) (col * tile) &&
+                       e.x < (f64) ((col + 1) * tile) then
+                        flip_ent(w, s, i, 200)
+
+    private let start_bump = (w: world*, col: i32, row: i32) ->
+        w.game.bump_col = col
+        w.game.bump_row = row
+        w.game.bump_timer = 12
+
+    private let hit_block = (w: world*, rng: pcg_random*, s: opl_audio.audio*,
+                             col: i32, row: i32) ->
+        let ch = tile_at(w, col, row)
+        let cx = (f64) (col * tile) + 24.0
+        let top = (f64) (row * tile)
+        if ch == '?' then
+            set_tile(w, col, row, 'U')
+            start_bump(w, col, row)
+            bump_riders(w, s, col, row)
+            spawn_coin_pop(w, cx, top)
+            add_coin(w, s, cx, top)
+        else if ch == 'M' then
+            set_tile(w, col, row, 'U')
+            start_bump(w, col, row)
+            bump_riders(w, s, col, row)
+            // A mushroom for a small hero, a flower for a grown one.
+            let k = if w.p.power == 0 then ent_kind.shroom else ent_kind.flower
+            spawn_powerup(w, k, col, row)
+            opl_audio.play(s, snd.sfx_spawn)
+        else if ch == 'S' then
+            set_tile(w, col, row, 'U')
+            start_bump(w, col, row)
+            bump_riders(w, s, col, row)
+            spawn_powerup(w, ent_kind.star_pow, col, row)
+            opl_audio.play(s, snd.sfx_spawn)
+        else if ch == '1' then
+            set_tile(w, col, row, 'U')
+            start_bump(w, col, row)
+            bump_riders(w, s, col, row)
+            spawn_powerup(w, ent_kind.oneup, col, row)
+            opl_audio.play(s, snd.sfx_spawn)
+        else if ch == 'B' then
+            if w.p.power > 0 then
+                set_tile(w, col, row, '.')
+                bump_riders(w, s, col, row)
+                w.game.score = w.game.score + 50
+                spawn_burst(w, rng, cx, top + 24.0, 10, 8, 200u8, 120u8, 60u8, 2.2)
+                opl_audio.play(s, snd.sfx_break)
+            else
+                start_bump(w, col, row)
+                bump_riders(w, s, col, row)
+                opl_audio.play(s, snd.sfx_bump)
+        else
+            opl_audio.play(s, snd.sfx_bump)
+
+    private let spawn_coin_pop = (w: world*, x: f64, y: f64) ->
+        for i in 0..max_coin_pops do
+            if w.coin_pops[i].timer <= 0 then
+                w.coin_pops[i].x = x
+                w.coin_pops[i].y = y
+                w.coin_pops[i].timer = 32
+                return
+
+    let update_coin_pops = (w: world*) ->
+        for i in 0..max_coin_pops do
+            if w.coin_pops[i].timer > 0 then
+                w.coin_pops[i].timer = w.coin_pops[i].timer - 1
+
+    // A powerup rises out of its block, then lives by its kind.
+    private let spawn_powerup = (w: world*, k: ent_kind, col: i32, row: i32) ->
+        let x = (f64) (col * tile) + 4.0
+        let y = (f64) (row * tile) - 40.0
+        add_ent(w, k, x, y, 40.0, 40.0)
+        let i = w.n_ents - 1
+        if i >= 0 then
+            w.ents[i].dir = 1
+            w.ents[i].active = true
+
+    // ============================================================
+    // Entities: movement against the grid
+    // ============================================================
+
+    private let ent_move_x = (w: world*, i: i32, dx: f64) ->
+        let e = &w.ents[i]
+        let nx = e.x + dx
+        if dx > 0.0 && rect_solid(w, nx + e.w - 0.01, e.y, 0.01, e.h) then
+            e.x = (f64) (tcol(nx + e.w - 0.01) * tile) - e.w - 0.01
+            e.dir = -e.dir
+            e.vx = 0.0 - e.vx
+        else if dx < 0.0 && rect_solid(w, nx, e.y, 0.01, e.h) then
+            e.x = (f64) ((tcol(nx) + 1) * tile) + 0.01
+            e.dir = -e.dir
+            e.vx = 0.0 - e.vx
+        else
+            e.x = nx
+
+    private let ent_move_y = (w: world*, i: i32, dy: f64) ->
+        let e = &w.ents[i]
+        let ny = e.y + dy
+        let mut grounded = false
+        if dy > 0.0 && rect_solid(w, e.x, ny + e.h - 0.01, e.w, 0.01) then
+            e.y = (f64) (trow(ny + e.h - 0.01) * tile) - e.h - 0.01
+            e.vy = 0.0
+            grounded = true
+        else if dy < 0.0 && rect_solid(w, e.x, ny, e.w, 0.01) then
+            e.y = (f64) ((trow(ny) + 1) * tile) + 0.01
+            e.vy = 0.0
+        else
+            e.y = ny
+        grounded
+
+    // Is there floor just past this creature's leading foot? Snappers and
+    // prickles ask before every step; grumbles never do.
+    private let ledge_ahead = (w: world*, i: i32) ->
+        let e = &w.ents[i]
+        let probe_x = if e.dir > 0 then e.x + e.w + 2.0 else e.x - 2.0
+        !rect_solid(w, probe_x, e.y + e.h + 2.0, 0.01, 8.0)
+
+    // Kill by flip: the creature tumbles off the bottom of the world. What
+    // shells, fireballs, bumped blocks and the star all do.
+    let flip_ent = (w: world*, s: opl_audio.audio*, i: i32, pts: i32) ->
+        let e = &w.ents[i]
+        e.state = 2
+        e.vy = -7.0
+        e.vx = (f64) e.dir * 2.0
+        if pts > 0 then
+            award(w, e.x + e.w * 0.5, e.y, pts)
+        opl_audio.play(s, snd.sfx_kick)
+
+    // ============================================================
+    // Entities: one frame each
+    // ============================================================
+
+    private let update_ent = (w: world*, rng: pcg_random*, s: opl_audio.audio*,
+                              i: i32) ->
+        let e = &w.ents[i]
+
+        // The dead fall through everything.
+        if e.state == 2 then
+            e.vy = e.vy + 0.6
+            e.x = e.x + e.vx
+            e.y = e.y + e.vy
+            if e.y > (f64) (logical_h + 100) then e.alive = false
+            return
+        // The squashed lie where they were flattened, briefly.
+        if e.state == 1 then
+            e.timer = e.timer - 1
+            if e.timer <= 0 then e.alive = false
+            return
+
+        match e.kind with
+        | grumble ->
+            e.vy = fclamp(e.vy + 1.0, -20.0, 10.0)
+            ent_move_x(w, i, (f64) e.dir * grumble_speed)
+            ignore ent_move_y(w, i, e.vy)
+            if e.y > (f64) (logical_h + 100) then e.alive = false
+        | snapper ->
+            e.vy = fclamp(e.vy + 1.0, -20.0, 10.0)
+            let grounded = rect_solid(w, e.x, e.y + e.h + 1.0, e.w, 0.01)
+            if grounded && ledge_ahead(w, i) then
+                e.dir = -e.dir
+            ent_move_x(w, i, (f64) e.dir * snapper_speed)
+            ignore ent_move_y(w, i, e.vy)
+            if e.y > (f64) (logical_h + 100) then e.alive = false
+        | prickle ->
+            e.vy = fclamp(e.vy + 1.0, -20.0, 10.0)
+            let grounded = rect_solid(w, e.x, e.y + e.h + 1.0, e.w, 0.01)
+            if grounded && ledge_ahead(w, i) then
+                e.dir = -e.dir
+            ent_move_x(w, i, (f64) e.dir * prickle_speed)
+            ignore ent_move_y(w, i, e.vy)
+            if e.y > (f64) (logical_h + 100) then e.alive = false
+        | shell ->
+            if e.state == 3 then
+                // Sliding. hp counts the kill chain.
+                ent_move_x(w, i, (f64) e.dir * shell_speed)
+                e.vy = fclamp(e.vy + 1.0, -20.0, 12.0)
+                ignore ent_move_y(w, i, e.vy)
+                e.timer = e.timer + 1
+                if e.y > (f64) (logical_h + 100) then e.alive = false
+            else
+                // Waiting. Too long and the snapper crawls back out.
+                e.vy = fclamp(e.vy + 1.0, -20.0, 10.0)
+                ignore ent_move_y(w, i, e.vy)
+                e.timer = e.timer - 1
+                if e.timer <= 0 then
+                    e.kind = ent_kind.snapper
+                    e.h = 46.0
+                    e.y = e.y - 12.0
+        | finn ->
+            // A patrol on a slow sine, turning at walls.
+            e.timer = e.timer + 1
+            ent_move_x(w, i, (f64) e.dir * 1.3)
+            e.y = e.y + math.sin((f64) e.timer * 0.05) * 1.1
+            if e.y < 40.0 then e.y = 40.0
+            if e.y > (f64) (logical_h - 120) then e.y = (f64) (logical_h - 120)
+        | jelly ->
+            e.timer = e.timer + 1
+            e.y = e.y + math.sin((f64) e.timer * 0.03) * 1.4
+            e.x = e.x + math.cos((f64) e.timer * 0.017) * 0.4
+        | chomper ->
+            // Out of the pipe, hold, back in, wait — unless the hero is
+            // standing at the mouth, in which case stay hidden: emerging
+            // into someone's boots is nobody's idea of an ambush.
+            //
+            // States 6/4/5 rather than 1/2, which every creature reserves
+            // for "squashed" and "flipped off the world".
+            e.timer = e.timer - 1
+            let reach = 66.0
+            if e.state == 0 then
+                if e.timer <= 0 then
+                    let px = w.p.x + p_w * 0.5
+                    let cx = e.x + e.w * 0.5
+                    if fabs(px - cx) > 90.0 then
+                        e.state = 6
+                        e.timer = 48
+                    else
+                        e.timer = 24
+            else if e.state == 6 then
+                e.y = e.base_y - reach * (1.0 - (f64) e.timer / 48.0)
+                if e.timer <= 0 then
+                    e.state = 4
+                    e.timer = 60
+            else if e.state == 4 then
+                e.y = e.base_y - reach
+                if e.timer <= 0 then
+                    e.state = 5
+                    e.timer = 48
+            else if e.state == 5 then
+                e.y = e.base_y - reach * ((f64) e.timer / 48.0)
+                if e.timer <= 0 then
+                    e.state = 0
+                    e.timer = 70
+        | firebar ->
+            e.timer = e.timer + 1
+        | boss ->
+            e.vy = fclamp(e.vy + 0.8, -20.0, 10.0)
+            let grounded = rect_solid(w, e.x, e.y + e.h + 1.0, e.w, 0.01)
+            if grounded && ledge_ahead(w, i) then
+                e.dir = -e.dir
+            ent_move_x(w, i, (f64) e.dir * boss_speed)
+            let landed = ent_move_y(w, i, e.vy)
+            e.timer = e.timer + 1
+            if landed && e.timer > 130 then
+                e.timer = 0
+                e.vy = -9.5
+                // Face the hero when he leaps — a king defends his bridge.
+                e.dir = if w.p.x > e.x then 1 else -1
+            if e.y > (f64) (logical_h + 100) then e.alive = false
+        | shroom ->
+            e.vy = fclamp(e.vy + 0.7, -20.0, 8.0)
+            ent_move_x(w, i, (f64) e.dir * shroom_speed)
+            ignore ent_move_y(w, i, e.vy)
+            if e.y > (f64) (logical_h + 100) then e.alive = false
+        | oneup ->
+            e.vy = fclamp(e.vy + 0.7, -20.0, 8.0)
+            ent_move_x(w, i, (f64) e.dir * shroom_speed)
+            ignore ent_move_y(w, i, e.vy)
+            if e.y > (f64) (logical_h + 100) then e.alive = false
+        | star_pow ->
+            e.vy = e.vy + 0.5
+            ent_move_x(w, i, (f64) e.dir * 2.6)
+            if ent_move_y(w, i, e.vy) then
+                e.vy = star_bounce
+            if e.y > (f64) (logical_h + 100) then e.alive = false
+        | flower -> void()
+        | none_k -> void()
+
+    // The camera wakes what it approaches; nothing sleeps again.
+    private let wake_ents = (w: world*) ->
+        let edge = w.cam_x + (f64) logical_w + 96.0
+        for i in 0..w.n_ents do
+            if !w.ents[i].active && w.ents[i].x < edge then
+                w.ents[i].active = true
+
+    // ============================================================
+    // Contact: player vs creatures
+    // ============================================================
+
+    private let overlap = (ax: f64, ay: f64, aw: f64, ah: f64,
+                           bx: f64, by: f64, bw: f64, bh: f64) ->
+        ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah
+
+    // The firebar is five flames on an arm; contact is per flame.
+    private let firebar_hits = (e: const ent*, px: f64, py: f64,
+                                pw: f64, ph: f64) ->
+        let a = (f64) e.timer * 0.045
+        let mut hit = false
+        for k in 1..6 do
+            let fx = e.x + math.cos(a) * (f64) (k * 22)
+            let fy = e.y + math.sin(a) * (f64) (k * 22)
+            if fx > px - 10.0 && fx < px + pw + 10.0 &&
+               fy > py - 10.0 && fy < py + ph + 10.0 then
+                hit = true
+        hit
+
+    private let kick_shell = (w: world*, s: opl_audio.audio*, i: i32,
+                              from_left: bool) ->
+        w.ents[i].state = 3
+        w.ents[i].dir = if from_left then 1 else -1
+        w.ents[i].timer = 0
+        w.ents[i].hp = 0
+        award(w, w.ents[i].x, w.ents[i].y, 400)
+        opl_audio.play(s, snd.sfx_kick)
+
+    // What one link of a shell's kill chain pays.
+    private let chain_score = (n: i32) ->
+        if n <= 0 then 400
+        else if n == 1 then 800
+        else if n == 2 then 1000
+        else if n == 3 then 2000
+        else if n == 4 then 4000
+        else 8000
+
+    private let stomp = (w: world*, s: opl_audio.audio*, held_jump: bool,
+                         i: i32) ->
+        let e = &w.ents[i]
+        w.p.vy = if held_jump then stomp_bounce_held else stomp_bounce
+        match e.kind with
+        | grumble ->
+            e.state = 1
+            e.timer = 26
+            e.h = 20.0
+            e.y = e.y + 20.0
+            award(w, e.x + e.w * 0.5, e.y, 100)
+            opl_audio.play(s, snd.sfx_stomp)
+        | snapper ->
+            e.kind = ent_kind.shell
+            e.state = 0
+            e.timer = 340
+            e.h = 34.0
+            e.y = e.y + 12.0
+            award(w, e.x + e.w * 0.5, e.y, 100)
+            opl_audio.play(s, snd.sfx_stomp)
+        | shell ->
+            if e.state == 3 then
+                // Stamp a runaway shell still.
+                e.state = 0
+                e.timer = 340
+                opl_audio.play(s, snd.sfx_stomp)
+            else
+                kick_shell(w, s, i, w.p.x + p_w * 0.5 < e.x + e.w * 0.5)
+        | boss ->
+            // He shrugs it off; the bounce is the mercy.
+            opl_audio.play(s, snd.sfx_bump)
+        | _ -> void()
+
+    private let touch_ent = (w: world*, rng: pcg_random*, s: opl_audio.audio*,
+                             held_jump: bool, i: i32) ->
+        let e = &w.ents[i]
+        match e.kind with
+        | shroom ->
+            e.alive = false
+            award(w, e.x, e.y, 1000)
+            opl_audio.play(s, snd.sfx_power)
+            if w.p.power == 0 then
+                w.p.power = 1
+                w.p.y = w.p.y - (p_h_big - p_h_small)
+        | flower ->
+            e.alive = false
+            award(w, e.x, e.y, 1000)
+            opl_audio.play(s, snd.sfx_power)
+            if w.p.power == 0 then
+                w.p.power = 1
+                w.p.y = w.p.y - (p_h_big - p_h_small)
+            else
+                w.p.power = 2
+        | star_pow ->
+            e.alive = false
+            award(w, e.x, e.y, 1000)
+            w.p.star = star_frames
+            opl_audio.play(s, snd.sfx_power)
+        | oneup ->
+            e.alive = false
+            award_life(w, s, e.x, e.y)
+        | firebar ->
+            // Handled by flame test before this is called; here = burnt.
+            hurt_player(w, s)
+        | _ ->
+            // A creature. The star answers everything; a fall onto a
+            // stompable back answers most things; anything else hurts.
+            if w.p.star > 0 then
+                match e.kind with
+                | chomper ->
+                    e.alive = false
+                    award(w, e.x, e.y, 200)
+                    opl_audio.play(s, snd.sfx_kick)
+                | boss ->
+                    boss_hit(w, s, i)
+                | _ -> flip_ent(w, s, i, 200)
+            else
+                let feet = w.p.y + p_h(w)
+                let stompable = match e.kind with
+                                | grumble -> true
+                                | snapper -> true
+                                | shell -> true
+                                | boss -> true
+                                | _ -> false
+                if stompable && !in_water(w) && w.p.vy > 0.0 &&
+                   feet < e.y + e.h * 0.5 then
+                    stomp(w, s, held_jump, i)
+                else
+                    // A waiting shell touched from the side is a kick, not
+                    // a wound.
+                    if e.kind == ent_kind.shell && e.state == 0 then
+                        kick_shell(w, s, i,
+                                   w.p.x + p_w * 0.5 < e.x + e.w * 0.5)
+                    else if e.kind == ent_kind.shell && e.state == 3 &&
+                            e.timer < 16 then
+                        void()      // just kicked it; grace, not a bite
+                    else
+                        hurt_player(w, s)
+
+    private let boss_hit = (w: world*, s: opl_audio.audio*, i: i32) ->
+        let e = &w.ents[i]
+        e.hp = e.hp - 1
+        opl_audio.play(s, snd.sfx_thud)
+        if e.hp <= 0 then
+            flip_ent(w, s, i, 5000)
+
+    // ============================================================
+    // Getting hurt, and worse
+    // ============================================================
+
+    let hurt_player = (w: world*, s: opl_audio.audio*) ->
+        if w.p.invuln > 0 || w.p.star > 0 then return
+        if w.p.power > 0 then
+            if w.p.power == 1 then
+                w.p.y = w.p.y + (p_h_big - p_h_small)
+            w.p.power = w.p.power - 1
+            w.p.invuln = invuln_frames
+            opl_audio.play(s, snd.sfx_hurt)
+        else
+            kill_player(w, s)
+
+    let kill_player = (w: world*, s: opl_audio.audio*) ->
+        w.game.phase = game_phase.dying
+        w.game.phase_timer = 0
+        w.p.vy = -13.0
+        w.p.vx = 0.0
+        opl_audio.music_end(s)
+        opl_audio.play(s, snd.sfx_death)
+
+    // ============================================================
+    // Fireballs
+    // ============================================================
+
+    private let throw_fireball = (w: world*, s: opl_audio.audio*) ->
+        if w.p.fire_cool > 0 then return
+        for i in 0..max_fire do
+            if !w.fireballs[i].alive then
+                w.fireballs[i].alive = true
+                w.fireballs[i].x = w.p.x + (if w.p.dir > 0 then p_w else -14.0)
+                w.fireballs[i].y = w.p.y + 20.0
+                w.fireballs[i].vx = (f64) w.p.dir * 10.0
+                w.fireballs[i].vy = 3.0
+                w.fireballs[i].timer = 0
+                w.p.fire_cool = fire_cooldown
+                opl_audio.play(s, snd.sfx_fire)
+                return
+
+    private let update_fireballs = (w: world*, rng: pcg_random*,
+                                    s: opl_audio.audio*) ->
+        for i in 0..max_fire do
+            if w.fireballs[i].alive then
+                let f = &w.fireballs[i]
+                f.timer = f.timer + 1
+                f.vy = fclamp(f.vy + 0.7, -12.0, 11.0)
+                let nx = f.x + f.vx
+                if rect_solid(w, nx, f.y, 14.0, 14.0) then
+                    f.alive = false
+                    spawn_burst(w, rng, f.x + 7.0, f.y + 7.0, 6, 5,
+                                255u8, 170u8, 60u8, 1.5)
+                else
+                    f.x = nx
+                let ny = f.y + f.vy
+                if f.vy > 0.0 && rect_solid(w, f.x, ny + 14.0, 14.0, 0.01) then
+                    f.y = (f64) (trow(ny + 14.0) * tile) - 14.01
+                    f.vy = -6.8
+                else if f.vy < 0.0 && rect_solid(w, f.x, ny, 14.0, 0.01) then
+                    f.alive = false
+                else
+                    f.y = ny
+                if f.x < w.cam_x - 40.0 ||
+                   f.x > w.cam_x + (f64) logical_w + 40.0 ||
+                   f.y > (f64) (logical_h + 40) || f.timer > 240 then
+                    f.alive = false
+
+                // Against the creatures.
+                if f.alive then
+                    for e in 0..w.n_ents do
+                        if f.alive && w.ents[e].alive && w.ents[e].active &&
+                           w.ents[e].state < 2 &&
+                           overlap(f.x, f.y, 14.0, 14.0,
+                                   w.ents[e].x, w.ents[e].y,
+                                   w.ents[e].w, w.ents[e].h) then
+                            match w.ents[e].kind with
+                            | prickle ->
+                                // Fireproof: the ball fizzles on the spines.
+                                f.alive = false
+                                opl_audio.play(s, snd.sfx_bump)
+                            | firebar -> void()
+                            | boss ->
+                                f.alive = false
+                                boss_hit(w, s, e)
+                            | shroom -> void()
+                            | flower -> void()
+                            | star_pow -> void()
+                            | oneup -> void()
+                            | chomper ->
+                                f.alive = false
+                                w.ents[e].alive = false
+                                award(w, w.ents[e].x, w.ents[e].y, 200)
+                                opl_audio.play(s, snd.sfx_kick)
+                            | _ ->
+                                f.alive = false
+                                flip_ent(w, s, e, 200)
+
+    // ============================================================
+    // Shells vs everything else
+    // ============================================================
+
+    private let update_shell_kills = (w: world*, s: opl_audio.audio*) ->
+        for i in 0..w.n_ents do
+            let e = &w.ents[i]
+            if e.alive && e.kind == ent_kind.shell && e.state == 3 then
+                for j in 0..w.n_ents do
+                    if j != i && w.ents[j].alive && w.ents[j].active &&
+                       w.ents[j].state < 2 then
+                        let o = &w.ents[j]
+                        let killable = match o.kind with
+                                       | grumble -> true
+                                       | snapper -> true
+                                       | prickle -> true
+                                       | shell -> true
+                                       | _ -> false
+                        if killable &&
+                           overlap(e.x, e.y, e.w, e.h, o.x, o.y, o.w, o.h) then
+                            let pts = chain_score(e.hp)
+                            e.hp = e.hp + 1
+                            if e.hp >= 6 then
+                                award_life(w, s, o.x, o.y)
+                            flip_ent(w, s, j, pts)
+
+    // ============================================================
+    // Tiles underfoot and overhead: coins, hazards, triggers
+    // ============================================================
+
+    private let player_tiles = (w: world*, rng: pcg_random*,
+                                s: opl_audio.audio*) ->
+        let ht = p_h(w)
+        let c0 = tcol(w.p.x)
+        let c1 = tcol(w.p.x + p_w - 0.01)
+        let r0 = trow(w.p.y)
+        let r1 = trow(w.p.y + ht - 0.01)
+        for r in r0..(r1 + 1) do
+            for c in c0..(c1 + 1) do
+                let ch = tile_at(w, c, r)
+                if ch == 'C' then
+                    set_tile(w, c, r, '.')
+                    add_coin(w, s, (f64) (c * tile) + 24.0, (f64) (r * tile))
+                else if ch == 'L' then
+                    kill_player(w, s)
+                else if ch == '^' then
+                    hurt_player(w, s)
+                else if ch == 'F' then
+                    begin_flag(w, s, r)
+                else if ch == 'A' then
+                    begin_axe(w, s, c, r)
+
+        // The midpoint, crossed.
+        if w.game.marker_x > 0.0 && w.p.x > w.game.marker_x then
+            w.game.checkpoint_x = w.game.marker_x
+
+        // The pit.
+        if w.p.y > (f64) (logical_h + 60) then
+            kill_player(w, s)
+
+    // ============================================================
+    // Level clear: the pole and the axe
+    // ============================================================
+
+    // Grabbing the pole high pays; grabbing it off the big stair's top
+    // pays the full five thousand.
+    private let begin_flag = (w: world*, s: opl_audio.audio*, grab_row: i32) ->
+        let pts = if grab_row <= 4 then 5000
+                  else imax(100, 500 * (12 - grab_row))
+        award(w, w.p.x, w.p.y, pts)
+        w.game.phase = game_phase.clearing
+        w.game.clear_stage = 0
+        w.game.phase_timer = 0
+        // Snap to the pole and start the slide.
+        w.p.x = (f64) (tcol(w.p.x + p_w * 0.5) * tile) + 4.0
+        w.p.vx = 0.0
+        w.p.vy = 0.0
+        opl_audio.music_end(s)
+        opl_audio.play(s, snd.sfx_flag)
+
+    private let begin_axe = (w: world*, s: opl_audio.audio*, c: i32, r: i32) ->
+        set_tile(w, c, r, '.')
+        award(w, (f64) (c * tile), (f64) (r * tile), 5000)
+        w.game.phase = game_phase.clearing
+        w.game.clear_stage = 10
+        w.game.phase_timer = 0
+        w.p.vx = 0.0
+        opl_audio.music_end(s)
+        opl_audio.play(s, snd.sfx_rumble)
+
+    // The rightmost bridge plank still standing, or -1.
+    private let last_plank = (w: world*) ->
+        let mut found = -1
+        for col in 0..w.game.lw do
+            for row in 0..rows do
+                if tile_at(w, col, row) == '_' then found = col
+        found
+
+    private let update_clearing = (w: world*, rng: pcg_random*,
+                                   s: opl_audio.audio*) ->
+        w.game.phase_timer = w.game.phase_timer + 1
+        let stage = w.game.clear_stage
+
+        if stage == 0 then
+            // Sliding the pole, down onto whatever the pole stands on.
+            let ht = p_h(w)
+            let ny = w.p.y + 5.0
+            if rect_solid(w, w.p.x, ny + ht - 0.01, p_w, 0.01) then
+                w.p.y = (f64) (trow(ny + ht - 0.01) * tile) - ht - 0.01
+                w.game.clear_stage = 1
+                w.game.phase_timer = 0
+                opl_audio.play(s, snd.sfx_clear)
+            else
+                w.p.y = ny
+        else if stage == 1 then
+            // Walking to the door.
+            w.p.dir = 1
+            w.p.vx = 3.2
+            w.p.vy = fclamp(w.p.vy + gravity_fall, -20.0, fall_terminal)
+            move_player_x(w, w.p.vx)
+            move_player_y(w, rng, s, w.p.vy)
+            w.p.anim = w.p.anim + 5
+            if w.p.x >= w.game.door_x || w.game.phase_timer > 240 then
+                w.game.clear_stage = 2
+                w.game.phase_timer = 0
+        else if stage == 2 then
+            // Time becomes score, fifty a unit, at a clatter.
+            let mut n = 0
+            loop
+                if n >= 3 || w.game.timer_units <= 0 then break
+                w.game.timer_units = w.game.timer_units - 1
+                w.game.score = w.game.score + 50
+                n = n + 1
+            if w.game.timer_units > 0 && w.game.phase_timer % 8 == 0 then
+                opl_audio.play(s, snd.sfx_tick)
+            if w.game.timer_units <= 0 then
+                w.game.clear_stage = 3
+                w.game.phase_timer = 0
+        else if stage == 3 then
+            if w.game.phase_timer > 90 then
+                advance_level(w, rng, s)
+        else if stage == 10 then
+            // The bridge goes, plank by plank, from the axe backwards.
+            if w.game.phase_timer % 4 == 0 then
+                let col = last_plank(w)
+                if col >= 0 then
+                    for row in 0..rows do
+                        if tile_at(w, col, row) == '_' then
+                            set_tile(w, col, row, '.')
+                            spawn_burst(w, rng, (f64) (col * tile) + 24.0,
+                                        (f64) (row * tile) + 12.0, 4, 6,
+                                        150u8, 110u8, 70u8, 1.8)
+                else
+                    w.game.clear_stage = 11
+                    w.game.phase_timer = 0
+                    opl_audio.play(s, snd.sfx_clear)
+        else if stage == 11 then
+            // The king discovers gravity.
+            if w.game.phase_timer > 100 then
+                w.game.clear_stage = 1
+                w.game.phase_timer = 0
+
+    private let advance_level = (w: world*, rng: pcg_random*,
+                                 s: opl_audio.audio*) ->
+        if w.game.level >= levels.count then
+            w.game.phase = game_phase.victory
+            w.game.phase_timer = 0
+            note_best(w)
+            opl_audio.play(s, snd.sfx_clear)
+        else
+            begin_level(w, rng, s, w.game.level + 1, true)
+
+    // ============================================================
+    // The clock
+    // ============================================================
+
+    private let update_timer = (w: world*, s: opl_audio.audio*) ->
+        w.game.timer_acc = w.game.timer_acc + 1
+        if w.game.timer_acc >= timer_tick then
+            w.game.timer_acc = 0
+            w.game.timer_units = w.game.timer_units - 1
+            if w.game.timer_units == time_low && !w.game.time_warned then
+                w.game.time_warned = true
+                opl_audio.play(s, snd.sfx_warn)
+            if w.game.timer_units <= 0 then
+                w.game.timer_units = 0
+                kill_player(w, s)
+
+    // ============================================================
+    // The player, one frame
+    // ============================================================
+
+    private let update_player = (w: world*, inp: const input*,
+                                 rng: pcg_random*, s: opl_audio.audio*) ->
+        let mut dir = 0
+        if plat.down(inp, plat.left) then dir = dir - 1
+        if plat.down(inp, plat.right) then dir = dir + 1
+        if dir != 0 then w.p.dir = dir
+
+        if in_water(w) then
+            // Swimming: soft accelerations everywhere, A is a stroke.
+            let target = (f64) dir * swim_max
+            if w.p.vx < target then
+                w.p.vx = fclamp(w.p.vx + swim_accel, -swim_max, target)
+            else if w.p.vx > target then
+                w.p.vx = fclamp(w.p.vx - swim_accel, target, swim_max)
+            if plat.tap(inp, plat.jump) then
+                w.p.vy = swim_stroke
+                opl_audio.play(s, snd.sfx_stroke)
+            w.p.vy = fclamp(w.p.vy + swim_gravity, -9.0, swim_terminal)
+        else
+            // On land. Acceleration toward the asked-for speed, friction
+            // toward a stop, and the skid is just friction fighting a
+            // reversed target.
+            let max = if plat.down(inp, plat.run) then run_max else walk_max
+            let target = (f64) dir * max
+            let acc = if w.p.on_ground then accel_ground else accel_air
+            if dir != 0 then
+                if w.p.vx < target then
+                    w.p.vx = fclamp(w.p.vx + acc, -run_max, target)
+                else if w.p.vx > target then
+                    w.p.vx = fclamp(w.p.vx - acc, target, run_max)
+            else if w.p.on_ground then
+                if w.p.vx > friction then w.p.vx = w.p.vx - friction
+                else if w.p.vx < 0.0 - friction then w.p.vx = w.p.vx + friction
+                else w.p.vx = 0.0
+
+            if plat.tap(inp, plat.jump) && w.p.on_ground then
+                w.p.vy = jump_v - fabs(w.p.vx) * jump_speed_bonus
+                opl_audio.play(s, snd.sfx_jump)
+
+            let g = if w.p.vy >= 0.0 then gravity_fall
+                    else if plat.down(inp, plat.jump) then gravity_rise_held
+                    else gravity_rise
+            w.p.vy = fclamp(w.p.vy + g, -20.0, fall_terminal)
+
+        if plat.tap(inp, plat.run) && w.p.power == 2 then
+            throw_fireball(w, s)
+
+        move_player_x(w, w.p.vx)
+        move_player_y(w, rng, s, w.p.vy)
+
+        // The walk cycle turns with speed; standing still it rests.
+        if w.p.on_ground || in_water(w) then
+            w.p.anim = w.p.anim + (i32) (fabs(w.p.vx) * 1.5) + (if in_water(w) then 2 else 0)
+
+        if w.p.invuln > 0 then w.p.invuln = w.p.invuln - 1
+        if w.p.star > 0 then w.p.star = w.p.star - 1
+        if w.p.fire_cool > 0 then w.p.fire_cool = w.p.fire_cool - 1
+
+    // ============================================================
+    // Rounds and runs
+    // ============================================================
+
+    // Enter a level: fresh grid, fresh creatures, the hero at its west end
+    // (or at the checkpoint after a mid-level death).
+    let begin_level = (w: world*, rng: pcg_random*, s: opl_audio.audio*,
+                       n: i32, fresh_checkpoint: bool) ->
+        load_level(w, n)
+        if fresh_checkpoint then
+            w.game.checkpoint_x = 2.0 * 48.0
+        w.p.x = w.game.checkpoint_x
+        w.p.y = (f64) (11 * tile) - p_h(w)
+        w.p.vx = 0.0
+        w.p.vy = 0.0
+        w.p.dir = 1
+        w.p.on_ground = false
+        w.p.star = 0
+        w.p.invuln = 60
+        w.p.fire_cool = 0
+        w.cam_x = fclamp(w.p.x + p_w * 0.5 - (f64) logical_w * 0.4,
+                         0.0, (f64) (w.game.lw * tile - logical_w))
+        for i in 0..max_fire do
+            w.fireballs[i].alive = false
+        clear_particles(w)
+        for i in 0..max_popups do
+            w.popups[i].timer = 0
+        for i in 0..max_coin_pops do
+            w.coin_pops[i].timer = 0
+        w.game.bump_timer = 0
+        w.game.phase = game_phase.playing
+        w.game.phase_timer = 0
+        wake_ents(w)
+        // A new personal frontier is worth remembering across runs.
+        if n > w.game.max_level then
+            w.game.max_level = n
+            save_progress(n)
+        opl_audio.music_begin(s)
+
+    private let start_run = (w: world*, rng: pcg_random*, s: opl_audio.audio*) ->
+        w.game.score = 0
+        w.game.coins = 0
+        w.game.lives = 3
+        w.game.new_high = false
+        begin_level(w, rng, s, w.game.select_level, true)
+
+    private let after_death = (w: world*, rng: pcg_random*,
+                               s: opl_audio.audio*) ->
+        w.game.lives = w.game.lives - 1
+        w.p.power = 0
+        if w.game.lives <= 0 then
+            w.game.phase = game_phase.game_over
+            w.game.phase_timer = 0
+            note_best(w)
+            opl_audio.play(s, snd.sfx_over)
+        else
+            begin_level(w, rng, s, w.game.level, false)
+
+    private let note_best = (w: world*) ->
+        if w.game.score > w.game.high_score then
+            w.game.high_score = w.game.score
+            w.game.new_high = true
+            save_high_score(w.game.score)
+            io.write("NEW BEST: %d{w.game.score}\n", stdout)
+
+    // ============================================================
+    // Persistence: high score and progress
+    // ============================================================
+
+    private let load_number = (path_tail: const str) ->
+        match sys.home_dir() with
+        | some(hd) ->
+            match io.open(alloca("%s{hd}/.fario/%s{path_tail}"), "r") with
+            | ok(fp) ->
+                let mut buf = u8[32] { }
+                let n = io.read(buf, 32, fp)
+                ignore io.close(fp)  // best-effort: contents already read
+                match text.parse_i32(text.trim((const str) buf[0..n])) with
+                | ok(v) -> v
+                | err(_) -> 0
+            | err(_) -> 0
+        | none -> 0
+
+    private let save_number = (path_tail: const str, v: i32) ->
+        match sys.home_dir() with
+        | some(hd) ->
+            ignore io.ensure_dir(alloca("%s{hd}/.fario"))
+            match io.open(alloca("%s{hd}/.fario/%s{path_tail}"), "w") with
+            | ok(fp) ->
+                io.write("%d{v}\n", fp)
+                ignore io.close(fp)  // best-effort: a lost line, not an error
+                return
+            | err(_) -> return
+        | none -> return
+
+    let load_high_score = () -> load_number("highscore.txt")
+    let save_high_score = (v: i32) -> save_number("highscore.txt", v)
+    let load_progress = () -> imax(1, imin(load_number("progress.txt"), levels.count))
+    let save_progress = (v: i32) -> save_number("progress.txt", v)
+
+    // ============================================================
+    // Saved games
+    //
+    // Nine slots, `S` then a digit to write, `L` then a digit to read —
+    // fuzzel-fobble's scheme, whole. The file is text, one fact per line;
+    // the fifteen `row` lines are the level exactly as it stands (bricks
+    // broken, blocks spent, coins taken), and the `ent` lines are every
+    // creature mid-stride. Loading is all-or-nothing: the parse fills
+    // scratch and commits only if the whole file checked out.
+    // ============================================================
+
+    private let save_magic = "fario-save"
+    private let save_version = 1
+    private let max_fields = 16
+
+    private let slot_path = (hd: const str, slot: i32) ->
+        alloc("%s{hd}/.fario/save%d{slot}.txt")!
+
+    private let scan_slots = () ->
+        match sys.home_dir() with
+        | some(hd) ->
+            let mut bits = 0
+            for i in 0..save_slots do
+                let path = slot_path(hd, i + 1)
+                if io.exists(path) then
+                    bits = bits | (1 << i)
+                free(path)
+            bits
+        | none -> 0
+
+    private let words = (line: const str, out: str[]) ->
+        let parts = text.split(line, " ")
+        defer free(parts)
+        let mut n = 0i64
+        for i in 0..parts.len do
+            let p = text.trim(parts[i])
+            if p.len > 0i64 && n < out.len then
+                out[n] = (str) p
+                n = n + 1i64
+        n
+
+    private let int_at = (f: str[], n: i64, i: i64, bad: bool*) ->
+        if i >= n then
+            *bad = true
+            return 0
+        match text.parse_i32(f[i]) with
+        | ok(v) -> v
+        | err(_) ->
+            *bad = true
+            0
+
+    private let i64_at = (f: str[], n: i64, i: i64, bad: bool*) ->
+        if i >= n then
+            *bad = true
+            return 0i64
+        match text.parse_i64(f[i]) with
+        | ok(v) -> v
+        | err(_) ->
+            *bad = true
+            0i64
+
+    private let f64_at = (f: str[], n: i64, i: i64, bad: bool*) ->
+        if i >= n then
+            *bad = true
+            return 0.0
+        match text.parse_f64(f[i]) with
+        | ok(v) -> v
+        | err(_) ->
+            *bad = true
+            0.0
+
+    private let write_save = (w: world*, r: const pcg_random*, slot: i32,
+                              fp: any*) ->
+        io.write("// Fario saved game, slot %d{slot}.\n", fp)
+        io.write("// Blank lines and // lines are ignored. The 15 `row` lines\n", fp)
+        io.write("// are the level top to bottom, one character per tile, and\n", fp)
+        io.write("// the `ent` lines are the creatures mid-stride.\n", fp)
+        io.write(save_magic, fp)
+        io.write(" %d{save_version}\n", fp)
+        io.write("level %d{w.game.level}\n", fp)
+        io.write("score %d{w.game.score}\n", fp)
+        io.write("coins %d{w.game.coins}\n", fp)
+        io.write("lives %d{w.game.lives}\n", fp)
+        io.write("timer %d{w.game.timer_units} %d{w.game.timer_acc}\n", fp)
+        io.write("checkpoint %.17f{w.game.checkpoint_x}\n", fp)
+        io.write("power %d{w.p.power} %d{w.p.invuln} %d{w.p.star}\n", fp)
+        let dg = if w.p.on_ground then 1 else 0
+        // Seventeen digits: what it takes for a double to survive the round
+        // trip through decimal. See fuzzel-fobble's save note.
+        io.write("hero %.17f{w.p.x} %.17f{w.p.y}", fp)
+        io.write(" %.17f{w.p.vx} %.17f{w.p.vy} %d{w.p.dir} %d{dg}\n", fp)
+        io.write("camera %.17f{w.cam_x}\n", fp)
+        match w.game.phase with
+        | paused -> io.write("phase paused\n", fp)
+        | _ -> io.write("phase playing\n", fp)
+        io.write("rng %d{(i64) (r.state >> 32)} %d{(i64) (r.state & 4294967295u64)}", fp)
+        io.write(" %d{(i64) (r.inc >> 32)} %d{(i64) (r.inc & 4294967295u64)}\n", fp)
+        for row in 0..rows do
+            io.write("row ", fp)
+            io.write((const str) w.tiles[(i64) (row * w.game.lw)..(i64) ((row + 1) * w.game.lw)], fp)
+            io.write("\n", fp)
+        for i in 0..w.n_ents do
+            let e = &w.ents[i]
+            let al = if e.alive then 1 else 0
+            let ac = if e.active then 1 else 0
+            io.write("ent %d{(i32) e.kind} %.17f{e.x} %.17f{e.y}", fp)
+            io.write(" %.17f{e.vx} %.17f{e.vy} %.17f{e.w} %.17f{e.h}", fp)
+            io.write(" %.17f{e.base_y} %d{e.dir} %d{e.state} %d{e.timer}", fp)
+            io.write(" %d{e.hp} %d{al} %d{ac}\n", fp)
+
+    private let save_game = (w: world*, r: const pcg_random*, slot: i32) ->
+        match sys.home_dir() with
+        | some(hd) ->
+            ignore io.ensure_dir(alloca("%s{hd}/.fario"))
+            let path = slot_path(hd, slot)
+            defer free(path)
+            match io.open(path, "w") with
+            | ok(fp) ->
+                write_save(w, r, slot, fp)
+                match io.close(fp) with
+                | ok -> slot_msg.saved
+                | err(_) -> slot_msg.broken
+            | err(_) -> slot_msg.broken
+        | none -> slot_msg.broken
+
+    // Which grid characters a save may legally hold. Creature letters and
+    // markers are extracted at load, so they never appear here.
+    private let grid_ok = (ch: u8) ->
+        (solid(ch) || ch == '.' || ch == 'C' || ch == 'L' || ch == '^' ||
+         ch == 'F' || ch == 'A' || ch == 'D')
+
+    private let apply_save = (w: world*, r: pcg_random*, s: opl_audio.audio*,
+                              src: const str) ->
+        let mut st = default(game_state)
+        let mut pl = default(player)
+        let mut cam = 0.0
+        let mut rs = *r
+        let mut bad = false
+        let mut seen = false
+        let mut hold = false
+        let mut grid_rows = 0
+        let g = alloc(u8[rows * max_level_w] { })!
+        defer free(g)
+        let scratch = alloc(ent[max_ents] { })!
+        defer free(scratch)
+        let mut n_scratch = 0
+        let mut lw = 0
+
+        let lines = text.split(src, "\n")
+        defer free(lines)
+        for li in 0..lines.len do
+            let line = text.trim(lines[li])
+            if line.len == 0i64 || text.starts_with(line, "//") then
+                continue
+            let mut f = str[max_fields] { }
+            let n = words(line, f)
+            if n == 0i64 then
+                continue
+            let key = f[0]
+
+            if !seen then
+                if key == save_magic && int_at(f, n, 1i64, &bad) == save_version then
+                    seen = true
+                else
+                    bad = true
+                    break
+            else if key == "level" then
+                st.level = int_at(f, n, 1i64, &bad)
+                if st.level >= 1 && st.level <= levels.count then
+                    // The level's fixed geography comes from the level
+                    // definition; the file supplies only what changes.
+                    let d = levels.get(st.level)
+                    let mut mx = 0i64
+                    for ri in 0..d.rows.len do
+                        if d.rows[ri].len > mx then mx = d.rows[ri].len
+                    lw = (i32) mx
+                else
+                    bad = true
+            else if key == "score" then st.score = int_at(f, n, 1i64, &bad)
+            else if key == "coins" then st.coins = int_at(f, n, 1i64, &bad)
+            else if key == "lives" then st.lives = int_at(f, n, 1i64, &bad)
+            else if key == "timer" then
+                st.timer_units = int_at(f, n, 1i64, &bad)
+                st.timer_acc = int_at(f, n, 2i64, &bad)
+            else if key == "checkpoint" then
+                st.checkpoint_x = f64_at(f, n, 1i64, &bad)
+            else if key == "power" then
+                pl.power = int_at(f, n, 1i64, &bad)
+                pl.invuln = int_at(f, n, 2i64, &bad)
+                pl.star = int_at(f, n, 3i64, &bad)
+            else if key == "hero" then
+                pl.x = f64_at(f, n, 1i64, &bad)
+                pl.y = f64_at(f, n, 2i64, &bad)
+                pl.vx = f64_at(f, n, 3i64, &bad)
+                pl.vy = f64_at(f, n, 4i64, &bad)
+                pl.dir = int_at(f, n, 5i64, &bad)
+                pl.on_ground = int_at(f, n, 6i64, &bad) != 0
+            else if key == "camera" then
+                cam = f64_at(f, n, 1i64, &bad)
+            else if key == "phase" then
+                hold = n > 1i64 && f[1] == "paused"
+            else if key == "rng" then
+                let sh_hi = i64_at(f, n, 1i64, &bad)
+                let sh_lo = i64_at(f, n, 2i64, &bad)
+                let in_hi = i64_at(f, n, 3i64, &bad)
+                let in_lo = i64_at(f, n, 4i64, &bad)
+                rs.state = ((u64) sh_hi << 32) | (u64) sh_lo
+                rs.inc = ((u64) in_hi << 32) | (u64) in_lo
+            else if key == "row" then
+                if grid_rows >= rows || lw == 0 then
+                    bad = true
+                else
+                    let cells = f[1]
+                    if cells.len != (i64) lw then
+                        bad = true
+                    else
+                        for col in 0..lw do
+                            let ch = cells[col]
+                            if !grid_ok(ch) then bad = true
+                            g[grid_rows * lw + col] = ch
+                        grid_rows = grid_rows + 1
+            else if key == "ent" then
+                if n_scratch >= max_ents then
+                    bad = true
+                else
+                    let mut e = default(ent)
+                    e.kind = match enum_of(ent_kind, int_at(f, n, 1i64, &bad)) with
+                             | some(k) -> k
+                             | none ->
+                                 bad = true
+                                 ent_kind.none_k
+                    e.x = f64_at(f, n, 2i64, &bad)
+                    e.y = f64_at(f, n, 3i64, &bad)
+                    e.vx = f64_at(f, n, 4i64, &bad)
+                    e.vy = f64_at(f, n, 5i64, &bad)
+                    e.w = f64_at(f, n, 6i64, &bad)
+                    e.h = f64_at(f, n, 7i64, &bad)
+                    e.base_y = f64_at(f, n, 8i64, &bad)
+                    e.dir = int_at(f, n, 9i64, &bad)
+                    e.state = int_at(f, n, 10i64, &bad)
+                    e.timer = int_at(f, n, 11i64, &bad)
+                    e.hp = int_at(f, n, 12i64, &bad)
+                    e.alive = int_at(f, n, 13i64, &bad) != 0
+                    e.active = int_at(f, n, 14i64, &bad) != 0
+                    scratch[n_scratch] = e
+                    n_scratch = n_scratch + 1
+            else
+                bad = true
+
+        if bad || !seen || grid_rows != rows || lw == 0 then
+            return slot_msg.broken
+
+        // What a file may not claim.
+        if st.lives < 1 || st.timer_units < 0 || st.timer_units > 999 then
+            return slot_msg.broken
+        if pl.power < 0 || pl.power > 2 then
+            return slot_msg.broken
+        if pl.x < 0.0 || pl.x > (f64) (lw * tile) then
+            return slot_msg.broken
+        if rs.inc % 2u64 == 0u64 then
+            return slot_msg.broken
+
+        // ---- Commit ----
+        let was_live = match w.game.phase with
+                       | playing -> true
+                       | paused -> true
+                       | _ -> false
+
+        // The definition supplies the fixed geography; the file, the rest.
+        load_level(w, st.level)
+        w.n_ents = 0
+        for i in 0..n_scratch do
+            w.ents[i] = scratch[i]
+        w.n_ents = n_scratch
+        for i in 0..(rows * lw) do
+            w.tiles[i] = g[i]
+
+        w.game.score = st.score
+        w.game.coins = st.coins
+        w.game.lives = st.lives
+        w.game.timer_units = st.timer_units
+        w.game.timer_acc = st.timer_acc
+        w.game.checkpoint_x = st.checkpoint_x
+        w.game.time_warned = w.game.timer_units <= time_low
+        w.game.new_high = false
+        w.p = pl
+        w.p.anim = 0
+        w.p.fire_cool = 0
+        w.cam_x = fclamp(cam, 0.0, (f64) (w.game.lw * tile - logical_w))
+        for i in 0..max_fire do
+            w.fireballs[i].alive = false
+        clear_particles(w)
+        w.game.bump_timer = 0
+        w.game.phase_timer = 0
+        w.game.phase = if hold then game_phase.paused else game_phase.playing
+        *r = rs
+
+        if !was_live then
+            opl_audio.music_begin(s)
+        if hold then
+            opl_audio.music_hold(s)
+        else
+            opl_audio.music_unhold(s)
+        slot_msg.loaded
+
+    private let load_game = (w: world*, r: pcg_random*, s: opl_audio.audio*,
+                             slot: i32) ->
+        match sys.home_dir() with
+        | some(hd) ->
+            let path = slot_path(hd, slot)
+            defer free(path)
+            if !io.exists(path) then
+                return slot_msg.empty_slot
+            match io.read_all(path) with
+            | ok(bytes) ->
+                defer free(bytes)
+                apply_save(w, r, s, (const str) bytes)
+            | err(_) -> slot_msg.broken
+        | none -> slot_msg.broken
+
+    private let arm_prompt = (w: world*, p: slot_prompt) ->
+        w.game.prompt = p
+        w.game.prompt_timer = prompt_frames
+        w.game.slot_bits = scan_slots()
+        w.game.msg_timer = 0
+
+    private let flash = (w: world*, m: slot_msg, slot: i32) ->
+        w.game.prompt = slot_prompt.idle
+        w.game.msg = m
+        w.game.msg_slot = slot
+        w.game.msg_timer = msg_frames
+
+    // ============================================================
+    // The world, and one frame of it
+    // ============================================================
+
+    let create = (rng: pcg_random*) ->
+        let w = alloc(world)!
+        w.tiles = alloc(u8[rows * max_level_w] { })!
+        w.ents = alloc(ent[max_ents] { })!
+        w.fireballs = alloc(fireball[max_fire] { })!
+        w.particles = alloc(particle[max_particles] { })!
+        w.popups = alloc(popup[max_popups] { })!
+        w.coin_pops = alloc(coin_pop[max_coin_pops] { })!
+
+        w.game.high_score = load_high_score()
+        w.game.max_level = load_progress()
+        w.game.select_level = 1
+        w.game.lives = 3
+        // A real level behind the splash: the screen opens on Green Meadows.
+        load_level(w, 1)
+        w.p.x = 96.0
+        w.p.y = (f64) (13 * tile) - p_h_small
+        w.p.dir = 1
+        w.cam_x = 0.0
+        wake_ents(w)
+        w.game.phase = game_phase.splash
+        w
+
+    let step = (w: world*, inp: const input*, rng: pcg_random*,
+                s: opl_audio.audio*) ->
+        // --------- What the player asked for ---------
+        if plat.tap(inp, plat.start) then
+            match w.game.phase with
+            | splash -> start_run(w, rng, s)
+            | game_over ->
+                w.game.phase = game_phase.splash
+                w.game.phase_timer = 0
+            | victory ->
+                w.game.phase = game_phase.splash
+                w.game.phase_timer = 0
+            | playing ->
+                w.game.phase = game_phase.paused
+                opl_audio.music_hold(s)
+            | paused ->
+                w.game.phase = game_phase.playing
+                opl_audio.music_unhold(s)
+            | _ -> void()
+
+        // Select, on the splash, is the level picker — one press, one world,
+        // wrapping at the frontier progress.txt remembers.
+        if plat.tap(inp, plat.select) then
+            match w.game.phase with
+            | splash ->
+                w.game.select_level = w.game.select_level + 1
+                if w.game.select_level > w.game.max_level then
+                    w.game.select_level = 1
+            | _ -> void()
+
+        if plat.tap(inp, plat.mute) then
+            opl_audio.music_toggle_mute(s)
+
+        if plat.tap(inp, plat.save) then
+            match w.game.phase with
+            | playing -> arm_prompt(w, slot_prompt.saving)
+            | paused -> arm_prompt(w, slot_prompt.saving)
+            | _ -> flash(w, slot_msg.nothing_to_save, 0)
+
+        if plat.tap(inp, plat.load) then
+            arm_prompt(w, slot_prompt.loading)
+
+        if inp.digit > 0 then
+            match w.game.prompt with
+            | saving -> flash(w, save_game(w, rng, inp.digit), inp.digit)
+            | loading -> flash(w, load_game(w, rng, s, inp.digit), inp.digit)
+            | idle -> void()
+
+        if inp.tapped & ~(plat.save | plat.load) != 0 then
+            w.game.prompt = slot_prompt.idle
+
+        // --------- What the world does about it ---------
+        update_particles(w)
+        update_popups(w)
+        update_coin_pops(w)
+        if w.game.bump_timer > 0 then
+            w.game.bump_timer = w.game.bump_timer - 1
+        if w.game.prompt_timer > 0 then
+            w.game.prompt_timer = w.game.prompt_timer - 1
+            if w.game.prompt_timer == 0 then
+                w.game.prompt = slot_prompt.idle
+        if w.game.msg_timer > 0 then
+            w.game.msg_timer = w.game.msg_timer - 1
+
+        match w.game.phase with
+        | playing ->
+            update_player(w, inp, rng, s)
+            wake_ents(w)
+            for i in 0..w.n_ents do
+                if w.ents[i].alive && w.ents[i].active then
+                    update_ent(w, rng, s, i)
+            update_fireballs(w, rng, s)
+            update_shell_kills(w, s)
+
+            // Contact, after everyone has moved.
+            let ht = p_h(w)
+            let held_jump = plat.down(inp, plat.jump)
+            for i in 0..w.n_ents do
+                let e = &w.ents[i]
+                if e.alive && e.active && e.state != 1 && e.state != 2 then
+                    let touching =
+                        if e.kind == ent_kind.firebar then
+                            firebar_hits(e, w.p.x, w.p.y, p_w, ht)
+                        else if e.kind == ent_kind.chomper then
+                            // Only the part poking out of the pipe bites.
+                            let out = e.base_y - e.y
+                            e.state != 0 && out > 10.0 &&
+                                overlap(w.p.x, w.p.y, p_w, ht,
+                                        e.x, e.y, e.w, out)
+                        else
+                            overlap(w.p.x, w.p.y, p_w, ht, e.x, e.y, e.w, e.h)
+                    if touching then
+                        touch_ent(w, rng, s, held_jump, i)
+
+            player_tiles(w, rng, s)
+            update_timer(w, s)
+
+            // The camera follows; the level's ends stop it.
+            let want = w.p.x + p_w * 0.5 - (f64) logical_w * 0.4
+            w.cam_x = fclamp(want, 0.0, (f64) (w.game.lw * tile - logical_w))
+        | dying ->
+            w.game.phase_timer = w.game.phase_timer + 1
+            w.p.vy = w.p.vy + 0.7
+            w.p.y = w.p.y + w.p.vy
+            if w.game.phase_timer > 170 then
+                after_death(w, rng, s)
+        | clearing ->
+            update_clearing(w, rng, s)
+            for i in 0..w.n_ents do
+                if w.ents[i].alive && w.ents[i].active && w.ents[i].state == 2 then
+                    update_ent(w, rng, s, i)
+            // During the bridge collapse the king keeps pacing — until the
+            // planks run out from under him.
+            if w.game.clear_stage == 11 then
+                for i in 0..w.n_ents do
+                    let e = &w.ents[i]
+                    if e.alive && e.kind == ent_kind.boss && e.state < 2 then
+                        e.state = 2
+                        e.vy = -4.0
+                        award(w, e.x, e.y, 5000)
+        | splash ->
+            w.game.phase_timer = w.game.phase_timer + 1
+        | game_over ->
+            w.game.phase_timer = w.game.phase_timer + 1
+        | victory ->
+            w.game.phase_timer = w.game.phase_timer + 1
+        | paused -> void()

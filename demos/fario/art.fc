@@ -1,0 +1,1245 @@
+// Fario — the look.
+//
+// Everything the game puts on screen: the 3x5 font, the sprite sheets, the
+// tiles, the parallax backdrops, the HUD, the overlays, and `render`.
+//
+// The sprites are pixel art kept *as text*: a sprite is an array of strings,
+// one character per pixel, drawn at three logical pixels a cell — the same
+// move the level maps make, and for the same reason: the art stays editable
+// as art. The palette is one global table (`pal`), and a sprite can be
+// re-suited — fire Fario's whites, the star's rainbow, the 1-up's green —
+// by remapping characters rather than by owning a second copy of itself.
+//
+// It reads game.fc's world and draws on gfx's three primitives, names no
+// library and holds no handle. Coordinates are logical 1280x720; world
+// coordinates become screen ones by subtracting the camera here and nowhere
+// else.
+
+import * from game
+import math from std::
+
+module art =
+    // ============================================================
+    // 3x5 pixel font (bitmap packed into an i32: 5 rows of 3 bits)
+    // ============================================================
+
+    let glyph = (ch: u8) ->
+        match ch with
+        | 'A' -> 2 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+        | 'B' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (6 << 12)
+        | 'C' -> 3 | (4 << 3) | (4 << 6) | (4 << 9) | (3 << 12)
+        | 'D' -> 6 | (5 << 3) | (5 << 6) | (5 << 9) | (6 << 12)
+        | 'E' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (7 << 12)
+        | 'F' -> 7 | (4 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+        | 'G' -> 3 | (4 << 3) | (5 << 6) | (5 << 9) | (3 << 12)
+        | 'H' -> 5 | (5 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+        | 'I' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+        | 'J' -> 1 | (1 << 3) | (1 << 6) | (5 << 9) | (2 << 12)
+        | 'K' -> 5 | (6 << 3) | (4 << 6) | (6 << 9) | (5 << 12)
+        | 'L' -> 4 | (4 << 3) | (4 << 6) | (4 << 9) | (7 << 12)
+        | 'M' -> 5 | (7 << 3) | (5 << 6) | (5 << 9) | (5 << 12)
+        | 'N' -> 5 | (7 << 3) | (7 << 6) | (5 << 9) | (5 << 12)
+        | 'O' -> 2 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+        | 'P' -> 6 | (5 << 3) | (6 << 6) | (4 << 9) | (4 << 12)
+        | 'Q' -> 2 | (5 << 3) | (5 << 6) | (6 << 9) | (3 << 12)
+        | 'R' -> 6 | (5 << 3) | (6 << 6) | (5 << 9) | (5 << 12)
+        | 'S' -> 3 | (4 << 3) | (2 << 6) | (1 << 9) | (6 << 12)
+        | 'T' -> 7 | (2 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+        | 'U' -> 5 | (5 << 3) | (5 << 6) | (5 << 9) | (2 << 12)
+        | 'V' -> 5 | (5 << 3) | (5 << 6) | (2 << 9) | (2 << 12)
+        | 'W' -> 5 | (5 << 3) | (7 << 6) | (7 << 9) | (5 << 12)
+        | 'X' -> 5 | (5 << 3) | (2 << 6) | (5 << 9) | (5 << 12)
+        | 'Y' -> 5 | (5 << 3) | (2 << 6) | (2 << 9) | (2 << 12)
+        | 'Z' -> 7 | (1 << 3) | (2 << 6) | (4 << 9) | (7 << 12)
+        | '0' -> 7 | (5 << 3) | (5 << 6) | (5 << 9) | (7 << 12)
+        | '1' -> 2 | (6 << 3) | (2 << 6) | (2 << 9) | (7 << 12)
+        | '2' -> 7 | (1 << 3) | (7 << 6) | (4 << 9) | (7 << 12)
+        | '3' -> 7 | (1 << 3) | (3 << 6) | (1 << 9) | (7 << 12)
+        | '4' -> 5 | (5 << 3) | (7 << 6) | (1 << 9) | (1 << 12)
+        | '5' -> 7 | (4 << 3) | (7 << 6) | (1 << 9) | (7 << 12)
+        | '6' -> 3 | (4 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+        | '7' -> 7 | (1 << 3) | (1 << 6) | (1 << 9) | (1 << 12)
+        | '8' -> 7 | (5 << 3) | (7 << 6) | (5 << 9) | (7 << 12)
+        | '9' -> 7 | (5 << 3) | (7 << 6) | (1 << 9) | (6 << 12)
+        | '+' -> 0 | (2 << 3) | (7 << 6) | (2 << 9) | (0 << 12)
+        | '-' -> 0 | (0 << 3) | (7 << 6) | (0 << 9) | (0 << 12)
+        | ':' -> 0 | (2 << 3) | (0 << 6) | (2 << 9) | (0 << 12)
+        | '!' -> 2 | (2 << 3) | (2 << 6) | (0 << 9) | (2 << 12)
+        | '.' -> 0 | (0 << 3) | (0 << 6) | (0 << 9) | (2 << 12)
+        | '?' -> 6 | (1 << 3) | (2 << 6) | (0 << 9) | (2 << 12)
+        | _ -> 0
+
+    let draw_char = (ch: u8, ox: i32, oy: i32, scale: i32,
+                     cr: u8, cg: u8, cb: u8) ->
+        let g = glyph(ch)
+        for row in 0..5 do
+            let bits = (g >> (row * 3)) & 7
+            for col in 0..3 do
+                if (bits >> (2 - col)) & 1 == 1 then
+                    gfx.fill(ox + col * scale, oy + row * scale, scale, scale,
+                             cr, cg, cb, 255u8)
+
+    let text_width = (s: const str, scale: i32) ->
+        (i32) s.len * 4 * scale - scale
+
+    let draw_text = (s: const str, ox: i32, oy: i32, scale: i32,
+                     cr: u8, cg: u8, cb: u8) ->
+        let mut x = ox
+        for ch in s do
+            if ch != ' ' then
+                draw_char(ch, x, oy, scale, cr, cg, cb)
+            x = x + 4 * scale
+
+    let draw_text_centered = (s: const str, cx: i32, oy: i32, scale: i32,
+                              cr: u8, cg: u8, cb: u8) ->
+        let w = text_width(s, scale)
+        draw_text(s, cx - w / 2, oy, scale, cr, cg, cb)
+
+    // A number padded with leading zeros, the arcade way.
+    let draw_number = (v: i32, digits: i32, ox: i32, oy: i32, scale: i32,
+                       cr: u8, cg: u8, cb: u8) ->
+        let mut n = 1
+        let mut probe = v
+        loop
+            if probe < 10 then break
+            probe = probe / 10
+            n = n + 1
+        let mut x = ox
+        for i in 0..(digits - n) do
+            draw_char('0', x, oy, scale, cr, cg, cb)
+            x = x + 4 * scale
+        let s = "%d{v}"
+        draw_text((const str) s, x, oy, scale, cr, cg, cb)
+
+    // ============================================================
+    // The sprite palette
+    //
+    // One character, one colour, NES-bright. A sprite's "suit" remaps a few
+    // characters before lookup — fire Fario, the star shimmer, the 1-up —
+    // so one drawing serves several wearers.
+    // ============================================================
+
+    let suit_normal = 0
+    let suit_fire = 1
+    let suit_star_a = 2
+    let suit_star_b = 3
+    let suit_green = 4
+
+    private let resuit = (suit: i32, ch: u8) ->
+        if suit == suit_fire then
+            match ch with
+            | 'g' -> 'w'
+            | 'G' -> 'e'
+            | 'o' -> 'r'
+            | 'O' -> 'R'
+            | _ -> ch
+        else if suit == suit_star_a then
+            match ch with
+            | 'g' -> 'y'
+            | 'G' -> 'Y'
+            | 'o' -> 'w'
+            | 'O' -> 'e'
+            | _ -> ch
+        else if suit == suit_star_b then
+            match ch with
+            | 'g' -> 'p'
+            | 'G' -> 'P'
+            | 'o' -> 'y'
+            | 'O' -> 'Y'
+            | _ -> ch
+        else if suit == suit_green then
+            match ch with
+            | 'r' -> 'g'
+            | 'R' -> 'G'
+            | _ -> ch
+        else ch
+
+    // The colour of one palette character. `a == 0` is transparent.
+    private let pal = (ch: u8) ->
+        match ch with
+        | 'k' -> { 24u8, 20u8, 20u8, 255u8 }       // outline
+        | 'w' -> { 252u8, 252u8, 252u8, 255u8 }
+        | 's' -> { 252u8, 216u8, 168u8, 255u8 }    // skin
+        | 'c' -> { 252u8, 236u8, 180u8, 255u8 }    // cream
+        | 'r' -> { 216u8, 40u8, 0u8, 255u8 }
+        | 'R' -> { 136u8, 16u8, 0u8, 255u8 }
+        | 'o' -> { 240u8, 140u8, 32u8, 255u8 }
+        | 'O' -> { 176u8, 80u8, 0u8, 255u8 }
+        | 'y' -> { 248u8, 208u8, 56u8, 255u8 }
+        | 'Y' -> { 168u8, 120u8, 0u8, 255u8 }
+        | 'g' -> { 72u8, 200u8, 72u8, 255u8 }
+        | 'G' -> { 0u8, 120u8, 32u8, 255u8 }
+        | 'b' -> { 64u8, 120u8, 248u8, 255u8 }
+        | 'B' -> { 16u8, 48u8, 152u8, 255u8 }
+        | 'n' -> { 160u8, 96u8, 32u8, 255u8 }
+        | 'N' -> { 96u8, 48u8, 8u8, 255u8 }
+        | 'e' -> { 188u8, 188u8, 188u8, 255u8 }
+        | 'E' -> { 96u8, 96u8, 96u8, 255u8 }
+        | 'p' -> { 216u8, 96u8, 200u8, 255u8 }
+        | 'P' -> { 128u8, 40u8, 120u8, 255u8 }
+        | 't' -> { 0u8, 168u8, 168u8, 255u8 }
+        | _ -> { 0u8, 0u8, 0u8, 0u8 }
+
+    // Stamp a sprite: `cell` logical pixels per art pixel, mirrored when
+    // `flip`, characters re-suited first. Rows may vary in width; short
+    // rows simply end early.
+    let stamp = (rws: const (const str)[], px: i32, py: i32, cell: i32,
+                 flip: bool, suit: i32) ->
+        for row in 0i64..rws.len do
+            let line = rws[row]
+            for col in 0i64..line.len do
+                let src = if flip then line[line.len - 1i64 - col] else line[col]
+                let { cr, cg, cb, ca } = pal(resuit(suit, src))
+                if ca != 0u8 then
+                    gfx.fill(px + (i32) col * cell, py + (i32) row * cell,
+                             cell, cell, cr, cg, cb, ca)
+
+    // ============================================================
+    // Sprites. All face RIGHT; `stamp` mirrors for left.
+    // ============================================================
+
+    // --- Fario, small (16x16, three leg frames and a jump) ---
+    private let hero_stand = (const str)[16] {
+        "......gggg......",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "...GGGGGGGGGGG..",
+        "....ssssssss....",
+        "...sssskssks....",
+        "...ssssssssss...",
+        "....ssssssss....",
+        "....gggggggg....",
+        "..ggooooooogg...",
+        "..sgoooooooogs..",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....ooo..ooo....",
+        "...NNN....NNN...",
+        "...NNN....NNN..."
+    }
+    private let hero_walk1 = (const str)[16] {
+        "......gggg......",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "...GGGGGGGGGGG..",
+        "....ssssssss....",
+        "...sssskssks....",
+        "...ssssssssss...",
+        "....ssssssss....",
+        "....gggggggg....",
+        "..ggooooooogg...",
+        "..sgoooooooogs..",
+        "....oooooooo....",
+        "....oooooooo....",
+        "...ooo....ooo...",
+        "..NNN......NNN..",
+        "..NN........NN.."
+    }
+    private let hero_walk2 = (const str)[16] {
+        "......gggg......",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "...GGGGGGGGGGG..",
+        "....ssssssss....",
+        "...sssskssks....",
+        "...ssssssssss...",
+        "....ssssssss....",
+        "....gggggggg....",
+        "..ggooooooogg...",
+        "..sgoooooooogs..",
+        "....oooooooo....",
+        "....oooooooo....",
+        ".....oooooo.....",
+        "....NNNNNN......",
+        "....NNNN........"
+    }
+    private let hero_jump = (const str)[16] {
+        "......gggg......",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "...GGGGGGGGGGG..",
+        "....ssssssss....",
+        "...sssskssks....",
+        "...ssssssssss...",
+        "....ssssssss....",
+        "..s.gggggggg.s..",
+        "..sgooooooogs...",
+        "...goooooooog...",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....ooo.ooo.....",
+        "...NNN...NNN....",
+        "..NNN.....NN...."
+    }
+
+    // --- Fario, grown (16x32) ---
+    private let big_stand = (const str)[32] {
+        "......gggg......",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "...gggggggggg...",
+        "...GGGGGGGGGGG..",
+        "....ssssssss....",
+        "...sssskssks....",
+        "...sssskssks....",
+        "...ssssssssss...",
+        "...ssssssssss...",
+        "....ssssssss....",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "..gggoooooogg...",
+        "..gggoooooogg...",
+        "..ggoooooooogg..",
+        "..sgoooooooogs..",
+        "..sgoooooooogs..",
+        "..ssoooooooogs..",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....ooo..ooo....",
+        "....ooo..ooo....",
+        "....ooo..ooo....",
+        "...oooo..oooo...",
+        "...NNNN..NNNN...",
+        "...NNNN..NNNN...",
+        "..NNNNN..NNNNN..",
+        "..NNNNN..NNNNN.."
+    }
+    private let big_walk1 = (const str)[32] {
+        "......gggg......",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "...gggggggggg...",
+        "...GGGGGGGGGGG..",
+        "....ssssssss....",
+        "...sssskssks....",
+        "...sssskssks....",
+        "...ssssssssss...",
+        "...ssssssssss...",
+        "....ssssssss....",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "..gggoooooogg...",
+        "..gggoooooogg...",
+        "..ggoooooooogg..",
+        "..sgoooooooogs..",
+        "..sgoooooooogs..",
+        "..ssoooooooogs..",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "...ooooo.ooo....",
+        "...oooo...ooo...",
+        "...ooo.....ooo..",
+        "...ooo.....ooo..",
+        "..oooo.....oooo.",
+        "..NNNN......NNNN",
+        "..NNNN......NNNN",
+        ".NNNNN......NNNN",
+        ".NNNNN.........."
+    }
+    private let big_walk2 = (const str)[32] {
+        "......gggg......",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "...gggggggggg...",
+        "...GGGGGGGGGGG..",
+        "....ssssssss....",
+        "...sssskssks....",
+        "...sssskssks....",
+        "...ssssssssss...",
+        "...ssssssssss...",
+        "....ssssssss....",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "..gggoooooogg...",
+        "..gggoooooogg...",
+        "..ggoooooooogg..",
+        "..sgoooooooogs..",
+        "..sgoooooooogs..",
+        "..ssoooooooogs..",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        ".....oooooo.....",
+        ".....oooooo.....",
+        ".....ooooo......",
+        "....oooooo......",
+        "....NNNNNN......",
+        "....NNNNN.......",
+        "...NNNNN........",
+        "...NNNN........."
+    }
+    private let big_jump = (const str)[32] {
+        "......gggg......",
+        "....gggggggg....",
+        "...gggggggggg...",
+        "...gggggggggg...",
+        "...GGGGGGGGGGG..",
+        "....ssssssss....",
+        "...sssskssks....",
+        "...sssskssks....",
+        "...ssssssssss...",
+        "...ssssssssss...",
+        "....ssssssss....",
+        "..s.gggggggg....",
+        "..sggggggggggs..",
+        "..gggooooooggs..",
+        "..gggoooooogg...",
+        "..ggoooooooogg..",
+        "...goooooooog...",
+        "...goooooooog...",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "....oooooooo....",
+        "...ooooo.ooo....",
+        "...oooo..ooo....",
+        "...ooo....ooo...",
+        "...ooo....ooo...",
+        "..oooo....oooo..",
+        "..NNNN....NNNN..",
+        "..NNN......NNN..",
+        ".NNN........NN..",
+        "................"
+    }
+
+    // --- The creatures ---
+    private let grumble_rows = (const str)[16] {
+        "................",
+        ".....nnnnnn.....",
+        "...nnnnnnnnnn...",
+        "..nnnnnnnnnnnn..",
+        "..nNnnnnnnnNnn..",
+        ".nnknnnnnnknnnn.",
+        ".nnnnnnnnnnnnnn.",
+        ".nnncccccccnnnn.",
+        ".nnccckkcccnnnn.",
+        "..nccccccccnn...",
+        "..nnnnnnnnnnn...",
+        "...nnnnnnnnnn...",
+        "....nnnnnn......",
+        "...NN....NN.....",
+        "..NNN....NNN....",
+        "................"
+    }
+    private let grumble_flat = (const str)[5] {
+        "................",
+        "..nnnnnnnnnnnn..",
+        ".nnnnnnnnnnnnnn.",
+        ".NNnnnnnnnnnnNN.",
+        "................"
+    }
+    private let snapper_rows = (const str)[16] {
+        "................",
+        "....ggggg.......",
+        "..ggggggggg.....",
+        ".gggGGggggg.....",
+        ".ggGggggGgg.....",
+        ".ggggggggggg....",
+        ".gGgggggGggg.ss.",
+        ".ggggggggggg.sks",
+        "..ccccccccccsss.",
+        "..cccccccccc.s..",
+        "................",
+        "...NN....NN.....",
+        "..NNN....NNN....",
+        "................",
+        "................",
+        "................"
+    }
+    private let shell_rows = (const str)[10] {
+        "................",
+        "....gggggggg....",
+        "..gggGGggGGgg...",
+        ".ggGggggGgggg...",
+        ".ggggggggggggg..",
+        ".gGgggggGgggggg.",
+        "..gggggggggggg..",
+        "..cccccccccccc..",
+        "...cccccccccc...",
+        "................"
+    }
+    private let prickle_rows = (const str)[12] {
+        "....k...k...k...",
+        "....k...k...k...",
+        "..k.ppppppp.k...",
+        "...ppppppppp....",
+        ".kppwkppwkppk...",
+        "..ppwwppwwppp...",
+        ".kpppppppppppk..",
+        "..ppppppppppp...",
+        ".k.ppppppppp.k..",
+        "....ppppppp.....",
+        "...NN..NN..NN...",
+        "................"
+    }
+    private let finn_rows = (const str)[10] {
+        "................",
+        "......tttt......",
+        ".t...tttttt.....",
+        ".tt.tttttttt....",
+        ".ttttttttwkt....",
+        ".tttttttttttt...",
+        ".tt.tttttttt....",
+        ".t...tttttt.....",
+        "......tttt......",
+        "................"
+    }
+    private let jelly_rows = (const str)[10] {
+        ".....pppppp.....",
+        "...pppppppppp...",
+        "..pppppppppppp..",
+        "..ppwkppppwkpp..",
+        "..pppppppppppp..",
+        "...pppppppppp...",
+        "....p.pp.p.p....",
+        "....p.p..p.p....",
+        ".....p.p..p.....",
+        "....p...p..p...."
+    }
+    private let chomper_rows = (const str)[14] {
+        "...rrrrrrrr.....",
+        "..rrwwrrrrrr....",
+        ".rrrwwrrrrrrr...",
+        ".rrrrrrrrwwrr...",
+        ".wwwwwwwwwwww...",
+        ".kwkwkwkwkwkk...",
+        "..kkkkkkkkkk....",
+        "......gg........",
+        "......gg........",
+        ".....gggg.......",
+        "..G...gg...G....",
+        "...G..gg..G.....",
+        "......gg........",
+        "......gg........"
+    }
+    private let shroom_rows = (const str)[12] {
+        ".....rrrrrr.....",
+        "...rrrrrrrrrr...",
+        "..rwwrrrrrrwwr..",
+        ".rrwwrrrrrrwwrr.",
+        ".rrrrrrwwrrrrrr.",
+        ".rrrrrrwwrrrrrr.",
+        "..rrrrrrrrrrrr..",
+        "...cccccccccc...",
+        "...cckccckcc....",
+        "...cccccccccc...",
+        "....cccccccc....",
+        "................"
+    }
+    private let flower_rows = (const str)[12] {
+        "...oo..oo..oo...",
+        "..oooooooooooo..",
+        "..ooyyyyyyyoo...",
+        "..ooyywwyyyoo...",
+        "..oooyyyyyooo...",
+        "..oooooooooooo..",
+        "...oo..oo..oo...",
+        "......gg........",
+        "..G...gg...G....",
+        "...G..gg..G.....",
+        "......gg........",
+        ".....gggg......."
+    }
+    private let star_rows = (const str)[13] {
+        ".......yy.......",
+        ".......yy.......",
+        "......yyyy......",
+        "......yyyy......",
+        ".yyyyyyyyyyyyyy.",
+        "..yyyyyyyyyyyy..",
+        "...yyyyyyyyyy...",
+        "....yykyykyy....",
+        "....yyyyyyyy....",
+        "...yyyyyyyyyy...",
+        "...yyyy..yyyy...",
+        "..yyy......yyy..",
+        "..yy........yy.."
+    }
+    private let coin_rows = (const str)[12] {
+        ".....yyyyy......",
+        "...yyyyyyyyy....",
+        "..yyYYYYYYYyy...",
+        "..yYYyyyyyYYy...",
+        ".yyYyyyyyyyYyy..",
+        ".yyYyyyyyyyYyy..",
+        ".yyYyyyyyyyYyy..",
+        ".yyYyyyyyyyYyy..",
+        "..yYYyyyyyYYy...",
+        "..yyYYYYYYYyy...",
+        "...yyyyyyyyy....",
+        ".....yyyyy......"
+    }
+    private let axe_rows = (const str)[10] {
+        "...eeee.........",
+        "..eeeeee........",
+        ".eeeeeeee.......",
+        ".eeee..NN.......",
+        ".eeee..NN.......",
+        "..eee..NN.......",
+        ".......NN.......",
+        ".......NN.......",
+        ".......NN.......",
+        ".......NN......."
+    }
+
+    // ============================================================
+    // Theme colours
+    // ============================================================
+
+    // The sky (or cave, or sea, or keep) behind everything.
+    let sky_rgb = (k: theme) ->
+        match k with
+        | overworld -> { 104u8, 168u8, 248u8 }
+        | underground -> { 12u8, 12u8, 20u8 }
+        | water -> { 24u8, 60u8, 148u8 }
+        | castle -> { 20u8, 16u8, 20u8 }
+        | night -> { 16u8, 20u8, 48u8 }
+
+    // Terrain block faces per theme: top colour, body colour, dark seam.
+    private let ground_rgb = (k: theme) ->
+        match k with
+        | overworld -> { 88u8, 200u8, 88u8, 176u8, 112u8, 48u8 }
+        | underground -> { 84u8, 112u8, 160u8, 52u8, 68u8, 104u8 }
+        | water -> { 232u8, 204u8, 120u8, 188u8, 152u8, 80u8 }
+        | castle -> { 148u8, 148u8, 156u8, 100u8, 100u8, 110u8 }
+        | night -> { 60u8, 140u8, 84u8, 120u8, 84u8, 44u8 }
+
+    // ============================================================
+    // Tiles
+    // ============================================================
+
+    private let draw_block_face = (x: i32, y: i32, br: u8, bg: u8, bb: u8) ->
+        gfx.fill(x, y, 48, 48, br, bg, bb, 255u8)
+        gfx.fill(x, y, 48, 4, (u8) ((i32) br * 130 / 100 + 20),
+                 (u8) ((i32) bg * 130 / 100 + 20),
+                 (u8) ((i32) bb * 130 / 100 + 20), 255u8)
+        gfx.fill(x, y + 44, 48, 4, (u8) ((i32) br * 55 / 100),
+                 (u8) ((i32) bg * 55 / 100), (u8) ((i32) bb * 55 / 100), 255u8)
+        gfx.fill(x + 44, y, 4, 48, (u8) ((i32) br * 55 / 100),
+                 (u8) ((i32) bg * 55 / 100), (u8) ((i32) bb * 55 / 100), 255u8)
+
+    private let draw_qblock = (x: i32, y: i32, frame: i32, spent: bool) ->
+        if spent then
+            draw_block_face(x, y, 140u8, 104u8, 60u8)
+            gfx.fill(x + 6, y + 6, 4, 4, 90u8, 64u8, 30u8, 255u8)
+            gfx.fill(x + 38, y + 6, 4, 4, 90u8, 64u8, 30u8, 255u8)
+            gfx.fill(x + 6, y + 38, 4, 4, 90u8, 64u8, 30u8, 255u8)
+            gfx.fill(x + 38, y + 38, 4, 4, 90u8, 64u8, 30u8, 255u8)
+        else
+            // The pulse is the invitation.
+            let t = (frame / 8) % 4
+            let boost = if t == 1 then 20 else if t == 2 then 36 else if t == 3 then 20 else 0
+            draw_block_face(x, y, (u8) (232 + boost / 3), (u8) (172 + boost),
+                            (u8) (24 + boost))
+            gfx.fill(x + 6, y + 6, 4, 4, 150u8, 96u8, 10u8, 255u8)
+            gfx.fill(x + 38, y + 6, 4, 4, 150u8, 96u8, 10u8, 255u8)
+            gfx.fill(x + 6, y + 38, 4, 4, 150u8, 96u8, 10u8, 255u8)
+            gfx.fill(x + 38, y + 38, 4, 4, 150u8, 96u8, 10u8, 255u8)
+            draw_char('?', x + 15, y + 10, 6, 120u8, 70u8, 0u8)
+
+    private let draw_brick = (x: i32, y: i32, k: theme) ->
+        let { br, bg, bb } = match k with
+                             | underground -> { 76u8, 100u8, 148u8 }
+                             | castle -> { 120u8, 120u8, 130u8 }
+                             | _ -> { 200u8, 108u8, 48u8 }
+        gfx.fill(x, y, 48, 48, br, bg, bb, 255u8)
+        // Mortar: two courses, staggered.
+        let mr = (u8) ((i32) br * 45 / 100)
+        let mg = (u8) ((i32) bg * 45 / 100)
+        let mb = (u8) ((i32) bb * 45 / 100)
+        gfx.fill(x, y + 22, 48, 4, mr, mg, mb, 255u8)
+        gfx.fill(x, y + 44, 48, 4, mr, mg, mb, 255u8)
+        gfx.fill(x + 22, y, 4, 22, mr, mg, mb, 255u8)
+        gfx.fill(x + 10, y + 26, 4, 18, mr, mg, mb, 255u8)
+        gfx.fill(x + 34, y + 26, 4, 18, mr, mg, mb, 255u8)
+        gfx.fill(x, y, 48, 3, (u8) imin((i32) br + 40, 255),
+                 (u8) imin((i32) bg + 40, 255), (u8) imin((i32) bb + 40, 255), 255u8)
+
+    private let draw_pipe_tile = (x: i32, y: i32, ch: u8) ->
+        // Body columns, with the cap tiles lipped 6 px outward.
+        let lipped = ch == '(' || ch == ')'
+        let lx = if ch == '(' then x - 6 else x
+        let wd = if lipped then 54 else 48
+        gfx.fill(lx, y, wd, 48, 0u8, 168u8, 0u8, 255u8)
+        gfx.fill(lx, y, wd, 4, 152u8, 248u8, 152u8, 255u8)
+        if lipped then
+            gfx.fill(lx, y + 40, wd, 8, 0u8, 104u8, 0u8, 255u8)
+        // A running highlight down the left of each column pair.
+        if ch == '(' || ch == '[' then
+            gfx.fill(x + 6, y, 10, 48, 120u8, 232u8, 120u8, 255u8)
+        else
+            gfx.fill(x + 30, y, 8, 48, 0u8, 104u8, 0u8, 255u8)
+
+    private let draw_spikes = (x: i32, y: i32, k: theme) ->
+        let { sr, sg, sb } = match k with
+                             | water -> { 200u8, 120u8, 160u8 }    // urchins
+                             | _ -> { 190u8, 190u8, 200u8 }
+        // Two pyramids of narrowing bands.
+        for i in 0..2 do
+            let cx = x + 12 + i * 24
+            gfx.fill(cx - 10, y + 36, 20, 12, sr, sg, sb, 255u8)
+            gfx.fill(cx - 7, y + 24, 14, 12, sr, sg, sb, 255u8)
+            gfx.fill(cx - 4, y + 12, 8, 12, sr, sg, sb, 255u8)
+            gfx.fill(cx - 1, y + 4, 3, 8, 255u8, 255u8, 255u8, 255u8)
+
+    private let draw_lava = (x: i32, y: i32, row: i32, frame: i32,
+                             wx: i32) ->
+        gfx.fill(x, y, 48, 48, 216u8, 60u8, 0u8, 255u8)
+        // The surface row gets a moving crest and a glow.
+        if row_is_lava_surface(wx, row) then
+            let bob = (i32) (math.sin((f64) frame * 0.08 + (f64) wx * 0.9) * 4.0)
+            gfx.fill(x, y, 48, 8 + bob, 255u8, 168u8, 40u8, 255u8)
+            gfx.fill(x, y + 8 + bob, 48, 4, 255u8, 220u8, 120u8, 255u8)
+
+    // Lava's surface is its topmost row; the map only ever stacks it two
+    // deep from row 13, so row 13 is the crest.
+    private let row_is_lava_surface = (wx: i32, row: i32) -> row == 13
+
+    private let draw_bridge = (x: i32, y: i32) ->
+        gfx.fill(x, y + 4, 48, 14, 150u8, 96u8, 40u8, 255u8)
+        gfx.fill(x, y + 4, 48, 3, 200u8, 140u8, 70u8, 255u8)
+        gfx.fill(x + 22, y + 8, 4, 10, 96u8, 56u8, 20u8, 255u8)
+        // The rope it hangs from.
+        gfx.fill(x, y - 6, 48, 3, 230u8, 210u8, 160u8, 255u8)
+
+    private let draw_platform = (x: i32, y: i32, k: theme) ->
+        match k with
+        | night ->
+            gfx.fill(x, y, 48, 48, 88u8, 72u8, 120u8, 255u8)
+            gfx.fill(x, y, 48, 8, 168u8, 140u8, 216u8, 255u8)
+        | _ ->
+            gfx.fill(x, y, 48, 48, 228u8, 120u8, 88u8, 255u8)
+            gfx.fill(x, y, 48, 8, 255u8, 190u8, 150u8, 255u8)
+            gfx.fill(x + 8, y + 14, 8, 6, 255u8, 230u8, 210u8, 255u8)
+            gfx.fill(x + 30, y + 22, 8, 6, 255u8, 230u8, 210u8, 255u8)
+
+    private let draw_door = (x: i32, y: i32) ->
+        gfx.disc(x + 24, y + 14, 20, 60u8, 40u8, 24u8, 255u8)
+        gfx.fill(x + 4, y + 14, 40, 34, 60u8, 40u8, 24u8, 255u8)
+        gfx.fill(x + 34, y + 26, 5, 6, 220u8, 190u8, 90u8, 255u8)
+
+    private let draw_pole_tile = (w: world*, x: i32, y: i32, row: i32,
+                                  cleared: bool) ->
+        // Pole through the middle of the cell; the finial and the pennant
+        // at the top. The pennant drops once the level is won.
+        gfx.fill(x + 22, y, 5, 48, 190u8, 200u8, 210u8, 255u8)
+        if row == 4 then
+            gfx.disc(x + 24, y + 3, 8, 120u8, 220u8, 120u8, 255u8)
+        let flag_row = if cleared then 10 else 4
+        if row == flag_row then
+            // A pennant of shrinking bands, pointing left off the pole.
+            gfx.fill(x - 14, y + 8, 36, 10, 36u8, 160u8, 60u8, 255u8)
+            gfx.fill(x - 6, y + 18, 28, 8, 36u8, 160u8, 60u8, 255u8)
+            gfx.fill(x + 2, y + 26, 20, 6, 36u8, 160u8, 60u8, 255u8)
+
+    // One tile, dispatched. `wx` is the world column, for the few tiles
+    // that want deterministic per-column variety.
+    private let draw_tile = (w: world*, ch: u8, x: i32, y: i32, wx: i32,
+                             row: i32, frame: i32) ->
+        let k = w.game.kind
+        if ch == '#' then
+            let { tr, tg, tb, br, bg, bb } = ground_rgb(k)
+            gfx.fill(x, y, 48, 48, br, bg, bb, 255u8)
+            // Grass (or crust) only where the sky shows above.
+            if !solid(tile_at(w, wx, row - 1)) then
+                gfx.fill(x, y, 48, 10, tr, tg, tb, 255u8)
+                gfx.fill(x, y + 10, 48, 3, (u8) ((i32) tr * 60 / 100),
+                         (u8) ((i32) tg * 60 / 100), (u8) ((i32) tb * 60 / 100), 255u8)
+            // Speckle, keyed off the column so it does not shimmer.
+            let h = (wx * 73 + row * 151) % 37
+            gfx.fill(x + 8 + h % 24, y + 20 + (h * 5) % 20, 5, 5,
+                     (u8) ((i32) br * 70 / 100), (u8) ((i32) bg * 70 / 100),
+                     (u8) ((i32) bb * 70 / 100), 255u8)
+        else if ch == 'x' then
+            let { xr, xg, xb } = match k with
+                                 | castle -> { 128u8, 128u8, 138u8 }
+                                 | underground -> { 96u8, 120u8, 168u8 }
+                                 | _ -> { 216u8, 160u8, 70u8 }
+            draw_block_face(x, y, xr, xg, xb)
+        else if ch == 'B' then
+            draw_brick(x, y, k)
+        else if ch == '?' || ch == 'M' || ch == 'S' || ch == '1' then
+            draw_qblock(x, y, frame, false)
+        else if ch == 'U' then
+            draw_qblock(x, y, frame, true)
+        else if ch == 'C' then
+            stamp(coin_rows, x, y, 3, false, suit_normal)
+        else if ch == '(' || ch == ')' || ch == '[' || ch == ']' then
+            draw_pipe_tile(x, y, ch)
+        else if ch == '=' then
+            draw_platform(x, y, k)
+        else if ch == '_' then
+            draw_bridge(x, y)
+        else if ch == 'L' then
+            draw_lava(x, y, row, frame, wx)
+        else if ch == '^' then
+            draw_spikes(x, y, k)
+        else if ch == 'F' then
+            let cleared = match w.game.phase with
+                          | clearing -> true
+                          | _ -> false
+            draw_pole_tile(w, x, y, row, cleared)
+        else if ch == 'A' then
+            let t = (frame / 10) % 2
+            stamp(axe_rows, x, y + 4, 4, false, if t == 0 then suit_normal else suit_green)
+        else if ch == 'D' then
+            draw_door(x, y)
+
+    // ============================================================
+    // Backdrops
+    // ============================================================
+
+    // A tiny deterministic hash for scenery placement.
+    private let hash = (v: i32) -> (v * 73856093) & 1023
+
+    private let draw_clouds = (w: world*, night: bool) ->
+        let par = (i32) (w.cam_x * 0.35)
+        for i in 0..8 do
+            let base = i * 340 + hash(i * 7) / 4
+            let x = ((base - par) % 2720 + 2720) % 2720 - 200
+            let y = 60 + hash(i * 13) % 140
+            let a = if night then 60u8 else 235u8
+            gfx.disc(x, y, 26, 255u8, 255u8, 255u8, a)
+            gfx.disc(x + 30, y - 8, 30, 255u8, 255u8, 255u8, a)
+            gfx.disc(x + 62, y, 26, 255u8, 255u8, 255u8, a)
+
+    private let draw_hills = (w: world*) ->
+        let par = (i32) (w.cam_x * 0.5)
+        for i in 0..7 do
+            let base = i * 420 + hash(i * 29) / 3
+            let x = ((base - par) % 2940 + 2940) % 2940 - 240
+            let r = 90 + hash(i * 31) % 70
+            gfx.disc(x, 624, r, 60u8, 152u8, 72u8, 255u8)
+        // The strip under the domes, so they read as a ridge and not balls.
+        gfx.fill(0, 620, logical_w, 4, 60u8, 152u8, 72u8, 255u8)
+
+    private let draw_stars = (w: world*, frame: i32) ->
+        let par = (i32) (w.cam_x * 0.15)
+        for i in 0..40 do
+            let base = i * 160 + hash(i * 37)
+            let x = ((base - par) % 1400 + 1400) % 1400 - 60
+            let y = 20 + hash(i * 53) % 400
+            let tw = (u8) (150 + (hash(i + frame / 20) % 100))
+            gfx.fill(x, y, 3, 3, 255u8, 255u8, 230u8, tw)
+        gfx.disc(1100 - par / 4, 110, 42, 250u8, 245u8, 210u8, 255u8)
+        gfx.disc(1085 - par / 4, 98, 34, 26u8, 30u8, 62u8, 255u8)
+
+    private let draw_sea = (w: world*, frame: i32) ->
+        // Light shafts, slanting with a slow sway.
+        for i in 0..5 do
+            let sway = math.sin((f64) frame * 0.01 + (f64) i * 1.3) * 40.0
+            let x0 = (f64) (i * 300 + 60) - w.cam_x * 0.2 + sway
+            gfx.thick_line(x0, 0.0, x0 - 120.0, 720.0, 46,
+                           190u8, 220u8, 255u8, 14u8)
+        // Bubbles on their way up, placed by hash, lifted by the clock.
+        for i in 0..14 do
+            let base = i * 190 + hash(i * 41)
+            let x = ((base - (i32) (w.cam_x * 0.6)) % 1500 + 1500) % 1500 - 80
+            let y = 740 - ((frame / 2 + hash(i * 17)) % 800)
+            gfx.disc(x, y, 4 + hash(i) % 5, 200u8, 230u8, 255u8, 60u8)
+
+    private let draw_cave = (w: world*) ->
+        // Faint strata so the dark reads as rock rather than as nothing.
+        let par = (i32) (w.cam_x * 0.3)
+        for i in 0..12 do
+            let base = i * 260 + hash(i * 19)
+            let x = ((base - par) % 2080 + 2080) % 2080 - 120
+            let y = 100 + hash(i * 23) % 420
+            gfx.fill(x, y, 90 + hash(i * 3) % 90, 8, 34u8, 38u8, 58u8, 255u8)
+
+    private let draw_keep = (w: world*, frame: i32) ->
+        // Narrow windows with torchlight breathing in them.
+        let par = (i32) (w.cam_x * 0.4)
+        for i in 0..9 do
+            let base = i * 330 + hash(i * 11)
+            let x = ((base - par) % 2640 + 2640) % 2640 - 100
+            let y = 120 + hash(i * 43) % 220
+            gfx.fill(x, y, 22, 64, 8u8, 6u8, 8u8, 255u8)
+            let breathe = (u8) (120 + (i32) (math.sin((f64) frame * 0.06 + (f64) i) * 60.0))
+            gfx.fill(x + 5, y + 40, 12, 18, 255u8, 150u8, 40u8, breathe)
+
+    private let draw_backdrop = (w: world*, frame: i32) ->
+        match w.game.kind with
+        | overworld ->
+            draw_hills(w)
+            draw_clouds(w, false)
+        | night ->
+            draw_stars(w, frame)
+            draw_clouds(w, true)
+        | underground -> draw_cave(w)
+        | water -> draw_sea(w, frame)
+        | castle -> draw_keep(w, frame)
+
+    // ============================================================
+    // Creatures and the hero
+    // ============================================================
+
+    private let draw_ent = (w: world*, i: i32, frame: i32) ->
+        let e = &w.ents[i]
+        let x = (i32) (e.x - w.cam_x)
+        let y = (i32) e.y
+        if x < -140 || x > logical_w + 60 then return
+        let wobble = (frame / 10) % 2 == 0
+
+        match e.kind with
+        | grumble ->
+            if e.state == 1 then
+                stamp(grumble_flat, x - 4, y + (i32) e.h - 15, 3, false, suit_normal)
+            else
+                stamp(grumble_rows, x - 4, y - 4, 3, wobble, suit_normal)
+        | snapper ->
+            stamp(snapper_rows, x - 4, y - 2, 3, e.dir > 0, suit_normal)
+        | shell ->
+            stamp(shell_rows, x - 4, y - 2, 3,
+                  e.state == 3 && wobble, suit_normal)
+        | prickle ->
+            stamp(prickle_rows, x - 4, y + (i32) e.h - 36, 3, wobble, suit_normal)
+        | finn ->
+            stamp(finn_rows, x - 4, y + 5, 3, e.dir > 0, suit_normal)
+        | jelly ->
+            stamp(jelly_rows, x - 4, y + 5, 3, false, suit_normal)
+        | chomper ->
+            // The head, then the stem down into the pipe; the pipe itself
+            // is drawn after and swallows what remains.
+            let out = (i32) (e.base_y - e.y)
+            if out > 2 then
+                stamp(chomper_rows, x - 10, y, 4, false, suit_normal)
+                // The stem on down to the pipe mouth, however far out the
+                // head is; the pipe drawn after swallows the rest.
+                gfx.fill(x + (i32) (e.w * 0.5) - 4, y + 52,
+                         8, out, 72u8, 200u8, 72u8, 255u8)
+        | firebar ->
+            let a = (f64) e.timer * 0.045
+            for kk in 1..6 do
+                let fx = e.x + math.cos(a) * (f64) (kk * 22) - w.cam_x
+                let fy = e.y + math.sin(a) * (f64) (kk * 22)
+                gfx.disc((i32) fx, (i32) fy, 9, 255u8, 150u8, 30u8, 255u8)
+                gfx.disc((i32) fx - 2, (i32) fy - 2, 5, 255u8, 230u8, 120u8, 255u8)
+        | boss ->
+            // The king is a grumble at three halves scale, wearing the
+            // difference: a crown, and a temper.
+            let flash = e.hp < boss_hp && (frame / 4) % 2 == 0 && e.timer < 20
+            stamp(grumble_rows, x - 4, y - 6, 6, e.dir > 0,
+                  if flash then suit_star_a else suit_normal)
+            let cx = x + (i32) (e.w * 0.5)
+            gfx.fill(cx - 24, y - 24, 48, 12, 248u8, 208u8, 56u8, 255u8)
+            for kk in 0..4 do
+                gfx.fill(cx - 24 + kk * 13, y - 34, 7, 12, 248u8, 208u8, 56u8, 255u8)
+        | shroom ->
+            stamp(shroom_rows, x - 4, y + 2, 3, false, suit_normal)
+        | oneup ->
+            stamp(shroom_rows, x - 4, y + 2, 3, false, suit_green)
+        | flower ->
+            stamp(flower_rows, x - 4, y + 2, 3, false, suit_normal)
+        | star_pow ->
+            stamp(star_rows, x - 4, y + 2, 3, false, suit_normal)
+        | none_k -> void()
+
+    // Chompers go on before the tiles so the pipe mouth swallows them.
+    private let draw_chompers = (w: world*, frame: i32) ->
+        for i in 0..w.n_ents do
+            if w.ents[i].alive && w.ents[i].active &&
+               w.ents[i].kind == ent_kind.chomper then
+                draw_ent(w, i, frame)
+
+    private let draw_ents = (w: world*, frame: i32) ->
+        for i in 0..w.n_ents do
+            if w.ents[i].alive && w.ents[i].active &&
+               w.ents[i].kind != ent_kind.chomper then
+                draw_ent(w, i, frame)
+
+    let draw_hero = (w: world*, frame: i32) ->
+        // The mercy blink.
+        if w.p.invuln > 0 && (w.p.invuln / 4) % 2 == 1 then return
+
+        let base_suit = if w.p.power == 2 then suit_fire else suit_normal
+        let suit = if w.p.star > 0 && (frame / 4) % 3 == 0 then suit_star_a
+                   else if w.p.star > 0 && (frame / 4) % 3 == 1 then suit_star_b
+                   else base_suit
+        let flip = w.p.dir < 0
+        let moving = w.p.vx > 0.6 || w.p.vx < -0.6
+        let airborne = !w.p.on_ground
+
+        if w.p.power > 0 then
+            let rws = if airborne then big_jump
+                      else if !moving then big_stand
+                      else if (w.p.anim / 24) % 2 == 0 then big_walk1
+                      else big_walk2
+            let x = (i32) (w.p.x - w.cam_x) - 6
+            let y = (i32) w.p.y + (i32) p_h_big - 96
+            stamp(rws, x, y, 3, flip, suit)
+        else
+            let rws = if airborne then hero_jump
+                      else if !moving then hero_stand
+                      else if (w.p.anim / 24) % 2 == 0 then hero_walk1
+                      else hero_walk2
+            let x = (i32) (w.p.x - w.cam_x) - 6
+            let y = (i32) w.p.y + (i32) p_h_small - 48
+            stamp(rws, x, y, 3, flip, suit)
+
+    private let draw_fireballs = (w: world*, frame: i32) ->
+        for i in 0..max_fire do
+            if w.fireballs[i].alive then
+                let x = (i32) (w.fireballs[i].x - w.cam_x) + 7
+                let y = (i32) w.fireballs[i].y + 7
+                let spin = (f64) frame * 0.4
+                gfx.disc(x, y, 9, 255u8, 130u8, 20u8, 255u8)
+                gfx.disc(x + (i32) (math.cos(spin) * 4.0),
+                         y + (i32) (math.sin(spin) * 4.0), 5,
+                         255u8, 230u8, 120u8, 255u8)
+
+    private let draw_particles = (w: world*) ->
+        for i in 0..max_particles do
+            if w.particles[i].life > 0 then
+                let t = (f64) w.particles[i].life / (f64) w.particles[i].max_life
+                let alpha = (u8) (t * 255.0)
+                let size = w.particles[i].size
+                gfx.fill((i32) (w.particles[i].x - w.cam_x) - size / 2,
+                         (i32) w.particles[i].y - size / 2, size, size,
+                         w.particles[i].r, w.particles[i].g, w.particles[i].b,
+                         alpha)
+
+    private let draw_coin_pops = (w: world*) ->
+        for i in 0..max_coin_pops do
+            if w.coin_pops[i].timer > 0 then
+                let t = 32 - w.coin_pops[i].timer
+                let rise = (t * (32 - t)) / 4
+                stamp(coin_rows, (i32) (w.coin_pops[i].x - w.cam_x) - 24,
+                      (i32) w.coin_pops[i].y - 48 - rise, 3, false, suit_normal)
+
+    private let draw_popups = (w: world*) ->
+        for i in 0..max_popups do
+            if w.popups[i].timer > 0 then
+                let x = (i32) ((f64) w.popups[i].x - w.cam_x)
+                let a = if w.popups[i].timer > 20 then 255 else w.popups[i].timer * 12
+                if w.popups[i].val < 0 then
+                    draw_text_centered("1UP", x, w.popups[i].y, 3,
+                                       120u8, 255u8, (u8) imin(a, 255))
+                else
+                    let s = "%d{w.popups[i].val}"
+                    draw_text_centered((const str) s, x, w.popups[i].y, 3,
+                                       255u8, (u8) imin(a, 255), 120u8)
+
+    // ============================================================
+    // The tile pass
+    // ============================================================
+
+    private let draw_tiles = (w: world*, frame: i32) ->
+        let c0 = imax(tcol(w.cam_x) - 1, 0)
+        let c1 = imin(c0 + 29, w.game.lw - 1)
+        for row in 0..rows do
+            for col in c0..(c1 + 1) do
+                let ch = tile_at(w, col, row)
+                if ch != '.' then
+                    let mut y = row * tile
+                    if w.game.bump_timer > 0 && col == w.game.bump_col &&
+                       row == w.game.bump_row then
+                        let t = 12 - w.game.bump_timer
+                        y = y - (t * (12 - t)) / 3
+                    draw_tile(w, ch, (i32) ((f64) (col * tile) - w.cam_x), y,
+                              col, row, frame)
+
+    // ============================================================
+    // HUD
+    // ============================================================
+
+    private let draw_hud = (w: world*) ->
+        // A translucent strip so the sky stays a sky.
+        gfx.fill(0, 0, logical_w, 44, 0u8, 0u8, 0u8, 90u8)
+
+        draw_text("FARIO", 24, 10, 3, 255u8, 255u8, 255u8)
+        draw_number(w.game.score, 7, 24 + 4 * 3 * 6, 10, 3, 255u8, 255u8, 255u8)
+
+        stamp(coin_rows, 360, 4, 2, false, suit_normal)
+        draw_text("X", 400, 10, 3, 255u8, 230u8, 120u8)
+        draw_number(w.game.coins, 2, 418, 10, 3, 255u8, 230u8, 120u8)
+
+        let world_s = "WORLD %d{w.game.level}"
+        draw_text((const str) world_s, 540, 10, 3, 200u8, 220u8, 255u8)
+
+        let low = w.game.timer_units <= 100
+        let tr = 255u8
+        let tg = if low then 90u8 else 255u8
+        let tb = if low then 90u8 else 255u8
+        draw_text("TIME", 790, 10, 3, tr, tg, tb)
+        draw_number(w.game.timer_units, 3, 790 + 5 * 4 * 3, 10, 3, tr, tg, tb)
+
+        draw_text("LIVES", 1020, 10, 3, 255u8, 200u8, 200u8)
+        let lives_s = "X%d{w.game.lives}"
+        draw_text((const str) lives_s, 1020 + 6 * 4 * 3, 10, 3, 255u8, 200u8, 200u8)
+
+        // What power the suit carries, in one glyph.
+        if w.p.power == 2 then
+            stamp(flower_rows, 1200, 2, 2, false, suit_normal)
+        else if w.p.power == 1 then
+            stamp(shroom_rows, 1200, 2, 2, false, suit_normal)
+
+    // ============================================================
+    // Overlays
+    // ============================================================
+
+    private let dim = (a: u8) ->
+        gfx.fill(0, 0, logical_w, logical_h, 0u8, 0u8, 0u8, a)
+
+    private let draw_splash = (w: world*, frame: i32) ->
+        dim(120u8)
+
+        // The name in blocks, with the hero standing on it.
+        draw_text_centered("FARIO", 640, 150, 22, 255u8, 200u8, 60u8)
+        draw_text_centered("FARIO", 636, 146, 22, 255u8, 255u8, 255u8)
+        let bob = (i32) (math.sin((f64) frame * 0.05) * 8.0)
+        stamp(hero_walk1, 880, 60 + bob, 5, false, suit_normal)
+
+        draw_text_centered("EIGHT WORLDS. ONE AXE.", 640, 300, 4, 220u8, 230u8, 255u8)
+
+        let blink = (frame / 26) % 2 == 0
+        if blink then
+            draw_text_centered("PRESS ENTER", 640, 372, 6, 255u8, 230u8, 80u8)
+
+        let pick = "SELECT: START AT WORLD %d{w.game.select_level}"
+        let pr = if w.game.max_level > 1 then 160u8 else 90u8
+        draw_text_centered((const str) pick, 640, 448, 3, pr, 220u8, 160u8)
+
+        draw_text_centered("ARROWS MOVE   CTRL JUMP   ALT RUN AND FIRE", 640, 510, 3,
+                           150u8, 170u8, 210u8)
+        draw_text_centered("ENTER PAUSE   M MUTE   S+N SAVE   L+N LOAD   F11 FULL", 640, 545, 3,
+                           150u8, 170u8, 210u8)
+
+        let best = "BEST %d{w.game.high_score}"
+        draw_text_centered((const str) best, 640, 620, 4, 255u8, 230u8, 110u8)
+
+    private let draw_paused = () ->
+        gfx.fill(0, 300, logical_w, 120, 0u8, 0u8, 0u8, 190u8)
+        draw_text_centered("PAUSED", 640, 330, 8, 255u8, 255u8, 255u8)
+
+    private let draw_game_over = (w: world*) ->
+        dim(200u8)
+        draw_text_centered("GAME OVER", 640, 260, 12, 255u8, 100u8, 100u8)
+        let s = "SCORE %d{w.game.score}"
+        draw_text_centered((const str) s, 640, 390, 5, 255u8, 255u8, 255u8)
+        if w.game.new_high then
+            draw_text_centered("NEW BEST!", 640, 450, 5, 255u8, 230u8, 80u8)
+        draw_text_centered("ENTER FOR THE TITLE", 640, 520, 3, 200u8, 200u8, 220u8)
+
+    private let draw_victory = (w: world*, frame: i32) ->
+        dim(160u8)
+        // Fireworks: bursts on a clock, placed by hash.
+        for i in 0..6 do
+            let t = (frame + i * 47) % 140
+            if t < 60 then
+                let cx = 200 + hash(i * 9 + frame / 140) % 880
+                let cy = 120 + hash(i * 21 + frame / 140) % 280
+                let r = t * 3
+                let a = (u8) imax(0, 255 - t * 4)
+                for kk in 0..8 do
+                    let ang = (f64) kk * 0.7853982
+                    gfx.disc(cx + (i32) (math.cos(ang) * (f64) r),
+                             cy + (i32) (math.sin(ang) * (f64) r), 5,
+                             (u8) (200 + hash(i) % 55), (u8) (150 + hash(kk) % 100),
+                             80u8, a)
+        draw_text_centered("THE AXE IS TAKEN", 640, 300, 8, 255u8, 230u8, 110u8)
+        draw_text_centered("GNARL IS GONE. THE MEADOWS ARE FREE.", 640, 380, 4,
+                           220u8, 240u8, 255u8)
+        let s = "SCORE %d{w.game.score}"
+        draw_text_centered((const str) s, 640, 440, 5, 255u8, 255u8, 255u8)
+        if w.game.new_high then
+            draw_text_centered("NEW BEST!", 640, 500, 5, 255u8, 230u8, 80u8)
+        draw_text_centered("ENTER FOR THE TITLE", 640, 560, 3, 200u8, 200u8, 220u8)
+
+    // The slot prompt and its aftermath — fuzzel-fobble's, restyled to the
+    // full-width screen.
+    private let draw_slot_prompt = (w: world*) ->
+        let title = match w.game.prompt with
+                    | idle -> return
+                    | saving -> "SAVE TO SLOT"
+                    | loading -> "LOAD FROM SLOT"
+        gfx.fill(0, 430, logical_w, 132, 0u8, 0u8, 0u8, 205u8)
+        draw_text_centered(title, 640, 444, 4, 255u8, 255u8, 255u8)
+
+        let box = 44
+        let step = 52
+        let x0 = 640 - (save_slots * step - (step - box)) / 2
+        for i in 0..save_slots do
+            let x = x0 + i * step
+            let used = (w.game.slot_bits >> i) & 1 == 1
+            if used then
+                gfx.fill(x, 486, box, box, 70u8, 140u8, 90u8, 255u8)
+                gfx.fill(x + 3, 489, box - 6, box - 6, 24u8, 56u8, 34u8, 255u8)
+            else
+                gfx.fill(x, 486, box, box, 60u8, 60u8, 60u8, 255u8)
+                gfx.fill(x + 3, 489, box - 6, box - 6, 20u8, 20u8, 20u8, 255u8)
+            let d = "%d{i + 1}"
+            let g = if used then 235 else 130
+            draw_text_centered((const str) d, x + box / 2, 495, 4,
+                               (u8) g, (u8) g, (u8) g)
+        draw_text_centered("ANY OTHER KEY CANCELS", 640, 542, 2,
+                           150u8, 160u8, 180u8)
+
+    private let draw_slot_msg = (w: world*) ->
+        if w.game.msg_timer <= 0 then
+            return
+        gfx.fill(0, 452, logical_w, 44, 0u8, 0u8, 0u8, 190u8)
+        match w.game.msg with
+        | quiet -> return
+        | saved ->
+            let t = "SAVED SLOT %d{w.game.msg_slot}"
+            draw_text_centered((const str) t, 640, 464, 4, 140u8, 255u8, 180u8)
+        | loaded ->
+            let t = "LOADED SLOT %d{w.game.msg_slot}"
+            draw_text_centered((const str) t, 640, 464, 4, 140u8, 255u8, 180u8)
+        | empty_slot ->
+            let t = "SLOT %d{w.game.msg_slot} IS EMPTY"
+            draw_text_centered((const str) t, 640, 464, 4, 255u8, 200u8, 90u8)
+        | broken ->
+            let t = "SLOT %d{w.game.msg_slot} WOULD NOT READ"
+            draw_text_centered((const str) t, 640, 464, 4, 255u8, 120u8, 110u8)
+        | nothing_to_save ->
+            draw_text_centered("NOTHING TO SAVE YET", 640, 464, 4,
+                               255u8, 200u8, 90u8)
+
+    // ============================================================
+    // Per-frame render
+    // ============================================================
+
+    let render = (w: world*, frame: i32) ->
+        let { skr, skg, skb } = sky_rgb(w.game.kind)
+        gfx.frame_begin(skr, skg, skb)
+
+        draw_backdrop(w, frame)
+        draw_chompers(w, frame)
+        draw_tiles(w, frame)
+        draw_coin_pops(w)
+        draw_ents(w, frame)
+
+        let show_hero = match w.game.phase with
+                        | splash -> false
+                        | game_over -> false
+                        | victory -> false
+                        | _ -> true
+        if show_hero then
+            draw_hero(w, frame)
+            draw_fireballs(w, frame)
+        draw_particles(w)
+        draw_popups(w)
+
+        draw_hud(w)
+
+        match w.game.phase with
+        | splash -> draw_splash(w, frame)
+        | paused -> draw_paused()
+        | game_over -> draw_game_over(w)
+        | victory -> draw_victory(w, frame)
+        | _ -> void()
+
+        draw_slot_prompt(w)
+        draw_slot_msg(w)
+
+        gfx.frame_end()

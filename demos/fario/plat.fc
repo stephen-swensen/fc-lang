@@ -1,0 +1,61 @@
+// Fario — the platform contract.
+//
+// The line between the game and the library, same shape as fuzzel-fobble's:
+// one `struct input` per frame in the game's own vocabulary, and a `module
+// gfx` the backend file defines. Fario builds on raylib only, so there is a
+// single backend (gfx.fc) and no backend flag — but the layering stays,
+// because it is what keeps game.fc and art.fc free of key codes and library
+// names.
+//
+// The pad is the NES pad, deliberately: a d-pad, two buttons, Select and
+// Start. Which physical keys those are is gfx.fc's business (CTRL/X are A,
+// ALT/Z are B, SPACE is Select, ENTER is Start); nothing downstream ever
+// learns.
+
+// One frame's input. `held` is the set of actions down right now; `tapped`
+// is the subset that went down on *this* frame. Jumping wants both: the tap
+// starts the jump, the hold stretches it.
+struct input =
+    quit: bool
+    held: i32
+    tapped: i32
+
+    // The digit key 1-9 that went down this frame, or 0 for none — answers
+    // the save/load slot prompt, exactly as in fuzzel-fobble.
+    digit: i32
+
+module plat =
+    // The pad.
+    let left   = 1
+    let right  = 2
+    let duck   = 4      // d-pad down
+    let jump   = 8      // A — CTRL or X
+    let run    = 16     // B — ALT or Z: run while held, fireball on the tap
+    let select = 32     // SPACE
+    let start  = 64     // ENTER
+
+    // Meta keys, outside the pad fiction.
+    let mute   = 128
+    let save   = 256
+    let load   = 512
+
+    // Is this action being held? / did it go down this frame?
+    let down = (inp: const input*, action: i32) -> inp.held & action != 0
+    let tap  = (inp: const input*, action: i32) -> inp.tapped & action != 0
+
+// ============================================================
+// What the backend must define
+//
+// module gfx =
+//   Lifecycle:  open(lw, lh, title), close(), set_title(t),
+//               audio_start(a: opl_audio.audio*) -> bool
+//   Frame:      pump(inp: input*), frame_begin(r, g, b), frame_end()
+//   Primitives (logical coordinates, alpha blended, loose u8 channels):
+//     fill(x, y, w, h, r, g, b, a)                  filled rect
+//     disc(cx, cy, rad, r, g, b, a)                 filled circle
+//     thick_line(x1, y1, x2, y2, th, r, g, b, a)    f64 endpoints
+//
+// Three primitives rather than fuzzel-fobble's four: nothing in Fario is a
+// hexagon. Everything else — the tiles, the sprites, the font, the HUD — is
+// built out of `fill` in art.fc.
+// ============================================================

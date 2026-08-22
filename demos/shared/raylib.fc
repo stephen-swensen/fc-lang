@@ -107,6 +107,8 @@ module raylib from "raylib.h" =
     extern KEY_LEFT_SHIFT as key_lshift: i32
     extern KEY_LEFT_CONTROL as key_lctrl: i32
     extern KEY_LEFT_ALT as key_lalt: i32
+    extern KEY_RIGHT_CONTROL as key_rctrl: i32
+    extern KEY_RIGHT_ALT as key_ralt: i32
     extern KEY_PAGE_UP as key_pageup: i32
     extern KEY_PAGE_DOWN as key_pagedown: i32
     extern KEY_F11 as key_f11: i32

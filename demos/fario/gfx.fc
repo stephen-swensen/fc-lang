@@ -1,0 +1,182 @@
+// Fario — the raylib backend.
+//
+// The one definition of `module gfx` (the contract is in plat.fc). Adapted
+// from fuzzel-fobble's gfx_raylib.fc, which is where every non-obvious line
+// here was first paid for — the render-texture letterbox, the negative source
+// height, the premultiplied blit, the flag raylib must *not* be given, and
+// the audio callback with no userdata pointer. See that file for the long
+// version of each; the comments here keep only the punchlines.
+
+import raylib from shared::
+import opl_audio from shared::
+import opl_dev from shared::
+import io from std::
+import math from std::
+
+module gfx =
+    // The logical-size target: the game draws at 1280x720 into this and
+    // `frame_end` scales it to the window.
+    private let mut target = default(raylib.render_texture)
+    private let mut logical_w = 0
+    private let mut logical_h = 0
+
+    // The audio engine, reachable from file scope because raylib's
+    // AudioCallback carries no userdata pointer. Written once in
+    // `audio_start` before the device opens, read only by the audio thread.
+    private let mut engine = default(any*)
+
+    // ============================================================
+    // Lifecycle
+    // ============================================================
+
+    let open = (lw: i32, lh: i32, title: const cstr) ->
+        logical_w = lw
+        logical_h = lh
+
+        raylib.set_log_level(raylib.log_warning)
+
+        // Deliberately not flag_highdpi — under it screen_width() reports
+        // physical pixels while raylib's projection stays logical, and the
+        // letterbox lands at twice its size. See gfx_raylib.fc.
+        raylib.set_config_flags(raylib.flag_vsync | raylib.flag_resizable)
+
+        raylib.init_window(960, 540, title)
+        raylib.maximize_window()
+        raylib.set_min_size(lw / 2, lh / 2)
+        raylib.hide_cursor()
+
+        target = raylib.load_render_texture(lw, lh)
+        raylib.set_texture_filter(target.texture, raylib.filter_bilinear)
+
+        io.write("Window at startup: %d{raylib.screen_width()}x%d{raylib.screen_height()} (logical %d{lw}x%d{lh}, letterboxed per frame)\n",
+                 stdout)
+        return
+
+    // No CloseAudioDevice on purpose: closing joins the audio thread, and a
+    // wedged host audio server would hang the exiting game. The window is
+    // video and tears down fine. See `shutdown_note` in opl_audio.fc.
+    let close = () ->
+        raylib.unload_render_texture(target)
+        raylib.close_window()
+
+    let set_title = (t: const cstr) ->
+        raylib.set_title(t)
+
+    // Runs on miniaudio's audio thread; `buffer` is mono i16 at the engine's
+    // rate, `frames` is whatever the resampler wants this call.
+    private let audio_callback = (buffer: any*, frames: u32) ->
+        let a = (opl_audio.audio*) engine
+        let out = i16[] { ptr = (i16*) buffer, len = (i64) frames }
+        opl_audio.render(a, out, (i32) frames)
+
+    let audio_start = (a: opl_audio.audio*) ->
+        engine = (any*) a
+        opl_dev.start(a, &audio_callback)
+
+    // ============================================================
+    // Input
+    // ============================================================
+
+    private let latch = (inp: input*, key: i32, action: i32) ->
+        if raylib.is_key_down(key) then
+            inp.held = inp.held | action
+        if raylib.is_key_pressed(key) then
+            inp.tapped = inp.tapped | action
+
+    private let latch_digit = (inp: input*, key: i32, digit: i32) ->
+        if raylib.is_key_pressed(key) then
+            inp.digit = digit
+
+    // The NES pad on a keyboard. CTRL is A and ALT is B — both sides, so
+    // either hand's layout works — with X and Z beside them for anyone whose
+    // window manager eats ALT. SPACE and ENTER are Select and Start.
+    let pump = (inp: input*) ->
+        // Window close and ESC both land here.
+        inp.quit = raylib.window_should_close()
+
+        if raylib.is_key_pressed(raylib.key_f11) then
+            raylib.toggle_borderless()
+
+        inp.held = 0
+        inp.tapped = 0
+        inp.digit = 0
+        latch(inp, raylib.key_left,  plat.left)
+        latch(inp, raylib.key_right, plat.right)
+        latch(inp, raylib.key_down,  plat.duck)
+        latch(inp, raylib.key_lctrl, plat.jump)
+        latch(inp, raylib.key_rctrl, plat.jump)
+        latch(inp, raylib.key_x,     plat.jump)
+        latch(inp, raylib.key_lalt,  plat.run)
+        latch(inp, raylib.key_ralt,  plat.run)
+        latch(inp, raylib.key_z,     plat.run)
+        latch(inp, raylib.key_space, plat.select)
+        latch(inp, raylib.key_enter, plat.start)
+        latch(inp, raylib.key_m,     plat.mute)
+        latch(inp, raylib.key_s,     plat.save)
+        latch(inp, raylib.key_l,     plat.load)
+        latch_digit(inp, raylib.key_1, 1)
+        latch_digit(inp, raylib.key_2, 2)
+        latch_digit(inp, raylib.key_3, 3)
+        latch_digit(inp, raylib.key_4, 4)
+        latch_digit(inp, raylib.key_5, 5)
+        latch_digit(inp, raylib.key_6, 6)
+        latch_digit(inp, raylib.key_7, 7)
+        latch_digit(inp, raylib.key_8, 8)
+        latch_digit(inp, raylib.key_9, 9)
+
+    // ============================================================
+    // Frame
+    // ============================================================
+
+    let frame_begin = (cr: u8, cg: u8, cb: u8) ->
+        raylib.begin_texture_mode(target)
+        raylib.clear_background(rgba(cr, cg, cb, 255u8))
+
+    // The hand-rolled letterbox. Negative source height because a GL
+    // framebuffer's rows run bottom-up; premultiplied blend because drawing
+    // into a render texture corrupts its alpha channel under plain alpha
+    // blending and everything translucent comes out ~24% too dark.
+    let frame_end = () ->
+        raylib.end_texture_mode()
+
+        let sw = raylib.screen_width()
+        let sh = raylib.screen_height()
+        let scale = math.min((f64) sw / (f64) logical_w,
+                             (f64) sh / (f64) logical_h)
+        let dw = (f32) (scale * (f64) logical_w)
+        let dh = (f32) (scale * (f64) logical_h)
+
+        raylib.begin_drawing()
+        raylib.clear_background(rgba(0u8, 0u8, 0u8, 255u8))
+        raylib.begin_blend_mode(raylib.blend_premultiplied)
+        raylib.draw_texture_pro(target.texture,
+            raylib.rect { x = 0.0f32, y = 0.0f32,
+                          width = (f32) logical_w, height = -(f32) logical_h },
+            raylib.rect { x = ((f32) sw - dw) * 0.5f32,
+                          y = ((f32) sh - dh) * 0.5f32,
+                          width = dw, height = dh },
+            raylib.vec2 { x = 0.0f32, y = 0.0f32 }, 0.0f32,
+            rgba(255u8, 255u8, 255u8, 255u8))
+        raylib.end_blend_mode()
+        raylib.end_drawing()
+
+    // ============================================================
+    // Primitives
+    // ============================================================
+
+    private let rgba = (cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.color { r = cr, g = cg, b = cb, a = ca }
+
+    let fill = (x: i32, y: i32, w: i32, h: i32,
+                cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.fill_rect(x, y, w, h, rgba(cr, cg, cb, ca))
+
+    let disc = (cx: i32, cy: i32, rad: i32,
+                cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.fill_circle(cx, cy, (f32) rad, rgba(cr, cg, cb, ca))
+
+    let thick_line = (x1: f64, y1: f64, x2: f64, y2: f64, th: i32,
+                      cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.draw_line_ex(raylib.vec2 { x = (f32) x1, y = (f32) y1 },
+                            raylib.vec2 { x = (f32) x2, y = (f32) y2 },
+                            (f32) th, rgba(cr, cg, cb, ca))

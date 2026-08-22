@@ -1,0 +1,591 @@
+// Writes Fario's four tunes out as Standard MIDI Files.
+//
+// All four are original compositions written for this game — nothing is
+// transcribed, arranged from, or "resembling" anyone else's music. What they
+// share with the NES platformer songbook is idiom, which no one owns: a
+// bouncy syncopated major-key overworld, a sparse staccato underground with
+// its own echo, a waltz for underwater, and a minor-key ostinato for the
+// castles.
+//
+//     overworld.mid    "Sunny Scamper"    C major, 4/4 at 168
+//     underground.mid  "Root Cellar"      C minor, 4/4 at 110
+//     water.mid        "Tidepool Waltz"   F major, 3/4 at 88
+//     castle.mid       "Gnarl's Keep"     C minor, 4/4 at 138
+//
+// Run it once and check the results in; the note tables below are where the
+// music stays editable as music rather than as bytes.
+//
+//     fcc demos/fario/tools/mkmusic.fc stdlib/io.fc stdlib/text.fc -o /tmp/mkmusic.c
+//     cc -std=c11 -o /tmp/mkmusic /tmp/mkmusic.c && /tmp/mkmusic demos/fario/music
+
+import io from std::
+
+// ============================================================
+// Event lists and SMF bytes (the mkmid.fc machinery, generalised
+// over tempo and metre)
+// ============================================================
+
+let division = 480
+let eighth = 240
+let quarter = 480
+
+struct ev =
+    tick: i32
+    status: i32
+    d1: i32
+    d2: i32
+    size: i32
+
+struct track =
+    evs: ev[]
+    n: i64
+
+let track_new = () ->
+    track { evs = alloc(ev[4096] {})!, n = 0i64 }
+
+let emit = (t: track*, tick: i32, status: i32, d1: i32, d2: i32, size: i32) ->
+    assert(t.n < t.evs.len)
+    t.evs[t.n] = ev { tick = tick, status = status, d1 = d1, d2 = d2, size = size }
+    t.n = t.n + 1i64
+
+let note = (t: track*, ch: i32, tick: i32, dur: i32, n: i32, vel: i32) ->
+    emit(t, tick, 0x90 | ch, n, vel, 3)
+    emit(t, tick + dur, 0x80 | ch, n, 0, 3)
+
+let program = (t: track*, ch: i32, prog: i32) ->
+    emit(t, 0, 0xC0 | ch, prog, 0, 2)
+
+let set_volume = (t: track*, ch: i32, tick: i32, v: i32) ->
+    emit(t, tick, 0xB0 | ch, 7, v, 3)
+
+// Insertion sort: the lists arrive nearly sorted, and stability keeps a
+// program change ahead of the note that needs it.
+let sort_track = (t: track*) ->
+    for i in 1i64..t.n do
+        let v = t.evs[i]
+        let mut j = i
+        loop
+            if j == 0i64 then break
+            if t.evs[j - 1i64].tick <= v.tick then break
+            t.evs[j] = t.evs[j - 1i64]
+            j = j - 1i64
+        t.evs[j] = v
+
+// Lay a (note, duration) list down from `base`, each note starting where
+// the last ended; a negative note is a rest.
+let lay_line = (t: track*, ch: i32, base: i32, pairs: const i32[], vel: i32) ->
+    let mut at = base
+    for i in 0i64..(pairs.len / 2i64) do
+        let n = pairs[i * 2i64]
+        let d = pairs[i * 2i64 + 1i64]
+        if n >= 0 then note(t, ch, at, d - 20, n, vel)
+        at = at + d
+
+struct writer =
+    b: u8[]
+    n: i64
+
+let writer_new = (cap: i64) ->
+    writer { b = alloc(u8[cap] {})!, n = 0i64 }
+
+let put8 = (w: writer*, v: i32) ->
+    assert(w.n < w.b.len)
+    w.b[w.n] = (u8) (v & 255)
+    w.n = w.n + 1i64
+
+let put16 = (w: writer*, v: i32) ->
+    put8(w, v >> 8)
+    put8(w, v)
+
+let put32 = (w: writer*, v: i32) ->
+    put8(w, v >> 24)
+    put8(w, v >> 16)
+    put8(w, v >> 8)
+    put8(w, v)
+
+let put_tag = (w: writer*, s: const str) ->
+    for i in 0i64..s.len do
+        put8(w, (i32) s[i])
+
+let put_vlq = (w: writer*, v: i32) ->
+    let mut shift = 21
+    loop
+        if shift == 0 then break
+        if (v >> shift) != 0 then break
+        shift = shift - 7
+    loop
+        let last = shift == 0
+        let seven = (v >> shift) & 127
+        put8(w, if last then seven else seven | 128)
+        if last then break
+        shift = shift - 7
+
+let put_track = (w: writer*, t: track*, end_tick: i32) ->
+    put_tag(w, "MTrk")
+    let len_at = w.n
+    put32(w, 0)
+    let body_at = w.n
+    let mut last_tick = 0
+    let mut running = -1
+    for i in 0i64..t.n do
+        let e = t.evs[i]
+        put_vlq(w, e.tick - last_tick)
+        last_tick = e.tick
+        if e.status >= 0xF0 then
+            put8(w, e.status)
+            running = -1
+        else if e.status != running then
+            put8(w, e.status)
+            running = e.status
+        put8(w, e.d1)
+        if e.size == 3 then put8(w, e.d2)
+    // End of track on the final bar line, so the player's loop lands on the
+    // downbeat.
+    put_vlq(w, if end_tick > last_tick then end_tick - last_tick else 0)
+    put8(w, 0xFF)
+    put8(w, 0x2F)
+    put8(w, 0x00)
+    let body_len = (i32) (w.n - body_at)
+    let save = w.n
+    w.n = len_at
+    put32(w, body_len)
+    w.n = save
+
+// The conductor track: metre and tempo.
+let put_conductor = (w: writer*, numerator: i32, tempo_us: i32) ->
+    put_tag(w, "MTrk")
+    let len_at = w.n
+    put32(w, 0)
+    let body_at = w.n
+    put_vlq(w, 0)
+    put8(w, 0xFF)
+    put8(w, 0x58)
+    put8(w, 0x04)
+    put8(w, numerator)
+    put8(w, 2)              // denominator 4
+    put8(w, 24)
+    put8(w, 8)
+    put_vlq(w, 0)
+    put8(w, 0xFF)
+    put8(w, 0x51)
+    put8(w, 0x03)
+    put8(w, tempo_us >> 16)
+    put8(w, (tempo_us >> 8) & 255)
+    put8(w, tempo_us & 255)
+    put_vlq(w, 0)
+    put8(w, 0xFF)
+    put8(w, 0x2F)
+    put8(w, 0x00)
+    let body_len = (i32) (w.n - body_at)
+    let save = w.n
+    w.n = len_at
+    put32(w, body_len)
+    w.n = save
+
+let write_file = (path: const str, w: writer*) ->
+    let f = match io.open(path, "wb") with
+            | ok(h) -> h
+            | err(e) ->
+                io.write(alloca("mkmusic: cannot open %s{path}\n"), stderr)
+                return 1
+    io.write(w.b[0i64..w.n], f)
+    match io.close(f) with
+    | ok -> void()
+    | err(e) ->
+        io.write("mkmusic: close failed\n", stderr)
+        void()
+    io.write(alloca("wrote %s{path} (%d{(i32) w.n} bytes)\n"), stdout)
+    0
+
+// General MIDI programs, 0-based.
+let prog_square = 80
+let prog_jazz_gtr = 26
+let prog_ac_bass = 32
+let prog_fing_bass = 33
+let prog_syn_bass = 38
+let prog_music_box = 10
+let prog_harp = 46
+let prog_strings = 48
+let prog_organ = 19
+let prog_cello = 42
+let prog_horn = 60
+
+let drum_kick = 36
+let drum_snare = 38
+let drum_hat = 42
+
+// ============================================================
+// 1. Overworld — "Sunny Scamper" (C major, 4/4 at 168)
+//
+// A-A'-B, 24 bars. The tune leaps up the tonic arpeggio and bounces on
+// syncopated rests; the guitar answers on the offbeats, ska-fashion.
+// ============================================================
+
+module scamper =
+    let bar = 1920
+    let bars = 24
+    let ticks = 24 * 1920
+
+    // Melody, section A (8 bars).
+    let mel_a = i32[98] {
+        67,240, 72,240, 76,240, 79,240, 76,480, -1,480,           // 1
+        69,240, 74,240, 77,240, 81,240, 77,480, -1,480,           // 2
+        67,240, 72,240, 76,240, 79,240, 81,240, 79,240, 76,240, 74,240,  // 3
+        72,720, 67,240, 72,480, -1,480,                           // 4
+        76,240, 74,240, 72,240, 74,240, 76,480, 79,480,           // 5
+        77,240, 76,240, 74,240, 76,240, 77,480, 81,480,           // 6
+        79,240, 77,240, 76,240, 74,240, 72,240, 74,240, 76,240, 77,240,  // 7
+        79,480, 72,480, -1,240, 72,240, -1,480 }                  // 8
+
+    // Section A': the same phrase, cadencing home.
+    let mel_a2 = i32[96] {
+        67,240, 72,240, 76,240, 79,240, 76,480, -1,480,
+        69,240, 74,240, 77,240, 81,240, 77,480, -1,480,
+        67,240, 72,240, 76,240, 79,240, 81,240, 79,240, 76,240, 74,240,
+        72,720, 67,240, 72,480, -1,480,
+        76,240, 74,240, 72,240, 74,240, 76,480, 79,480,
+        77,240, 76,240, 74,240, 76,240, 77,480, 81,480,
+        74,240, 72,240, 71,240, 72,240, 74,240, 76,240, 74,240, 71,240,
+        72,720, -1,240, 72,240, -1,720 }
+
+    // Section B: brighter, higher, and a long landing.
+    let mel_b = i32[88] {
+        81,480, 77,480, 74,240, 77,240, 81,480,                   // 9
+        83,480, 79,480, 74,240, 79,240, 83,480,                   // 10
+        84,240, 83,240, 81,240, 79,240, 77,240, 76,240, 74,240, 72,240,  // 11
+        74,960, -1,480, 67,240, 69,240,                           // 12
+        76,240, -1,240, 76,240, -1,240, 76,480, 72,480,           // 13
+        77,240, -1,240, 77,240, -1,240, 77,480, 74,480,           // 14
+        79,240, 81,240, 83,240, 84,240, 83,240, 81,240, 79,240, 77,240,  // 15
+        72,960, -1,960 }                                          // 16
+
+    // One chord root per bar, all 24. (The comp plays root+octave+fifth,
+    // so minor bars need no different handling.)
+    let roots = i32[24] {
+        48, 50, 48, 48, 48, 53, 55, 48,
+        48, 50, 48, 48, 48, 53, 55, 48,
+        53, 55, 50, 50, 48, 50, 55, 48 }
+
+let build_scamper = () ->
+    let mut mel = track_new()
+    program(&mel, 0, prog_square)
+    set_volume(&mel, 0, 0, 100)
+    lay_line(&mel, 0, 0, scamper.mel_a, 105)
+    lay_line(&mel, 0, 8 * scamper.bar, scamper.mel_a2, 105)
+    lay_line(&mel, 0, 16 * scamper.bar, scamper.mel_b, 110)
+    sort_track(&mel)
+
+    // Offbeat stabs: beats 2 and 4, root+12 and root+19.
+    let mut comp = track_new()
+    program(&comp, 1, prog_jazz_gtr)
+    set_volume(&comp, 1, 0, 74)
+    for b in 0..scamper.bars do
+        let r = scamper.roots[b]
+        let at = b * scamper.bar
+        note(&comp, 1, at + quarter, 200, r + 12, 92)
+        note(&comp, 1, at + quarter, 200, r + 19, 92)
+        note(&comp, 1, at + quarter * 3, 200, r + 12, 92)
+        note(&comp, 1, at + quarter * 3, 200, r + 19, 92)
+    sort_track(&comp)
+
+    // Walking root-fifth bass.
+    let mut bass = track_new()
+    program(&bass, 2, prog_ac_bass)
+    set_volume(&bass, 2, 0, 84)
+    for b in 0..scamper.bars do
+        let r = scamper.roots[b]
+        let at = b * scamper.bar
+        note(&bass, 2, at, 400, r, 100)
+        note(&bass, 2, at + quarter, 400, r + 7, 92)
+        note(&bass, 2, at + quarter * 2, 400, r, 100)
+        note(&bass, 2, at + quarter * 3, 400, r + 7, 92)
+    sort_track(&bass)
+
+    let mut drums = track_new()
+    set_volume(&drums, 9, 0, 120)
+    for b in 0..scamper.bars do
+        let at = b * scamper.bar
+        note(&drums, 9, at, 120, drum_kick, 118)
+        note(&drums, 9, at + quarter * 2, 120, drum_kick, 110)
+        note(&drums, 9, at + quarter, 120, drum_snare, 108)
+        note(&drums, 9, at + quarter * 3, 120, drum_snare, 108)
+        for e in 0..8 do
+            note(&drums, 9, at + e * eighth, 90, drum_hat, if e % 2 == 0 then 100 else 84)
+    sort_track(&drums)
+
+    let mut w = writer_new(131072i64)
+    put_tag(&w, "MThd")
+    put32(&w, 6)
+    put16(&w, 1)
+    put16(&w, 5)
+    put16(&w, division)
+    put_conductor(&w, 4, 357143)        // 168 bpm
+    put_track(&w, &mel, scamper.ticks)
+    put_track(&w, &comp, scamper.ticks)
+    put_track(&w, &bass, scamper.ticks)
+    put_track(&w, &drums, scamper.ticks)
+    w
+
+// ============================================================
+// 2. Underground — "Root Cellar" (C minor, 4/4 at 110)
+//
+// A staccato figure in the low register, answered one bar later by its own
+// echo, quieter. The silence between phrases is most of the piece.
+// ============================================================
+
+module cellar =
+    let bar = 1920
+    let ticks = 12 * 1920
+
+    // The call, with a bar of rest after each phrase for the echo to live in.
+    let line = i32[104] {
+        48,240, -1,240, 51,240, -1,240, 53,240, -1,240, 48,240, -1,240,  // 1
+        -1,1920,                                                          // 2
+        46,240, -1,240, 48,240, -1,240, 51,240, -1,240, 46,240, -1,240,  // 3
+        -1,1920,                                                          // 4
+        53,240, -1,240, 55,240, -1,240, 56,240, -1,240, 58,240, -1,240,  // 5
+        -1,1920,                                                          // 6
+        60,240, -1,240, 58,240, -1,240, 56,240, -1,240, 55,240, -1,240,  // 7
+        -1,1920,                                                          // 8
+        48,240, 51,240, 53,240, 55,240, 58,240, 55,240, 53,240, 51,240,  // 9
+        -1,1920,                                                          // 10
+        48,240, -1,240, 43,240, -1,240, 48,240, -1,720,                   // 11
+        -1,1920 }                                                         // 12
+
+let build_cellar = () ->
+    let mut lead = track_new()
+    program(&lead, 0, prog_fing_bass)
+    set_volume(&lead, 0, 0, 122)
+    lay_line(&lead, 0, 0, cellar.line, 118)
+    sort_track(&lead)
+
+    // The echo: the same line, one bar late, on a softer patch. The last
+    // bar of the echo wraps past the end and is simply dropped — the fade
+    // into the loop's downbeat.
+    let mut echo = track_new()
+    program(&echo, 1, prog_syn_bass)
+    set_volume(&echo, 1, 0, 74)
+    lay_line(&echo, 1, cellar.bar, cellar.line, 98)
+    // Trim what ran past the end.
+    let mut kept = 0i64
+    for i in 0i64..echo.n do
+        if echo.evs[i].tick < cellar.ticks then
+            echo.evs[kept] = echo.evs[i]
+            kept = kept + 1i64
+    echo.n = kept
+    sort_track(&echo)
+
+    let mut w = writer_new(65536i64)
+    put_tag(&w, "MThd")
+    put32(&w, 6)
+    put16(&w, 1)
+    put16(&w, 3)
+    put16(&w, division)
+    put_conductor(&w, 4, 545455)        // 110 bpm
+    put_track(&w, &lead, cellar.ticks)
+    put_track(&w, &echo, cellar.ticks)
+    w
+
+// ============================================================
+// 3. Water — "Tidepool Waltz" (F major, 3/4 at 88)
+//
+// Strings hold the bar, the harp rolls it, the music box sings over it.
+// ============================================================
+
+module tidepool =
+    let bar = 1440
+    let bars = 16
+    let ticks = 16 * 1440
+
+    let roots = i32[16] {
+        53, 53, 58, 58, 53, 53, 60, 60,
+        50, 50, 58, 58, 53, 60, 53, 53 }
+
+    let melody = i32[82] {
+        69,480, 72,480, 77,480,          // 1
+        76,480, 74,480, 72,480,          // 2
+        74,480, 70,960,                  // 3
+        72,480, 70,480, 69,480,          // 4
+        69,480, 72,480, 77,480,          // 5
+        76,480, 74,480, 72,480,          // 6
+        74,480, 76,480, 77,480,          // 7
+        79,1440,                         // 8
+        74,480, 77,480, 81,480,          // 9
+        81,480, 79,480, 77,480,          // 10
+        74,480, 77,960,                  // 11
+        77,480, 74,480, 70,480,          // 12
+        69,480, 72,480, 77,480,          // 13
+        76,960, 74,480,                  // 14
+        72,480, 70,480, 69,480,          // 15
+        65,1440 }                        // 16
+
+let build_tidepool = () ->
+    let mut mel = track_new()
+    program(&mel, 0, prog_music_box)
+    set_volume(&mel, 0, 0, 100)
+    lay_line(&mel, 0, 0, tidepool.melody, 96)
+    sort_track(&mel)
+
+    // The pad: root+12 and root+19, the whole bar, sustained.
+    let mut pad = track_new()
+    program(&pad, 1, prog_strings)
+    set_volume(&pad, 1, 0, 62)
+    for b in 0..tidepool.bars do
+        let r = tidepool.roots[b]
+        let at = b * tidepool.bar
+        note(&pad, 1, at, tidepool.bar - 40, r + 12, 76)
+        note(&pad, 1, at, tidepool.bar - 40, r + 19, 76)
+    sort_track(&pad)
+
+    // The harp rolls six eighths up and back: root, fifth, octave, twelfth.
+    let mut harp = track_new()
+    program(&harp, 2, prog_harp)
+    set_volume(&harp, 2, 0, 88)
+    for b in 0..tidepool.bars do
+        let r = tidepool.roots[b]
+        let at = b * tidepool.bar
+        note(&harp, 2, at, 220, r, 88)
+        note(&harp, 2, at + eighth, 220, r + 7, 84)
+        note(&harp, 2, at + eighth * 2, 220, r + 12, 88)
+        note(&harp, 2, at + eighth * 3, 220, r + 19, 84)
+        note(&harp, 2, at + eighth * 4, 220, r + 12, 82)
+        note(&harp, 2, at + eighth * 5, 220, r + 7, 80)
+    sort_track(&harp)
+
+    let mut w = writer_new(65536i64)
+    put_tag(&w, "MThd")
+    put32(&w, 6)
+    put16(&w, 1)
+    put16(&w, 4)
+    put16(&w, division)
+    put_conductor(&w, 3, 681818)        // 88 bpm
+    put_track(&w, &mel, tidepool.ticks)
+    put_track(&w, &pad, tidepool.ticks)
+    put_track(&w, &harp, tidepool.ticks)
+    w
+
+// ============================================================
+// 4. Castle — "Gnarl's Keep" (C minor, 4/4 at 138)
+//
+// An eighth-note ostinato that will not stop, organ chords on the strong
+// beats, and a horn line with bad news.
+// ============================================================
+
+module keep =
+    let bar = 1920
+    let bars = 16
+    let ticks = 16 * 1920
+
+    // Which section each bar belongs to: 0 = C, 1 = F, 2 = Ab, 3 = G.
+    let section = i32[16] { 0, 0, 0, 0, 1, 1, 0, 0, 2, 2, 3, 3, 0, 0, 3, 0 }
+
+    // The ostinato, one bar, rooted on C; other sections transpose it.
+    let riff = i32[16] { 48,240, 48,240, 55,240, 56,240, 48,240, 48,240, 47,240, 55,240 }
+
+    let sec_shift = (s: i32) ->
+        if s == 1 then 5 else if s == 2 then -4 else if s == 3 then -5 else 0
+
+    // The horn.
+    let horn = i32[52] {
+        72,1440, 74,480,                 // 1
+        75,960, 74,960,                  // 2
+        72,1920,                         // 3
+        -1,1920,                         // 4
+        77,960, 75,960,                  // 5
+        74,960, 72,960,                  // 6
+        71,1440, 67,480,                 // 7
+        72,1920,                         // 8
+        75,960, 77,960,                  // 9
+        80,1920,                         // 10
+        79,960, 74,960,                  // 11
+        71,1920,                         // 12
+        72,1440, 71,480,                 // 13
+        72,960, 75,960,                  // 14
+        74,960, 71,960,                  // 15
+        72,1920 }                        // 16
+
+let build_keep = () ->
+    // The ostinato, transposed by section.
+    let mut riff = track_new()
+    program(&riff, 0, prog_cello)
+    set_volume(&riff, 0, 0, 96)
+    for b in 0..keep.bars do
+        let sh = keep.sec_shift(keep.section[b])
+        let at = b * keep.bar
+        for i in 0..8 do
+            let n = keep.riff[i * 2] + sh
+            note(&riff, 0, at + i * eighth, 200, n, if i == 0 then 106 else 96)
+    sort_track(&riff)
+
+    // Organ chords on beats 1 and 3. Diatonic triads per section: Cm, Fm,
+    // Ab major, G major.
+    let mut organ = track_new()
+    program(&organ, 1, prog_organ)
+    set_volume(&organ, 1, 0, 58)
+    for b in 0..keep.bars do
+        let s = keep.section[b]
+        let at = b * keep.bar
+        let n1 = if s == 0 then 60 else if s == 1 then 65 else if s == 2 then 68 else 67
+        let n2 = if s == 0 then 63 else if s == 1 then 68 else if s == 2 then 72 else 71
+        let n3 = if s == 0 then 67 else if s == 1 then 72 else if s == 2 then 75 else 74
+        for k in 0..2 do
+            let t0 = at + k * quarter * 2
+            note(&organ, 1, t0, 880, n1, 84)
+            note(&organ, 1, t0, 880, n2, 84)
+            note(&organ, 1, t0, 880, n3, 84)
+    sort_track(&organ)
+
+    let mut horn = track_new()
+    program(&horn, 2, prog_horn)
+    set_volume(&horn, 2, 0, 92)
+    lay_line(&horn, 2, 0, keep.horn, 100)
+    sort_track(&horn)
+
+    let mut drums = track_new()
+    set_volume(&drums, 9, 0, 122)
+    for b in 0..keep.bars do
+        let at = b * keep.bar
+        note(&drums, 9, at, 120, drum_kick, 120)
+        note(&drums, 9, at + quarter * 2, 120, drum_kick, 112)
+        note(&drums, 9, at + quarter * 3, 120, drum_snare, 106)
+    sort_track(&drums)
+
+    let mut w = writer_new(131072i64)
+    put_tag(&w, "MThd")
+    put32(&w, 6)
+    put16(&w, 1)
+    put16(&w, 5)
+    put16(&w, division)
+    put_conductor(&w, 4, 434783)        // 138 bpm
+    put_track(&w, &riff, keep.ticks)
+    put_track(&w, &organ, keep.ticks)
+    put_track(&w, &horn, keep.ticks)
+    put_track(&w, &drums, keep.ticks)
+    w
+
+// ============================================================
+
+let main = (args: str[]) ->
+    let dir = if args.len > 1i64 then args[1] else (str) "demos/fario/music"
+
+    let mut w1 = build_scamper()
+    let p1 = alloc("%s{dir}/overworld.mid")!
+    defer free(p1)
+    let mut rc = write_file((const str) p1, &w1)
+
+    let mut w2 = build_cellar()
+    let p2 = alloc("%s{dir}/underground.mid")!
+    defer free(p2)
+    rc = rc + write_file((const str) p2, &w2)
+
+    let mut w3 = build_tidepool()
+    let p3 = alloc("%s{dir}/water.mid")!
+    defer free(p3)
+    rc = rc + write_file((const str) p3, &w3)
+
+    let mut w4 = build_keep()
+    let p4 = alloc("%s{dir}/castle.mid")!
+    defer free(p4)
+    rc = rc + write_file((const str) p4, &w4)
+
+    if rc == 0 then 0 else 1

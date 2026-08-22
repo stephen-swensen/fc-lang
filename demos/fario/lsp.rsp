@@ -1,0 +1,6 @@
+# Fario — the editor's compilation unit.
+#
+# `fcc --lsp` discovers this file by name and analyses exactly what it
+# lists, so the editor resolves names the way the build does. There is only
+# the one build here, so this is a pointer and nothing else.
+@fario.rsp

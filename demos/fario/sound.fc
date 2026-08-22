@@ -1,0 +1,205 @@
+// Fario — the sounds themselves.
+//
+// The engine is demos/shared/opl_audio.fc (OPL2 voices, an effect bank, and
+// the audio callback); the chip it plays through is demos/shared/opl2.fc.
+// This file is only the effects: the instruments and the little scripts.
+//
+// The music is not here — it is four Standard MIDI Files in music/, written
+// by tools/mkmusic.fc and played by demos/shared/opl_midi.fc through the
+// General MIDI bank. This file has nothing to say about the tunes beyond the
+// gain they are mixed at.
+//
+// Reading an instrument: the modulator's TL is brightness, the carrier's TL
+// is volume (counting down — 0 is loudest), MULT picks the timbre, and the
+// EGT bit says whether a note holds while keyed or decays on its own.
+
+import opl_audio from shared::
+import opl_midi from shared::
+
+module snd =
+
+    // ============================================================
+    // Effect voices
+    // ============================================================
+
+    private let i_chirp   = 0     // jump, swim stroke: a quick hollow fwip
+    private let i_bell    = 1     // coins, 1-ups: glitter with a ring
+    private let i_thump   = 2     // stomps, boss hits: rubbery weight
+    private let i_knock   = 3     // head on a block
+    private let i_crunch  = 4     // a brick going to bits
+    private let i_blip    = 5     // fireballs, kicks, ticks: dry and fast
+    private let i_riser   = 6     // an item rising from its block
+    private let i_reed    = 7     // hurt, the death jingle, game over
+    private let i_slide   = 8     // the flagpole: a long singing gliss
+    private let i_brass   = 9     // fanfares
+    private let i_grind   = 10    // the bridge going down
+
+    private let instruments = opl_audio.instrument[11] {
+        // Chirp: 4:1, deep modulation, feedback — spat out of a tube and
+        // gone in 150 ms.
+        opl_audio.instrument {
+            m_char = 0x04, m_scale = 0x0B, m_atk = 0xF8, m_sus = 0x68, m_wave = 0x01,
+            c_char = 0x01, c_scale = 0x04, c_atk = 0xF7, c_sus = 0x58, c_wave = 0x00,
+            n_conn = 0x0A },
+        // Bell: 7:1 puts the sidebands high enough to be pure glitter, and
+        // the slow release is the ring a coin deserves. Key scaling off so
+        // it does not choke at the top of the range.
+        opl_audio.instrument {
+            m_char = 0x07, m_scale = 0x51, m_atk = 0xF3, m_sus = 0x25, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x03, c_atk = 0xF4, c_sus = 0x26, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Thump: 1:1 with feedback, fast decay — something soft flattening
+        // something softer.
+        opl_audio.instrument {
+            m_char = 0x01, m_scale = 0x12, m_atk = 0xF8, m_sus = 0x78, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x05, c_atk = 0xF7, c_sus = 0x58, c_wave = 0x00,
+            n_conn = 0x08 },
+        // Knock: a dry tick, quiet by design — it fires every time a block
+        // refuses to give.
+        opl_audio.instrument {
+            m_char = 0x02, m_scale = 0x1C, m_atk = 0xF9, m_sus = 0x69, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x11, c_atk = 0xF8, c_sus = 0x39, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Crunch: half-multiple modulator for weight, quick and rough.
+        opl_audio.instrument {
+            m_char = 0x20, m_scale = 0x08, m_atk = 0xF5, m_sus = 0x47, m_wave = 0x03,
+            c_char = 0x01, c_scale = 0x04, c_atk = 0xF6, c_sus = 0x48, c_wave = 0x00,
+            n_conn = 0x0C },
+        // Blip: half-sine on the modulator makes a short note read as wet
+        // rather than as a beep.
+        opl_audio.instrument {
+            m_char = 0x02, m_scale = 0x0E, m_atk = 0xF7, m_sus = 0x68, m_wave = 0x01,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF6, c_sus = 0x48, c_wave = 0x00,
+            n_conn = 0x02 },
+        // Riser: sustained (EGT) so the scale under it sounds continuous.
+        opl_audio.instrument {
+            m_char = 0x21, m_scale = 0x0D, m_atk = 0xF4, m_sus = 0x06, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x04, c_atk = 0xF4, c_sus = 0x06, c_wave = 0x00,
+            n_conn = 0x06 },
+        // Reed: soft, sustaining, slow release — the voice bad news arrives
+        // in, from a scrape to the end of a run.
+        opl_audio.instrument {
+            m_char = 0x21, m_scale = 0x1A, m_atk = 0x94, m_sus = 0x05, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x03, c_atk = 0x93, c_sus = 0x06, c_wave = 0x00,
+            n_conn = 0x06 },
+        // Slide: sustained 2:1, so the flagpole's step-per-tick gliss sings
+        // as one falling note.
+        opl_audio.instrument {
+            m_char = 0x22, m_scale = 0x0F, m_atk = 0xF4, m_sus = 0x05, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x04, c_atk = 0xF4, c_sus = 0x15, c_wave = 0x00,
+            n_conn = 0x08 },
+        // Brass: both operators sustain at SL 0, feedback for the edge.
+        // Carrier TL 5, not 0: this voice holds its peak for the better
+        // part of a second, and matching the transients' peak would make it
+        // the loudest thing in the game (measured in fuzzel-fobble).
+        opl_audio.instrument {
+            m_char = 0x21, m_scale = 0x0F, m_atk = 0xB4, m_sus = 0x06, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x05, c_atk = 0xA4, c_sus = 0x06, c_wave = 0x00,
+            n_conn = 0x0C },
+        // Grind: FB 7 drives the modulator into chaos — as close to noise
+        // as a melodic OPL2 voice gets — and 15:4 lands the sidebands off
+        // any harmonic series. The bridge coming down, plank by plank.
+        opl_audio.instrument {
+            m_char = 0x0E, m_scale = 0x00, m_atk = 0xF2, m_sus = 0x6A, m_wave = 0x03,
+            c_char = 0x04, c_scale = 0x04, c_atk = 0xF4, c_sus = 0x4A, c_wave = 0x00,
+            n_conn = 0x0E }
+    }
+
+    // ============================================================
+    // Effect scripts
+    // ============================================================
+
+    // Sound ids, as the game names them.
+    let sfx_jump   = 0
+    let sfx_stroke = 1
+    let sfx_coin   = 2
+    let sfx_stomp  = 3
+    let sfx_bump   = 4
+    let sfx_break  = 5
+    let sfx_spawn  = 6
+    let sfx_power  = 7
+    let sfx_oneup  = 8
+    let sfx_fire   = 9
+    let sfx_kick   = 10
+    let sfx_hurt   = 11
+    let sfx_death  = 12
+    let sfx_flag   = 13
+    let sfx_clear  = 14
+    let sfx_over   = 15
+    let sfx_tick   = 16
+    let sfx_warn   = 17
+    let sfx_rumble = 18
+    let sfx_thud   = 19
+    let sfx_count  = 20
+
+    // Effects tick at 140 Hz — the AdLib driver rate.
+    private let tick_rate = 140
+
+    // Every effect's steps, end to end: (note, ticks) pairs, note -1 a
+    // rest, 48 middle C. The table below slices this up; each script sits
+    // on its own line in the same order so the counts can be checked.
+    private let script = i32[196] {
+        60,1, 67,1, 72,3,                                       // jump      3
+        55,1, 60,2,                                             // stroke    2
+        81,1, 88,9,                                             // coin      2
+        45,1, 40,2,                                             // stomp     2
+        38,2, 36,2,                                             // bump      2
+        48,1, 43,1, 46,1, 41,1, 38,3,                           // break     5
+        60,2, 62,2, 64,2, 66,2, 68,2, 70,4,                     // spawn     6
+        60,1, 64,1, 67,1, 72,1, 76,1, 79,1, 84,5,               // power     7
+        64,2, 67,2, 72,2, 76,2, 79,2, 84,8,                     // oneup     6
+        78,1, 74,1, 70,2,                                       // fire      3
+        70,1, 82,2,                                             // kick      2
+        62,2, 55,4,                                             // hurt      2
+        76,4, 72,4, 69,4, 65,4, 62,4, 60,12,                    // death     6
+        88,2, 86,2, 84,2, 82,2, 80,2, 78,2, 76,2, 74,2,         // flag     16
+        72,2, 70,2, 68,2, 66,2, 64,2, 62,2, 60,2, 58,8,
+        60,8, 64,8, 67,8, 72,8, 76,8, 79,22,                    // clear     6
+        55,14, 52,14, 48,18, 43,40,                             // over      4
+        90,1,                                                   // tick      1
+        84,2, -1,2, 84,2, -1,2, 84,3,                           // warn      5
+        72,1, 65,1, 69,1, 62,1, 66,1, 59,1, 63,1, 56,1,         // rumble   16
+        60,1, 53,1, 57,1, 50,1, 54,1, 48,1, 52,1, 46,4,
+        36,2, 31,3                                              // thud      2
+    }
+
+    private let sounds = opl_audio.sound[20] {
+        opl_audio.sound { instr = i_chirp,  first = 0,  steps = 3 },
+        opl_audio.sound { instr = i_chirp,  first = 3,  steps = 2 },
+        opl_audio.sound { instr = i_bell,   first = 5,  steps = 2 },
+        opl_audio.sound { instr = i_thump,  first = 7,  steps = 2 },
+        opl_audio.sound { instr = i_knock,  first = 9,  steps = 2 },
+        opl_audio.sound { instr = i_crunch, first = 11, steps = 5 },
+        opl_audio.sound { instr = i_riser,  first = 16, steps = 6 },
+        opl_audio.sound { instr = i_riser,  first = 22, steps = 7 },
+        opl_audio.sound { instr = i_bell,   first = 29, steps = 6 },
+        opl_audio.sound { instr = i_blip,   first = 35, steps = 3 },
+        opl_audio.sound { instr = i_blip,   first = 38, steps = 2 },
+        opl_audio.sound { instr = i_reed,   first = 40, steps = 2 },
+        opl_audio.sound { instr = i_reed,   first = 42, steps = 6 },
+        opl_audio.sound { instr = i_slide,  first = 48, steps = 16 },
+        opl_audio.sound { instr = i_brass,  first = 64, steps = 6 },
+        opl_audio.sound { instr = i_reed,   first = 70, steps = 4 },
+        opl_audio.sound { instr = i_blip,   first = 74, steps = 1 },
+        opl_audio.sound { instr = i_blip,   first = 75, steps = 5 },
+        opl_audio.sound { instr = i_grind,  first = 80, steps = 16 },
+        opl_audio.sound { instr = i_thump,  first = 96, steps = 2 }
+    }
+
+    // ============================================================
+    // Assembly
+    // ============================================================
+
+    // Music under the effects: the tune is the weather, the effects are
+    // what is happening to you.
+    private let music_gain = 0.85
+    private let sfx_gain   = 2.00
+
+    let init = (sample_rate: i32, music: opl_midi.player*) ->
+        opl_audio.init(sample_rate,
+            opl_audio.bank {
+                instruments = instruments,
+                sounds = sounds,
+                script = script,
+                tick_rate = tick_rate },
+            music, music_gain, sfx_gain)
