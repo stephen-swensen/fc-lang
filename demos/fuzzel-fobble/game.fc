@@ -256,10 +256,13 @@ module game =
     // degrees: 54 px off across the board at close raft range, 72 at arm's
     // length, more than a bubble either way. The 24 px lane through a
     // one-bubble hole was not something you aimed at, it was something you
-    // landed in. `aim_step` is 0.55 — 3 px at the near rows, 7 px out where a
-    // bounce puts you — so that lane is five or six distinct places to put a
+    // landed in. `aim_step` is 0.75 — 4 px at the near rows, 10 px out where a
+    // bounce puts you — so that lane is three or four distinct places to put a
     // shot, one press apart, and the tolerance `collide_d2` was widened to
-    // offer is finally a tolerance the controls can reach.
+    // offer is finally a tolerance the controls can reach. (It shipped at
+    // 0.55, which kept five or six places in the lane but priced every
+    // ordinary correction at more presses than it was worth; play showed the
+    // lane survives the coarser press, so the routine shot got cheaper.)
     //
     // The sweep between those two ends is where the control actually lives,
     // and its shape matters more than either end does. It starts at
@@ -285,7 +288,7 @@ module game =
     //
     // What is left after both of those is a question of *range*, and the answer
     // is much narrower than it first looks. The two ends started 17 times
-    // apart and are now 4, because a curve that has to climb 17-fold is a
+    // apart and are now 3, because a curve that has to climb 17-fold is a
     // steep curve wherever you put the bend in it — too slow to be going
     // anywhere at the bottom, too quick to stop at the top.
     //
@@ -298,12 +301,12 @@ module game =
     // Frozen Bubble is the useful yardstick for the top half, because a flat
     // 0.03 rad per frame at 50 Hz is what the genre's reference implementation
     // decided a hold is worth. It crosses half the arc in 0.91 s; this reaches
-    // full speed in 0.67 s and crosses the same half in 0.93 s, so a hold is
-    // worth the same as that game's — while a *press* is still worth 0.55
+    // full speed in 0.67 s and crosses the same half in 0.92 s, so a hold is
+    // worth the same as that game's — while a *press* is still worth 0.75
     // degrees against its 1.72, which is the whole point and the half Frozen
     // Bubble never had.
-    let aim_step = 0.55       // one press
-    let aim_creep = 0.55      // where a hold starts moving: the press, repeating
+    let aim_step = 0.75       // one press
+    let aim_creep = 0.75      // where a hold starts moving: the press, repeating
     let aim_fast = 2.2        // where a hold settles
     let aim_delay = 10        // frames held before it starts moving at all
     let aim_ramp = 30         // frames from aim_creep to aim_fast
