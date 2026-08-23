@@ -114,7 +114,30 @@ Sequenced so each step is cheap and informative:
 
 1. **Build wolf-fc's emitted C with djgpp (and/or gcc-ia16).** One afternoon; measures
    the true distance between "emits C11" and "runs on a 1992 toolchain."
-2. **Fix what breaks until wolf-fc runs in DOSBox**, then on real hardware. The fixes
+2. **Fix what breaks until wolf-fc runs in DOSBox**, then on real hardware.
+   *Stage 1 PASSED 2026-08-22:* the exact `build/linux/wolf-fc.c` (17.5k lines of FC,
+   unmodified) cross-compiled under djgpp gcc 12.2 into a 617 KB `WOLF.EXE`, loaded the
+   real WL6 data in DOSBox (CWSDPMI), ran 35 deterministic engine ticks, and produced
+   **byte-identical** screenshots (all three PNG variants + game-state text) to the same
+   C compiled by host gcc. Nothing broke in fcc, the FC source, or the generated C — the
+   entire port surface was external: an inert SDL stub, a ~30-line DJGPP libc shim
+   (`timespec_get`/`nanosleep`/`fmin`/`fmax`/`__errno_location`), `-std=gnu11` (DJGPP's
+   strict-ANSI hides POSIX errno constants — empirical confirmation of the "GCC's C11,
+   not ISO C11" finding below), and CWSDPMI. Kit lives in `wolf-fc/dos/` (build-dos.sh).
+   Caveats owned: DOSBox's FPU emulation computes at 64-bit precision, so real 80-bit
+   x87 hardware may still diverge in the f64 raycaster (the real-hardware stage will
+   tell); DJGPP's `int32_t` is `long int` (extern-decl typing must say `int32_t`, never
+   `int`). *Stage 2 PASSED 2026-08-23 — **wolf-fc is playable in DOSBox**:* rather than
+   porting the FC platform layer, the SDL2 API surface itself was implemented as a DOS
+   backend (`wolf-fc/dos/sdl_dos.c`, ~450 lines of C): VGA mode 13h with dynamic palette
+   allocation + 15-bit nearest-color cache, raw INT 9 keyboard → SDLK translation with
+   typematic-repeat tagging, uclock/PIT timing, vsync-paced present. Verified by driving
+   DOSBox with synthesized keystrokes: full menu flow, in-game raycast rendering with
+   correct palette, movement, firing (HUD ammo decrements), and the engine's own PNG
+   screenshot written to `C:\.WOL\SCREENSH\`. Audio deliberately absent (game's no-driver
+   path runs silent); SB-DMA backend and a native 320×200 render path (skip the minimum
+   2× supersample) are the known follow-ups. The FC source and generated C remained
+   untouched through both stages. The fixes
    (stdlib layering, target profiles) are the actual product work.
 3. **Write the positioning piece** — "a modern language for 1992's toolchains" — with
    the running demo as the headline, aimed where this crowd lives: r/retrogamedev, the
