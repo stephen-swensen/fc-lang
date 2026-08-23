@@ -52,6 +52,7 @@ typedef struct {
     Flag        *flags;      /* owned array; name/value borrow ExpandedArgs   */
     int          flag_count, flag_cap;
     bool         backtraces;
+    int          len_repr;   /* stored slice-len width: 16, 32, or 64 (default) */
     char        *error;      /* owned message if parsing failed, else NULL   */
 } CompileArgs;
 

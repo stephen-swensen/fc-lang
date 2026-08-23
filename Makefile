@@ -186,6 +186,17 @@ test-clang-O2: $(BIN)
 	@echo "=== Testing with clang (-O2) ==="
 	@CC=clang CC_OPT=-O2 FILTER=$(FILTER) bash tests/run_tests_parallel.sh
 
+# The whole suite re-based on a 16-bit slice-length representation. Because
+# --len-repr changes only representation (semantics are identical for
+# programs whose data fits), the retro configuration is testable on the host.
+test-gcc-len16: $(BIN)
+	@echo "=== Testing with gcc (--len-repr 16) ==="
+	@CC=gcc FCC_EXTRA_ARGS="--len-repr 16" FILTER=$(FILTER) bash tests/run_tests_parallel.sh
+
+test-clang-len16: $(BIN)
+	@echo "=== Testing with clang (--len-repr 16) ==="
+	@CC=clang FCC_EXTRA_ARGS="--len-repr 16" FILTER=$(FILTER) bash tests/run_tests_parallel.sh
+
 test-all-O2: $(BIN)
 	@bash -c '\
 	  start=$$(date +%s%N); \
@@ -252,6 +263,7 @@ help:
 	@echo "  make test-gcc     Run tests with gcc only"
 	@echo "  make test-clang   Run tests with clang only"
 	@echo "  make test-{gcc,clang,all}-O2   Same, but compile generated C at -O2"
+	@echo "  make test-{gcc,clang}-len16    Same, but with --len-repr 16 (16-bit slice lens)"
 	@echo "  make test-lsp     Run the LSP server wire tests (needs python3)"
 	@echo "  ... FILTER=pattern             Run only tests matching pattern"
 
@@ -259,4 +271,5 @@ help:
 .PHONY: all dev clean install uninstall install-vscode uninstall-vscode \
         check test test-parallel test-lsp \
         test-gcc test-clang test-gcc-O2 test-clang-O2 \
+        test-gcc-len16 test-clang-len16 \
         test-all test-all-O2 help print-bin

@@ -1,0 +1,5 @@
+struct big =
+    data: u8[40000]
+let main = (args: str[]) ->
+    let b = default(big)
+    (i32) b.data.len

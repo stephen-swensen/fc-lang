@@ -1,0 +1,4 @@
+let main = (args: str[]) ->
+    let p = &args.len
+    let x = *p
+    (i32) x

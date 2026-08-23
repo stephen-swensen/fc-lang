@@ -189,15 +189,24 @@ platform `alloca` or banning it), drop attributes, and shim `<stdint.h>`.
 These bite even on a GCC toolchain, because they are about the target's runtime and
 word size, not the compiler's parser:
 
-1. **64-bit integers are load-bearing everywhere.** `fc_str` is
-   `{ uint8_t *ptr; int64_t len; }`; every slice length, bounds comparison
-   (`(uint64_t)i >= (uint64_t)s.len`), string-interpolation length computation, and
-   `INT64_C` literal rides 64-bit math. On a 16-bit CPU every bounds check becomes a
-   multi-word software comparison and every slice fattens by 6 bytes. GCC targets
-   *compile* it (soft 64-bit via libgcc), but it taxes exactly the machines the
-   niche is about. This is the deepest single item: a retro profile wants the
-   slice-length type **parameterized** (e.g. `isize`-based lengths — `int32_t` or
-   even `int16_t` per target) with identical checked semantics.
+1. **64-bit integers are load-bearing everywhere.** ✅ RESOLVED 2026-08-22:
+   shipped as `--len-repr <16|32|64>` (spec §Length representation). The
+   resolution is **representation parameterization, not semantic**: `.len`
+   stays `i64` in the type system on every profile (determinism intact), while
+   the stored width (`fc_len_t`) and every guard drop to the chosen width.
+   Soundness rides one invariant — every stored len proven in
+   `[0, FC_LEN_MAX]` at slice construction (compile-time lens judged
+   statically; runtime lens via `fc_chk_len`/`fc_len_cap` aborts, and
+   `alloc(T[n] { })` over capacity answers `none`). A narrow index type at a
+   narrow repr yields a single native-width fused compare; `fc_str` at
+   `--len-repr 16` is `{ uint8_t*; int16_t }`. Because semantics are identical,
+   the whole suite runs under the narrow configs on the host
+   (`make test-{gcc,clang}-len16` — green at 16 on day one). Note the signed-16
+   cap (32,767 elements) is smaller than a full real-mode segment of bytes:
+   real-mode projects that slice whole segments want `--len-repr 32`.
+   Remaining tail: range-form `for` counters are user-visible `i64` (as-if
+   narrowing is a TODO); string-interpolation buffer math still computes in
+   `i64` before the capacity cap.
 2. **Hosted-libc assumptions.** Always: `malloc`/`free` (alloc), `memcpy`/`strlen`,
    `abort` + `assert` (every safety guard). Feature-gated but common: `snprintf`
    (string interpolation is a hard stdio dependency — `EXPR_INTERP_STRING` sets
@@ -213,6 +222,13 @@ word size, not the compiler's parser:
    so the gating precedent exists.
 
 ### Defining the non-compromising retro subset ("FC/retro profile")
+
+> **Planning doc:** the structural items below were re-audited against codegen.c on
+> 2026-08-22 (post-`--len-repr`) and broken into ordered, sized work items in
+> **`spec/freestanding.md`** — the `fc_trap` hook, allocator hook, float/atomics/
+> backtraces gates, freestanding interpolation formatter, stdlib layering, and
+> `--profile` bundles. That file is the source of truth for this work; this section
+> remains the framing.
 
 The governing rule is the project's completeness-over-partiality principle applied to
 targets: **every construct in the profile keeps its full FC semantics, and every
@@ -241,17 +257,19 @@ and const generics, closures, slices, pointers, `checked`/`unchecked`, modules.
 - `--backtraces` (no-op stub per the diagnostic-only exception, or error)
 
 **Profile-parameterized — same semantics, target-sized machinery:**
-- Slice/string length type (`int64_t` today → `int32_t`/`int16_t` per profile), with
-  every guard emitted against the profile's width
+- Slice/string length *representation* — ✅ shipped 2026-08-22 as `--len-repr`
+  (see structural item 1: semantic domain stays `i64`; stored width and guards
+  are per-build). When a fuller `--profile <name>` bundle exists, it should
+  imply a `--len-repr` the way `gcc -O2` bundles flags, not replace it.
 - Guard failure: `abort()` → a per-target `fc_trap` (freestanding targets)
 - Stdlib layering: a core layer with zero libc dependence, `std::io` et al. becoming
   per-platform modules
 
 **Two lanes, restated precisely after the audit:**
 - **Lane 1 — GCC retro (DOS, Amiga, Genesis, GBA):** no dialect work at all; the
-  cost is the structural list — stdlib layering, `fc_trap`, the length-type
-  parameter, float/atomic gates. This is tractable incrementally and is where the
-  falsifiable experiment already points.
+  cost is the structural list — stdlib layering, `fc_trap`, the length-repr
+  parameter (✅ shipped as `--len-repr`), float/atomic gates. This is tractable
+  incrementally and is where the falsifiable experiment already points.
 - **Lane 2 — true 8/16-bit (NES, C64, SNES, period PC compilers):** everything in
   Lane 1 *plus* the de-GNU + C89 emission mode. The addendum's enumeration is the
   scope of that project — finite, but dominated by one item: retiring ~49 statement-

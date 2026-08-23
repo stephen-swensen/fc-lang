@@ -1,0 +1,11 @@
+// A heap slice allocation whose count exceeds the stored width is an
+// allocation that cannot succeed — it answers through the existing failure
+// channel (none), not a trap.
+let main = (args: str[]) ->
+    let mut n = 40000i64
+    n = n + 0
+    match alloc(u8[n] { }) with
+    | some(s) ->
+        free(s)
+        1
+    | none -> 0

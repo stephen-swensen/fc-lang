@@ -254,51 +254,8 @@ static void emit_c_escaped(const char *text, int len, FILE *out);
  * re-encoded for C — the only way the emitted literal is guaranteed to hold
  * the bytes the FC program wrote. */
 
-static int hex_digit_val(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    return c - 'A' + 10;
-}
-
-/* Decode string-literal source text into the bytes it denotes.  FC's escape
- * set is closed — `\n \t \r \\ \" \' \0 \xNN` plus the `%%` percent escape —
- * and the lexer has already rejected everything else, so the decode is total.
- * Writes to `out` when non-NULL and always returns the byte count, so one
- * routine both sizes a buffer and fills it: every consumer's length and
- * codegen's bytes come from the same place and cannot disagree. */
-static int decode_str_lit(const char *s, int slen, unsigned char *out) {
-    int n = 0;
-    for (int i = 0; i < slen; i++) {
-        unsigned char b;
-        if (s[i] == '%' && i + 1 < slen && s[i + 1] == '%') {
-            b = '%';
-            i++;
-        } else if (s[i] == '\\' && i + 1 < slen) {
-            i++;
-            switch (s[i]) {
-            case 'n': b = '\n'; break;
-            case 't': b = '\t'; break;
-            case 'r': b = '\r'; break;
-            case '0': b = '\0'; break;
-            case 'x':
-                if (i + 2 < slen) {
-                    b = (unsigned char)((hex_digit_val(s[i + 1]) << 4) |
-                                        hex_digit_val(s[i + 2]));
-                    i += 2;
-                } else {
-                    b = 'x';
-                }
-                break;
-            default: b = (unsigned char)s[i]; break;  /* \\ \" \' */
-            }
-        } else {
-            b = (unsigned char)s[i];
-        }
-        if (out) out[n] = b;
-        n++;
-    }
-    return n;
-}
+/* decode_str_lit lives in common.c: pass2's --len-repr capacity checks and
+ * codegen's emission must agree on the decoded byte count. */
 
 /* Decoded byte length of string-literal source text. */
 static int str_lit_len(const char *s, int slen) {
@@ -786,6 +743,28 @@ static void end_hoisted_scope(void) {
 
 /* Resolve a type variable to its concrete type under the active
    monomorphization substitution; identity for everything else. */
+/* Width (bits) at which a slice bounds compare runs: wide enough to hold the
+ * index's full static range and the stored len width, so the truncating casts
+ * in the fused unsigned compare are semantics-preserving (the stored len is
+ * in [0, FC_LEN_MAX] by construction invariant). At --len-repr 64 this is
+ * always 64 — the historical emission, byte for byte. A narrow index type at
+ * a narrow --len-repr is where the whole design pays off: the compare (and
+ * the constant-false high bits it never needs) is a single native-width op. */
+static Type *subst_resolve(Type *t);
+static int guard_bits(Type *idx_type) {
+    if (g_len_repr >= 64) return 64;
+    int b;
+    Type *t = idx_type ? subst_resolve(idx_type) : NULL;
+    if (t) t = type_enum_underlying(t);
+    switch (t ? t->kind : TYPE_INT64) {
+    case TYPE_INT8:  case TYPE_UINT8:  b = 8;  break;
+    case TYPE_INT16: case TYPE_UINT16: b = 16; break;
+    case TYPE_INT32: case TYPE_UINT32: b = 32; break;
+    default:                           b = 64; break; /* i64/u64/isize/usize */
+    }
+    return b > g_len_repr ? b : g_len_repr;
+}
+
 static Type *subst_resolve(Type *t) {
     if (g_subst && t && t->kind == TYPE_TYPE_VAR) {
         for (int i = 0; i < g_subst->count; i++)
@@ -2838,6 +2817,14 @@ static void emit_interp_string_impl(Expr *e, FILE *out, Type *alloc_opt_type) {
      * without an explicit precision) alloca's afresh each evaluation — which
      * grows the frame per loop iteration, documented as a known cost with
      * alloc(s)! as the heap-promoting escape hatch — or malloc's under alloc(s)!. */
+    if (g_len_repr < 64) {
+        /* The result's len is bounded by _flen; cap _flen once, before the
+         * buffer exists, so the stores below fit fc_len_t by construction. */
+        const char *ifn = e->loc.filename ? e->loc.filename : "<unknown>";
+        fprintf(out, "if (__builtin_expect(_flen%d > FC_LEN_MAX, 0)) fc_len_cap(\"", tid);
+        emit_c_escaped(ifn, (int)strlen(ifn), out);
+        fprintf(out, "\", %d, (long long)_flen%d); ", e->loc.line, tid);
+    }
     if (use_heap)
         fprintf(out, "uint8_t *_fbuf%d = (uint8_t*)malloc(fc_to_size(_flen%d + 1)); ", tid, tid);
     else if (e->interp_string.codegen_backing_name)
@@ -4015,8 +4002,19 @@ static void emit_expr(Expr *e, FILE *out) {
             bool src_const = e->cast.operand->type->is_const;
             fprintf(out, "({ %suint8_t *_cp%d = ", src_const ? "const " : "", tid);
             emit_expr(e->cast.operand, out);
-            fprintf(out, "; (fc_str){ .ptr = %s_cp%d, .len = (int64_t)strlen((const char*)_cp%d) }; })",
-                    src_const ? "(uint8_t*)" : "", tid, tid);
+            if (g_len_repr < 64) {
+                /* strlen's result can exceed a narrow stored width — a slice
+                 * that big cannot exist, so trap at construction. */
+                const char *cfn = e->loc.filename ? e->loc.filename : "<unknown>";
+                fprintf(out, "; (fc_str){ .ptr = %s_cp%d, .len = fc_chk_len(\"",
+                        src_const ? "(uint8_t*)" : "", tid);
+                emit_c_escaped(cfn, (int)strlen(cfn), out);
+                fprintf(out, "\", %d, (int64_t)strlen((const char*)_cp%d)) }; })",
+                        e->loc.line, tid);
+            } else {
+                fprintf(out, "; (fc_str){ .ptr = %s_cp%d, .len = (int64_t)strlen((const char*)_cp%d) }; })",
+                        src_const ? "(uint8_t*)" : "", tid, tid);
+            }
         } else if (!g_guards_suppressed && e->cast.operand->type &&
                    type_is_float(e->cast.operand->type) &&
                    float_to_int_info(e->cast.target->kind, &f2i_info)) {
@@ -4179,6 +4177,15 @@ static void emit_expr(Expr *e, FILE *out) {
                 break;
             }
         }
+        /* Slice .len read: stored at fc_len_t width, FC type i64 — widen at
+         * every read (a no-op cast at --len-repr 64). */
+        if (e->field.object->type && e->field.object->type->kind == TYPE_SLICE &&
+            strcmp(e->field.name, "len") == 0) {
+            fprintf(out, "((int64_t)");
+            emit_expr(e->field.object, out);
+            fprintf(out, ".len)");
+            break;
+        }
         emit_expr(e->field.object, out);
         fprintf(out, ".%s", c_safe_ident(g_intern, e->field.name));
         break;
@@ -4200,6 +4207,16 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->field.object, out);
             fprintf(out, "->%s, .len = %lld }", c_safe_ident(g_intern, e->field.name),
                     (long long)fixarr_size(fat));
+            break;
+        }
+        /* Slice .len read through a pointer: same widening as the value form. */
+        if (e->field.object->type && e->field.object->type->kind == TYPE_POINTER &&
+            e->field.object->type->pointer.pointee &&
+            e->field.object->type->pointer.pointee->kind == TYPE_SLICE &&
+            strcmp(e->field.name, "len") == 0) {
+            fprintf(out, "((int64_t)");
+            emit_expr(e->field.object, out);
+            fprintf(out, "->len)");
             break;
         }
         emit_expr(e->field.object, out);
@@ -4242,8 +4259,13 @@ static void emit_expr(Expr *e, FILE *out) {
                    negative) prints its true magnitude. The bounds compare is
                    unsigned either way. */
                 bool idx_unsigned = type_is_unsigned(e->index.index->type);
-                fprintf(out, "; if (__builtin_expect((uint64_t)_i%d >= (uint64_t)_s%d.len, 0)) "
-                             "%s(\"", tid, tid, idx_unsigned ? "fc_oob_u" : "fc_oob");
+                /* Compare at guard_bits width: for a narrow index at a narrow
+                 * --len-repr this is one native compare (truncating _i%d's
+                 * sign-extension preserves its value's bit pattern; the stored
+                 * len is in [0, FC_LEN_MAX] by invariant). */
+                int gb = guard_bits(e->index.index->type);
+                fprintf(out, "; if (__builtin_expect((uint%d_t)_i%d >= (uint%d_t)_s%d.len, 0)) "
+                             "%s(\"", gb, tid, gb, tid, idx_unsigned ? "fc_oob_u" : "fc_oob");
                 emit_c_escaped(fn, fn_len, out);
                 fprintf(out, "\", %d, (%s)_i%d, (unsigned long long)_s%d.len); "
                              "_s%d.ptr + _i%d; }))",
@@ -4294,11 +4316,18 @@ static void emit_expr(Expr *e, FILE *out) {
             /* unguarded: no bounds check (UB on reversed/past-end range). */
             fprintf(out, "; ");
         } else {
+            /* Width covers both bound expressions and the stored len. A NULL
+             * lo is the constant 0 and a NULL hi is the len itself — both fit
+             * the stored width, so they don't widen the compare. */
+            int lw = g_len_repr >= 64 ? 64 : g_len_repr;
+            int glo = e->slice.lo ? guard_bits(e->slice.lo->type) : lw;
+            int ghi = e->slice.hi ? guard_bits(e->slice.hi->type) : lw;
+            int gb = glo > ghi ? glo : ghi;
             fprintf(out, "; if (__builtin_expect("
-                         "(uint64_t)_lo%d > (uint64_t)_hi%d || "
-                         "(uint64_t)_hi%d > (uint64_t)_s%d.len, 0)) "
+                         "(uint%d_t)_lo%d > (uint%d_t)_hi%d || "
+                         "(uint%d_t)_hi%d > (uint%d_t)_s%d.len, 0)) "
                          "fc_oob_sub(\"",
-                tid, tid, tid, tid);
+                gb, tid, gb, tid, gb, tid, gb, tid);
             emit_c_escaped(fn, fn_len, out);
             fprintf(out, "\", %d, (long long)_lo%d, (long long)_hi%d, (long long)_s%d.len); ",
                     line, tid, tid, tid);
@@ -4494,12 +4523,20 @@ static void emit_expr(Expr *e, FILE *out) {
          * is a pass2-verified constant, and a function call is not a constant
          * expression) and when pass2 proved len non-negative. */
         bool guard = !g_const_context && !e->slice_lit.len_nonneg;
+        /* Under a narrow --len-repr, every runtime len additionally needs the
+         * capacity check (a non-negative u32 can still exceed an i16 len) —
+         * compile-time lens were judged statically in pass2. */
+        Expr *len_e = e->slice_lit.len_expr;
+        bool len_is_lit = len_e->kind == EXPR_INT_LIT ||
+                          (len_e->kind == EXPR_CAST && len_e->cast.operand &&
+                           len_e->cast.operand->kind == EXPR_INT_LIT);
+        bool cap = !g_const_context && g_len_repr < 64 && !len_is_lit;
         Type *ptr_type = e->slice_lit.ptr_expr->type;
         bool const_ptr = ptr_type && ptr_type->kind == TYPE_POINTER && ptr_type->is_const;
         /* The guard hoists len into a temp; to keep ptr-before-len source order
          * (left-to-right) we then hoist ptr first.  Also sequence when both
          * operands have side effects even without the guard. */
-        bool seq = guard || (!g_const_context &&
+        bool seq = guard || cap || (!g_const_context &&
                              expr_has_side_effects(e->slice_lit.ptr_expr) &&
                              expr_has_side_effects(e->slice_lit.len_expr));
         if (seq) {
@@ -4521,6 +4558,13 @@ static void emit_expr(Expr *e, FILE *out) {
                 const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
                 int fn_len = (int)strlen(fn);
                 fprintf(out, "if (__builtin_expect(_sll%d < 0, 0)) fc_neg_len(\"", tid);
+                emit_c_escaped(fn, fn_len, out);
+                fprintf(out, "\", %d, (long long)_sll%d); ", e->loc.line, tid);
+            }
+            if (cap) {
+                const char *fn = e->loc.filename ? e->loc.filename : "<unknown>";
+                int fn_len = (int)strlen(fn);
+                fprintf(out, "if (__builtin_expect(_sll%d > FC_LEN_MAX, 0)) fc_len_cap(\"", tid);
                 emit_c_escaped(fn, fn_len, out);
                 fprintf(out, "\", %d, (long long)_sll%d); ", e->loc.line, tid);
             }
@@ -4835,7 +4879,9 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->for_expr.iter, out);
             fprintf(out, ";\n");
             emit_indent(out);
-            fprintf(out, "for (int64_t _fi%d = 0; _fi%d < _fs%d.len; _fi%d++) {\n",
+            /* fc_len_t counter: the internal element-iteration counter is an
+             * implementation detail (spec §for), so it runs at stored width. */
+            fprintf(out, "for (fc_len_t _fi%d = 0; _fi%d < _fs%d.len; _fi%d++) {\n",
                 tid, tid, tid, tid);
             indent_level++;
 
@@ -5368,6 +5414,14 @@ static void emit_expr(Expr *e, FILE *out) {
                 fprintf(out, "({ int64_t _asz%d = (int64_t)", tid);
                 emit_expr(e->alloc_expr.size_expr, out);
                 fprintf(out, "; ");
+                if (g_len_repr < 64) {
+                    /* Cap before the alloca so an impossible length traps
+                     * instead of dimensioning the stack buffer. */
+                    const char *afn = e->loc.filename ? e->loc.filename : "<unknown>";
+                    fprintf(out, "if (__builtin_expect(_asz%d > FC_LEN_MAX, 0)) fc_len_cap(\"", tid);
+                    emit_c_escaped(afn, (int)strlen(afn), out);
+                    fprintf(out, "\", %d, (long long)_asz%d); ", e->loc.line, tid);
+                }
                 emit_elem_type(e->alloc_expr.alloc_type, out);
                 fprintf(out, "* _aptr%d = (", tid);
                 emit_elem_type(e->alloc_expr.alloc_type, out);
@@ -5403,13 +5457,18 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "))");
         } else if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr) {
-            /* alloc(T[N]) → T[]? */
+            /* alloc(T[N]) → T[]? — under a narrow --len-repr, a count over the
+             * stored width is an allocation that cannot succeed: answer through
+             * the existing failure channel (none), not a trap. */
             int tid = temp_counter++;
             fprintf(out, "({ int64_t _asz%d = (int64_t)", tid);
             emit_expr(e->alloc_expr.size_expr, out);
             fprintf(out, "; ");
             emit_elem_type(e->alloc_expr.alloc_type, out);
-            fprintf(out, "* _aptr%d = (", tid);
+            fprintf(out, "* _aptr%d = ", tid);
+            if (g_len_repr < 64)
+                fprintf(out, "_asz%d > FC_LEN_MAX ? NULL : ", tid);
+            fprintf(out, "(");
             emit_elem_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "*)calloc(fc_alloc_n(_asz%d), sizeof(", tid);
             emit_elem_type(e->alloc_expr.alloc_type, out);
@@ -5879,11 +5938,17 @@ static void emit_func_decl(Decl *d, FILE *out) {
         fprintf(out, "    fc_str *_args = (fc_str*)__builtin_alloca((size_t)argc * sizeof(fc_str));\n");
         fprintf(out, "    for (int _i = 0; _i < argc; _i++) {\n");
         fprintf(out, "        _args[_i].ptr = (uint8_t*)argv[_i];\n");
-        fprintf(out, "        _args[_i].len = (int64_t)strlen(argv[_i]);\n");
+        if (g_len_repr < 64)
+            fprintf(out, "        _args[_i].len = fc_chk_len(\"<startup>\", 0, (int64_t)strlen(argv[_i]));\n");
+        else
+            fprintf(out, "        _args[_i].len = (int64_t)strlen(argv[_i]);\n");
         fprintf(out, "    }\n");
         fprintf(out, "    return fc_main((");
         emit_type(fn->func.params[0].type, out);
-        fprintf(out, "){ .ptr = _args, .len = (int64_t)argc });\n");
+        if (g_len_repr < 64)
+            fprintf(out, "){ .ptr = _args, .len = fc_chk_len(\"<startup>\", 0, (int64_t)argc) });\n");
+        else
+            fprintf(out, "){ .ptr = _args, .len = (int64_t)argc });\n");
         fprintf(out, "}\n\n");
     }
 }
@@ -7097,7 +7162,7 @@ static void emit_eq_func(Type *t, FILE *out) {
             emit_type(elem, out);
             fprintf(out, ")) == 0;\n");
         } else {
-            fprintf(out, "    for (int64_t _i = 0; _i < a.len; _i++)\n");
+            fprintf(out, "    for (fc_len_t _i = 0; _i < a.len; _i++)\n");
             fprintf(out, "        if (!");
             if (type_needs_eq_func(elem)) {
                 emit_eq_func_name(elem, out);
@@ -7866,8 +7931,13 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     int all_count;
     collect_all_decls(prog, &all_decls, &all_count);
 
-    /* Detect which feature-gated headers are needed */
-    g_needs_stdio = false;
+    /* Detect which feature-gated headers are needed. A narrow --len-repr
+     * forces stdio: slice-construction capacity guards (fc_chk_len /
+     * fc_len_cap) print a diagnostic before aborting, and they attach to
+     * paths spread across the emitter (raw-parts literals, cstr→str, argv,
+     * interpolation, runtime-sized alloca) — gating each individually would
+     * be a drift hazard for no practical gain on the targets that use it. */
+    g_needs_stdio = g_len_repr < 64;
     g_needs_math = false;
     g_needs_float = false;
     g_needs_errno = false;
@@ -7962,8 +8032,16 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         "}\n"
         "#endif\n");
 
+    /* Slice length storage (--len-repr). The FC-level type of every length is
+     * i64 on every profile; fc_len_t is only the *stored* width. Soundness:
+     * every stored len is proven in [0, FC_LEN_MAX] at slice construction
+     * (statically for compile-time lens, via fc_chk_len otherwise), so reads
+     * widen losslessly and guards may compare at stored width. */
+    fprintf(out, "typedef int%d_t fc_len_t;\n", g_len_repr);
+    fprintf(out, "#define FC_LEN_MAX INT%d_MAX\n", g_len_repr);
+
     /* Always emit fc_str (alias for uint8 slice) */
-    fprintf(out, "typedef struct { uint8_t* ptr; int64_t len; } fc_str;\n");
+    fprintf(out, "typedef struct { uint8_t* ptr; fc_len_t len; } fc_str;\n");
 
     /* Narrowing-conversion guards. FC uses int64 for all slice/string lengths
      * and sizes; these helpers assert that a value fits in the target width
@@ -8064,6 +8142,18 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             "    FC_ABORT();\n"
             "}\n"
             "__attribute__((cold, noreturn, unused))\n"
+            "static void fc_len_cap(const char *file, int line, long long len) {\n"
+            "    fprintf(stderr, \"%%s:%%d: slice length %%lld exceeds length capacity %%lld\\n\",\n"
+            "            file, line, len, (long long)FC_LEN_MAX);\n"
+            "    FC_ABORT();\n"
+            "}\n"
+            "__attribute__((unused))\n"
+            "static inline fc_len_t fc_chk_len(const char *file, int line, int64_t n) {\n"
+            "    if (__builtin_expect(n < 0, 0)) fc_neg_len(file, line, (long long)n);\n"
+            "    if (__builtin_expect(n > FC_LEN_MAX, 0)) fc_len_cap(file, line, (long long)n);\n"
+            "    return (fc_len_t)n;\n"
+            "}\n"
+            "__attribute__((cold, noreturn, unused))\n"
             "static void fc_null_some(const char *file, int line) {\n"
             "    fprintf(stderr, \"%%s:%%d: some() of a null pointer "
             "(pointer options use null as the none sentinel)\\n\", file, line);\n"
@@ -8092,6 +8182,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         symmap_add("fc_oob_u", NULL, "<runtime>", 0);
         symmap_add("fc_oob_sub", NULL, "<runtime>", 0);
         symmap_add("fc_neg_len", NULL, "<runtime>", 0);
+        symmap_add("fc_len_cap", NULL, "<runtime>", 0);
+        symmap_add("fc_chk_len", NULL, "<runtime>", 0);
         symmap_add("fc_null_some", NULL, "<runtime>", 0);
         symmap_add("fc_zero_err", NULL, "<runtime>", 0);
         symmap_add("fc_overflow", NULL, "<runtime>", 0);
@@ -8312,7 +8404,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         emit_type_ident(s->slice.elem, out);
         fprintf(out, "_s { ");
         emit_elem_type(s->slice.elem, out);
-        fprintf(out, "* ptr; int64_t len; };\n");
+        fprintf(out, "* ptr; fc_len_t len; };\n");
     }
 
     /* Emit option/result bodies whose inner types are already complete —

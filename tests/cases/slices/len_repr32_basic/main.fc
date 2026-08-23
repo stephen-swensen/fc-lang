@@ -1,0 +1,9 @@
+// --len-repr 32 smoke: same program, 32-bit stored lens.
+let main = (args: str[]) ->
+    let s = "hello world"
+    assert(s.len == 11)
+    let sub = s[6..s.len]
+    assert(sub == "world")
+    let i = 2i16
+    assert(sub[i] == 'r')
+    0

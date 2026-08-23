@@ -70,8 +70,9 @@ run_one_test() {
         ulimit -v "${FC_TEST_MEM_CAP_KB:-3145728}" 2>/dev/null || true
     fi
 
-    # Compile FC -> C
-    if ! $FCC $fc_files $fc_flags -o "$c_file" 2>"$TMPDIR/${slug}.stderr"; then
+    # Compile FC -> C. FCC_EXTRA_ARGS lets a whole suite run be re-based on
+    # extra fcc options (e.g. FCC_EXTRA_ARGS="--len-repr 16" via make test-gcc-len16).
+    if ! $FCC $fc_files $fc_flags $FCC_EXTRA_ARGS -o "$c_file" 2>"$TMPDIR/${slug}.stderr"; then
         if [ -n "$error_file" ] && [ -f "$error_file" ]; then
             local expected_error=$(cat "$error_file")
             local actual_error=$(cat "$TMPDIR/${slug}.stderr")

@@ -1,0 +1,7 @@
+// Module-scope (const context) slice literals emit file-scope C initializers
+// with no runtime guard, so a computed over-capacity len must be caught
+// statically through the const-fold path.
+module vga =
+    let fb = u8[] { ptr = (u8*) 0xA0000usize, len = 20000 + 20000 }
+let main = (args: str[]) ->
+    (i32) vga.fb.len

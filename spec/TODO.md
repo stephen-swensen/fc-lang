@@ -4,6 +4,43 @@ Open items for the FC compiler and specification. Resolved items archived in `sp
 
 ---
 
+## Slice length representation `--len-repr` — IMPLEMENTED 2026-08-22; follow-ups open
+
+Resolution of the i64-length / small-target tension (rc.6 audit item 5's deeper half;
+niche.md structural blocker 1). The settled position: **the semantic domain of every
+length is `i64` on every target, forever; only the stored representation is a build
+knob.** `fcc --len-repr <16|32|64>` (default 64 — historical behavior) sizes `fc_len_t`,
+every slice/str len field, and every bounds compare (emitted at
+`max(index static width, len width)` — a single native compare for narrow indices).
+Soundness invariant: every stored len proven in `[0, FC_LEN_MAX]` at construction —
+compile-time lens (string/slice literals, fixed-array sizes incl. per-instance
+const-generic folds, const-context computed lens) judged statically in pass2; runtime
+lens guarded at the construction sites (raw-parts `fc_chk_len`, runtime `alloca` cap,
+cstr→str strlen, argv, interpolation `_flen` cap), with `alloc(T[n] { })` over capacity
+answering `none` (an allocation that cannot succeed). `&s.len` is a compile error (the
+stored field can't be an honest `i64*`). Reads widen (`(int64_t)s.len`) — free at 64.
+Spec §Length representation; tests `slices/len_repr*`, `generics/len_repr16_const_inst_err`;
+`make test-{gcc,clang}-len16` runs the whole suite at 16 on the host (green from day one,
+both compilers, -O0 and -O2).
+
+**Follow-up — as-if narrowing of range-form `for` counters.** `for i in 0..s.len` binds
+a user-visible `i64` and emits an `int64_t` counter, the main residual 64-bit cost in
+idiomatic loops on 16-bit targets (element-form counters already run at `fc_len_t`).
+Semantics are deterministic, so the emitter may narrow the counter whenever all uses
+provably fit (endpoints bounded by a stored len or by narrow constants) — pure as-if,
+no spec change (§Length representation already grants the latitude). Do after real
+gcc-ia16/djgpp measurements show it matters.
+
+**Follow-up — the freestanding profile (Lane 1 gates).** The dependency half of
+small-target support: what the emitted C assumes about its runtime (stdio-printing
+guards, malloc, snprintf, …) and how each assumption becomes a hook or a compile-error
+gate. Audited and planned in **`spec/freestanding.md`** (2026-08-22) — eight items
+(`fc_trap` keystone → allocator hook → float/atomics/backtraces gates → freestanding
+interpolation formatter → stdlib layering → `--profile <name>` bundles that imply a
+`--len-repr`, gcc `-O2`-style; `--len-repr` stays the single primitive knob). Per-target
+needs and ordering live there; the djgpp wolf-fc experiment needs none of it and comes
+first.
+
 ## Const generics (value parameters) — IMPLEMENTED 2026-07-17 on branch `n-const-generics`; evaluation open
 
 Generic parameters over compile-time integers, motivated by std::wideint's hand-enumerated

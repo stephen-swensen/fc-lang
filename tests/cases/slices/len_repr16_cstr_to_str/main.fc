@@ -1,0 +1,8 @@
+// cstr -> str computes len via strlen at runtime; under a narrow repr it
+// routes through the capacity check and still round-trips correctly.
+let main = (args: str[]) ->
+    let c = c"forty-two"
+    let s = (str) c
+    assert(s.len == 9)
+    assert(s == "forty-two")
+    0

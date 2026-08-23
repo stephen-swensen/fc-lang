@@ -1712,7 +1712,20 @@ bad:
  * on failure. */
 static bool resolve_size_ref_inplace(CheckCtx *ctx, Type *t, SrcLoc loc) {
     Type *sr = t->fixed_array.size_ref;
-    if (!sr) return true;
+    if (!sr) {
+        /* Plain literal size (`u8[40000]`): already folded at parse and
+         * positivity-checked there, but the --len-repr capacity bound is a
+         * pass2 judgment — a fixed array is viewed as a slice, so its length
+         * must fit the stored len width. */
+        if (t->fixed_array.size > fc_len_max()) {
+            diag_error(loc, "fixed array size %lld exceeds --len-repr %d length capacity %lld",
+                       (long long)t->fixed_array.size, g_len_repr, (long long)fc_len_max());
+            t->fixed_array.size = 1;   /* poison-to-valid: types are shared, so a
+                                          later walk must not re-report */
+            return false;
+        }
+        return true;
+    }
     if (sr->kind == TYPE_TYPE_VAR) return true;   /* bare 'n — kind-checked by inference */
     if (sr->kind == TYPE_CONST_INT) {
         t->fixed_array.size = sr->const_int.value;
@@ -1734,6 +1747,14 @@ static bool resolve_size_ref_inplace(CheckCtx *ctx, Type *t, SrcLoc loc) {
     if (t->fixed_array.size <= 0) {
         diag_error(loc, "fixed array size must be positive, got %lld",
                    (long long)t->fixed_array.size);
+        return false;
+    }
+    /* A fixed array is viewed as a slice (its field access wraps ptr+len), so
+     * its length must fit the stored len width. Vacuous at --len-repr 64. */
+    if (t->fixed_array.size > fc_len_max()) {
+        diag_error(loc, "fixed array size %lld exceeds --len-repr %d length capacity %lld",
+                   (long long)t->fixed_array.size, g_len_repr, (long long)fc_len_max());
+        t->fixed_array.size = 1;   /* poison-to-valid (see the !sr branch) */
         return false;
     }
     return true;
@@ -2123,6 +2144,17 @@ static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc) 
             else
                 diag_error(loc, "fixed array size must be positive, got %lld (in '%s')",
                            (long long)sz, type_name(t));
+            return false;
+        }
+        if (type_fixed_array_size(t, &sz) && sz > fc_len_max()) {
+            if (frame)
+                gen_inst_diag(frame, loc, "fixed array size %lld exceeds --len-repr %d "
+                              "length capacity %lld (in '%s')",
+                              (long long)sz, g_len_repr, (long long)fc_len_max(), type_name(t));
+            else
+                diag_error(loc, "fixed array size %lld exceeds --len-repr %d "
+                           "length capacity %lld (in '%s')",
+                           (long long)sz, g_len_repr, (long long)fc_len_max(), type_name(t));
             return false;
         }
         return check_inst_sizes_frame(t->fixed_array.elem, frame, loc);
@@ -4015,6 +4047,11 @@ static bool validate_generic_body(Expr *e, Arena *arena,
                     gen_inst_diag(frame, e->array_lit.size_expr->loc,
                         "slice literal length cannot be negative, got %lld", (long long)sz);
                     ok = false;
+                } else if (sz > fc_len_max()) {
+                    gen_inst_diag(frame, e->array_lit.size_expr->loc,
+                        "slice literal length %lld exceeds --len-repr %d length capacity %lld",
+                        (long long)sz, g_len_repr, (long long)fc_len_max());
+                    ok = false;
                 } else if (e->array_lit.elem_count > 0 &&
                            (int64_t)e->array_lit.elem_count != sz) {
                     gen_inst_diag(frame, e->loc,
@@ -4746,6 +4783,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return e->type;
 
     case EXPR_STRING_LIT:
+        /* The literal's decoded byte count is its slice len — over the stored
+         * width it can't be represented, so reject statically. Source length
+         * bounds decoded length (escapes only shrink), so the gate makes the
+         * decode run only on plausibly-oversized literals. */
+        if (g_len_repr < 64 && (int64_t)e->string_lit.length > fc_len_max()) {
+            int blen = decode_str_lit(e->string_lit.value, e->string_lit.length, NULL);
+            if ((int64_t)blen > fc_len_max())
+                diag_error(e->loc,
+                    "string literal length %d exceeds --len-repr %d length capacity %lld",
+                    blen, g_len_repr, (long long)fc_len_max());
+        }
         e->type = type_const_str();
         e->prov = PROV_STATIC;
         return e->type;
@@ -5446,6 +5494,20 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     "cannot take address of inline array field; use .ptr for the underlying pointer");
                 e->type = type_error();
                 return e->type;
+            }
+            /* A slice's .len is stored at the --len-repr width (fc_len_t in
+             * the emitted C) while its FC type is i64, so a pointer to it
+             * cannot be given an honest FC type. Copy the value instead. */
+            if ((operand->kind == EXPR_FIELD || operand->kind == EXPR_DEREF_FIELD) &&
+                operand->field.name && strcmp(operand->field.name, "len") == 0) {
+                Type *aot = operand->field.object->type;
+                if (aot && aot->kind == TYPE_POINTER) aot = aot->pointer.pointee;
+                if (aot && aot->kind == TYPE_SLICE) {
+                    diag_error(e->loc,
+                        "cannot take address of slice .len; bind it to a local first");
+                    e->type = type_error();
+                    return e->type;
+                }
             }
             /* Does the operand name a whole binding (an ident or a module
              * member), rather than a content sub-path? If so, capture its
@@ -8066,6 +8128,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->type = type_error();
                 return e->type;
             }
+            if ((int64_t) raw > fc_len_max()) {
+                diag_error(e->array_lit.size_expr->loc,
+                    "slice literal length %lld exceeds --len-repr %d length capacity %lld",
+                    (long long) (int64_t) raw, g_len_repr, (long long) fc_len_max());
+                e->type = type_error();
+                return e->type;
+            }
         }
         /* Element count must match the declared length exactly. The empty
          * form `{ }` (elem_count == 0) zero-initializes all elements and is
@@ -8175,6 +8244,16 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     diag_error(orig_len->loc, "slice literal length cannot be negative");
                 else
                     e->slice_lit.len_nonneg = true;
+            }
+            /* Statically-known len over the stored width is a compile error;
+             * runtime lens are guarded at construction (codegen fc_chk_len). */
+            if (orig_len->kind == EXPR_INT_LIT && !orig_len->int_lit.out_of_range &&
+                (int64_t)orig_len->int_lit.value >= 0 &&
+                (int64_t)orig_len->int_lit.value > fc_len_max()) {
+                diag_error(orig_len->loc,
+                    "slice length %lld exceeds --len-repr %d length capacity %lld",
+                    (long long)(int64_t)orig_len->int_lit.value, g_len_repr,
+                    (long long)fc_len_max());
             }
         }
         Type *slice_type = type_slice(ctx->arena, elem_type);
@@ -9241,6 +9320,15 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
         if (!is_str_type(type)) {
             diag_error(pat->loc, "string pattern on non-str type %s", type_name(type));
             return;
+        }
+        /* Same stored-width bound as string-literal expressions: the pattern
+         * is emitted as an fc_str constant whose len must fit fc_len_t. */
+        if (g_len_repr < 64 && (int64_t)pat->string_lit.length > fc_len_max()) {
+            int blen = decode_str_lit(pat->string_lit.value, pat->string_lit.length, NULL);
+            if ((int64_t)blen > fc_len_max())
+                diag_error(pat->loc,
+                    "string literal length %d exceeds --len-repr %d length capacity %lld",
+                    blen, g_len_repr, (long long)fc_len_max());
         }
         break;
     case PAT_SOME:
@@ -11020,9 +11108,15 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
          * negative value, to avoid a duplicate diagnostic. */
         if (!slicelit_len_is_literal(e->slice_lit.len_expr)) {
             ConstScalar cs;
-            if (const_read_scalar(l, &cs) && cs.is_signed && (int64_t)cs.val < 0)
-                diag_error(e->slice_lit.len_expr->loc,
-                    "slice literal length cannot be negative");
+            if (const_read_scalar(l, &cs)) {
+                if (cs.is_signed && (int64_t)cs.val < 0)
+                    diag_error(e->slice_lit.len_expr->loc,
+                        "slice literal length cannot be negative");
+                else if (cs.val > (uint64_t)fc_len_max())
+                    diag_error(e->slice_lit.len_expr->loc,
+                        "slice length %llu exceeds --len-repr %d length capacity %lld",
+                        (unsigned long long)cs.val, g_len_repr, (long long)fc_len_max());
+            }
         }
         if (p == e->slice_lit.ptr_expr && l == e->slice_lit.len_expr) return e;
         Expr *n = arena_alloc(ctx->arena, sizeof(Expr));

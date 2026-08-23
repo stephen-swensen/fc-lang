@@ -2,6 +2,66 @@
 #include <assert.h>
 #include <stdio.h>
 
+/* ---- Slice length representation (--len-repr) ---- */
+
+int g_len_repr = 64;
+
+int64_t fc_len_max(void) {
+    switch (g_len_repr) {
+    case 16: return INT16_MAX;
+    case 32: return INT32_MAX;
+    default: return INT64_MAX;
+    }
+}
+
+/* ---- String-literal decoding ---- */
+
+static int hex_digit_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return 0;
+}
+
+/* Decode string-literal source text into raw bytes. The lexer has already
+ * rejected malformed escapes, so the decode is total. Writes to `out` when
+ * non-NULL and always returns the byte count, so one routine both sizes a
+ * buffer and fills it: every consumer's length and codegen's bytes come from
+ * the same place and cannot disagree. */
+int decode_str_lit(const char *s, int slen, unsigned char *out) {
+    int n = 0;
+    for (int i = 0; i < slen; i++) {
+        unsigned char b;
+        if (s[i] == '%' && i + 1 < slen && s[i + 1] == '%') {
+            b = '%';
+            i++;
+        } else if (s[i] == '\\' && i + 1 < slen) {
+            i++;
+            switch (s[i]) {
+            case 'n': b = '\n'; break;
+            case 't': b = '\t'; break;
+            case 'r': b = '\r'; break;
+            case '0': b = '\0'; break;
+            case 'x':
+                if (i + 2 < slen) {
+                    b = (unsigned char)((hex_digit_val(s[i + 1]) << 4) |
+                                        hex_digit_val(s[i + 2]));
+                    i += 2;
+                } else {
+                    b = 'x';
+                }
+                break;
+            default: b = (unsigned char)s[i]; break;  /* \\ \" \' */
+            }
+        } else {
+            b = (unsigned char)s[i];
+        }
+        if (out) out[n] = b;
+        n++;
+    }
+    return n;
+}
+
 /* ---- Arena allocator ---- */
 
 static ArenaPage *arena_new_page(size_t min_size) {

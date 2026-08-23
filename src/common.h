@@ -92,6 +92,26 @@ const char *intern_cstr(InternTable *t, const char *s);
  * exactly (see str_sprintf), so no component can be silently clipped. */
 const char *intern_sprintf(InternTable *t, const char *fmt, ...);
 
+/* ---- Slice length representation (--len-repr) ----
+ *
+ * The *semantic* type of every slice/string length is i64 on every profile —
+ * the type checker never sees this knob. What --len-repr selects is the
+ * *stored* width of the len field in the emitted C (fc_len_t) so small
+ * targets pay native-width slices and guards. Soundness rides one invariant:
+ * every stored len is proven in [0, fc_len_max()] at slice construction
+ * (statically where the value is compile-time, via an abort guard otherwise),
+ * after which reads widen losslessly and bounds checks compare at stored
+ * width. 64 (the default) reproduces the historical behavior. */
+extern int g_len_repr;            /* 16, 32, or 64 */
+int64_t fc_len_max(void);         /* INT16_MAX / INT32_MAX / INT64_MAX */
+
+/* Decoded byte length of string-literal source text (escapes collapsed,
+ * `%%` → `%`); when `out` is non-NULL also writes the bytes. One routine
+ * both sizes and fills so no consumer's length can disagree with codegen's
+ * bytes. Lives here because pass2 (capacity checks) and codegen (emission)
+ * both need it. */
+int decode_str_lit(const char *s, int slen, unsigned char *out);
+
 /* ---- C identifier hygiene ---- */
 
 /* True if `name` is a C reserved word (C11/C23 keyword or implementation-

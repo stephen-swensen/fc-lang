@@ -79,7 +79,8 @@ int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr,
                 "usage: fcc <input.fc> [input2.fc ...] [-o output.c]\n"
-                "       [@response.rsp] [--flag <name[=value]>] [--no-auto-detect] [--backtraces]\n");
+                "       [@response.rsp] [--flag <name[=value]>] [--no-auto-detect] [--backtraces]\n"
+                "       [--len-repr <16|32|64>]\n");
         return 1;
     }
 
@@ -107,6 +108,7 @@ int main(int argc, char **argv) {
     Flag *flags = ca.flags;
     int flag_count = ca.flag_count;
     bool backtraces = ca.backtraces;
+    g_len_repr = ca.len_repr;
 
     /* Initialize memory */
     Arena arena;

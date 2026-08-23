@@ -1,0 +1,10 @@
+// An unsigned runtime len sets len_nonneg (no negative guard), but the
+// capacity guard must still fire: non-negative does not mean representable.
+let main = (args: str[]) ->
+    match alloc(u8, 16) with
+    | some(p) ->
+        let mut n = 40000u32
+        n = n + 0u32
+        let s = u8[] { ptr = p, len = n }
+        (i32) s.len
+    | none -> 1

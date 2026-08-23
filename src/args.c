@@ -374,6 +374,7 @@ static bool add_inputs(CompileArgs *out, const char *tok, const char *dir) {
 
 bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
     memset(out, 0, sizeof *out);
+    out->len_repr = 64;
 
     /* Auto-detect host flags unless suppressed (matches the historical CLI
      * default); later --flag entries override by name. */
@@ -395,6 +396,19 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
                                                        : dupn(val, (int)strlen(val));
         } else if (strcmp(a, "--no-auto-detect") == 0) {
             /* handled above */
+        } else if (strcmp(a, "--len-repr") == 0) {
+            if (i + 1 >= e->count) {
+                out->error = msgf("--len-repr requires a value (16, 32, or 64)");
+                return false;
+            }
+            const char *val = e->tokens[++i];
+            if (strcmp(val, "16") == 0)      out->len_repr = 16;
+            else if (strcmp(val, "32") == 0) out->len_repr = 32;
+            else if (strcmp(val, "64") == 0) out->len_repr = 64;
+            else {
+                out->error = msgf("invalid --len-repr '%s' (expected 16, 32, or 64)", val);
+                return false;
+            }
         } else if (strcmp(a, "--backtraces") == 0) {
             out->backtraces = true;
         } else if (strcmp(a, "--flag") == 0 && i + 1 < e->count) {

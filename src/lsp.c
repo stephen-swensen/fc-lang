@@ -1539,6 +1539,12 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
     bool have_rsp = false;
     char *rsp_err = NULL;       /* set when an lsp.rsp exists but is unusable */
 
+    /* Default length representation; an lsp.rsp overrides below so editor
+     * capacity diagnostics match what `fcc @lsp.rsp` would report. Reset per
+     * unit — units are analyzed serially, and one project's --len-repr must
+     * not leak into the next. */
+    g_len_repr = 64;
+
     char *rsp_path = find_lsp_rsp(doc->path);
     if (rsp_path) {
         /* Sized to the path: a clipped "@..." names a different file (or none),
@@ -1551,6 +1557,7 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
             have_rsp = true;
             flags = rsp_ca.flags;
             flag_count = rsp_ca.flag_count;
+            g_len_repr = rsp_ca.len_repr;
 
             char *doc_real = canon_path(doc->path);
             for (int i = 0; i < rsp_ca.input_count; i++) {

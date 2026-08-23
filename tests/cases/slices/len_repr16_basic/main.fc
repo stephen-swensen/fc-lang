@@ -1,0 +1,39 @@
+// Core slice behavior is identical under --len-repr 16: .len is still i64,
+// indexing/subslicing/iteration/equality/interpolation all keep their
+// semantics; only the stored width (and guard width) changed.
+let main = (args: str[]) ->
+    let s = "hello world"
+    assert(s.len == 11)
+    let widened = s.len + 9000000000i64     // .len reads are full i64 values
+    assert(widened == 9000000011i64)
+
+    // narrow index: guard runs at native width
+    let i = 4i16
+    assert(s[i] == 'o')
+
+    // default i32 index
+    let j = 6
+    assert(s[j] == 'w')
+
+    // subslice with narrow bounds
+    let hello = s[0i16..5i16]
+    assert(hello.len == 5)
+    assert(hello == "hello")
+
+    // element + index iteration
+    let mut total = 0i64
+    for k, c in hello do
+        total = total + k + (i64) c
+    assert(total > 0)
+
+    // raw-parts construction with an in-range runtime len
+    let buf = i32[8] { 1, 2, 3, 4, 5, 6, 7, 8 }
+    let mut n = 8
+    n = n - 2
+    let view = i32[] { ptr = buf.ptr, len = (i64) n }
+    assert(view.len == 6 && view[5] == 6)
+
+    // interpolation result is a slice construction too
+    let msg = "n=%d{n} len=%d{view.len}"
+    assert(msg == "n=6 len=6")
+    0
