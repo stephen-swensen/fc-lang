@@ -45,7 +45,8 @@
 //     logsin) feeds a gain table for exp lookup. Wave shapes 0..3 are
 //     the four OPL2 patterns (sine, half-sine, abs-sine, quarter-
 //     pulse) implemented by gating the negative half and/or falling
-//     quarter and forcing the sign positive for abs-sine.
+//     quarter and forcing the sign positive for abs-sine and
+//     quarter-pulse (whose two rising quarters both sound).
 //
 // We sample at the host audio rate (44.1 kHz typical) rather than the
 // chip's native 49716 Hz. The rate counter increments per output
@@ -498,14 +499,17 @@ module opl2 =
             let fnum_msb4 = (fnum >> 6) & 15
             let raw = ksl_rom(fnum_msb4) - (7 - block) * 8
             let units = if raw < 0 then 0 else raw
-            // Per YM3812 spec: KSL=1/2/3 → 1.5/3/6 dB per octave. The
-            // ROM gives 8 units per octave at 0.375 dB/unit, so the
-            // per-octave totals are units * factor * 0.375 where
-            // factor = 0.5 / 1.0 / 2.0 for KSL 1/2/3. We then convert
-            // to env units (0.1875 dB) by another *2, giving overall
-            // multipliers of 1, 2, 4 in env units.
-            let env_units = if ksl == 1 then units
-                else if ksl == 2 then units * 2
+            // KSL scaling per the actual silicon: KSL=1/2/3 → 3/1.5/6 dB
+            // per octave. The original YM3812 datasheet printed 1.5/3/6 —
+            // i.e. codes 1 and 2 the other way around — but the chip never
+            // did that: every decap-derived reference (Nuked's kslshift
+            // {8,1,2,0}, dbopl, MAME fmopl) and the corrected YMF262
+            // datasheet have 01 = 3 dB/oct and 10 = 1.5 dB/oct. The ROM
+            // gives 8 units per octave at 0.375 dB/unit; converting to env
+            // units (0.1875 dB) doubles, so the multipliers land on
+            // 2 / 1 / 4 for KSL 1 / 2 / 3.
+            let env_units = if ksl == 1 then units * 2
+                else if ksl == 2 then units
                 else units * 4
             c.op_ksl_atten[idx] = env_units
 
@@ -703,8 +707,8 @@ module opl2 =
     //   quarter = bit 8     : 0 = rising, 1 = falling
     //   idx = low 8 bits    : log-sin table index (mirrored on falling)
     //
-    // The four OPL2 waveforms gate the second half and/or falling
-    // quarter and may force the sign positive (abs-sine).
+    // The four OPL2 waveforms gate the negative half and/or falling
+    // quarter and may force the sign positive (abs-sine, quarter-pulse).
     let wave_sample = (c: chip*, phase: f64, wf: i32, total_atten: i32) ->
         let p = phase - math.floor(phase)
         wave_at_index(c, (i32) (p * 1024.0) & 1023, wf, total_atten)
@@ -721,10 +725,16 @@ module opl2 =
         let active = if wf == 0 then true
             else if wf == 1 then half == 0
             else if wf == 2 then true
-            else (half == 0 && quarter == 0)
+            // Waveform 3 is the rising quarter of |sin| in BOTH halves —
+            // two identical pulses per cycle, so its spectrum is dominated
+            // by the second harmonic and it reads an octave above the
+            // F-number. (An earlier version gated the second half too,
+            // leaving one pulse per cycle: every wave-3 carrier — e.g.
+            // Wolf3D's pickup dings — played an octave below real hardware.)
+            else quarter == 0
         if !active then 0i32
         else
-            let positive = if wf == 2 then true else half == 0
+            let positive = if wf >= 2 then true else half == 0
             // Combine attenuation contributions in fine units: shift the
             // env-unit total_atten (env + TL*4 + KSL + AM) left by 4 to
             // match the 1/16-unit precision of log_sin, then add.
