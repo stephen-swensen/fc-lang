@@ -1,0 +1,40 @@
+// Module-level `let mut` slice literals with the empty form `T[N]{ }`
+// must get real zero-filled backing storage (regression: codegen emitted
+// a null-backed slice whose .len passed bounds checks and faulted on
+// first access). Covers several element types, write persistence across
+// a function boundary, and that two empty literals don't share backing.
+
+module m =
+    let mut nums = i32[4]{ }
+    let mut reals = f64[3]{ }
+    let mut flags = bool[2]{ }
+    let mut bytes = u8[8]{ }
+    // Non-empty mut literal alongside, sharing the same emission pass.
+    let mut seeded = i32[3]{ 5, 6, 7 }
+
+    let bump = () ->
+        nums[0] = nums[0] + 1
+        bytes[7] = 200u8
+
+let main = (args: str[]) ->
+    // Every element of an empty-form literal starts zeroed.
+    for i in 0..4 do assert(m.nums[i] == 0)
+    for i in 0..3 do assert(m.reals[i] == 0.0)
+    assert(!m.flags[0] && !m.flags[1])
+    for i in 0..8 do assert(m.bytes[i] == 0u8)
+    assert(m.seeded[0] == 5 && m.seeded[1] == 6 && m.seeded[2] == 7)
+    // Writes land and persist across a function boundary.
+    m.bump()
+    m.bump()
+    assert(m.nums[0] == 2)
+    assert(m.bytes[7] == 200u8)
+    m.reals[2] = 1.5
+    assert(m.reals[2] == 1.5)
+    m.flags[1] = true
+    assert(m.flags[1])
+    m.seeded[1] = 60
+    assert(m.seeded[1] == 60)
+    // Distinct globals from identical literals have distinct backing.
+    assert(m.nums[1] == 0)
+    assert(m.seeded[0] == 5)
+    0

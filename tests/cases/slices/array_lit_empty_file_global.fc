@@ -1,0 +1,16 @@
+// File-level globals initialized with the empty slice form `T[N]{ }`.
+// The file-level path (init hoisted into the C main wrapper) is the
+// sibling of the module-member path (static backing at C file scope);
+// both must produce N zero-initialized, writable elements.
+
+let mut buf = i32[6]{ }
+let ro = i32[4]{ }
+
+let main = (args: str[]) ->
+    for i in 0..6 do assert(buf[i] == 0)
+    for i in 0..4 do assert(ro[i] == 0)
+    assert(buf.len == 6)
+    buf[5] = 42
+    assert(buf[5] == 42)
+    assert(buf[4] == 0)
+    0

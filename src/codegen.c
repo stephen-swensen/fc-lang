@@ -4434,12 +4434,13 @@ static void emit_expr(Expr *e, FILE *out) {
     case EXPR_ARRAY_LIT: {
         /* Module-scope const context: emit a slice header referencing the
          * static backing array that the pre-pass lifted to file scope.
-         * Empty arrays have no backing (C rejects zero-length initializers);
-         * emit a NULL/0 slice instead. */
+         * Only zero-length literals have no backing (C rejects zero-length
+         * arrays); those emit a NULL/0 slice.  The empty form `T[N]{ }`
+         * with N > 0 references a `{0}`-initialized backing. */
         if (g_const_context) {
             fprintf(out, "(");
             emit_type(e->type, out);
-            if (e->array_lit.elem_count == 0 || !e->array_lit.codegen_backing_name) {
+            if (!e->array_lit.codegen_backing_name) {
                 fprintf(out, "){ .ptr = 0, .len = ");
                 emit_expr(e->array_lit.size_expr, out);
                 fprintf(out, " }");
@@ -6564,9 +6565,18 @@ static void collect_const_backings(Expr *e, bool rodata) {
          * itself exiting 0. */
         for (int i = 0; i < e->array_lit.elem_count; i++)
             collect_const_backings(e->array_lit.elems[i], rodata);
-        /* Empty arrays don't need a backing — we emit a NULL/0 slice at
-         * the use site.  C11 rejects zero-length aggregate initializers. */
-        if (e->array_lit.elem_count > 0) {
+        /* Zero-length literals don't need a backing — we emit a NULL/0
+         * slice at the use site (C rejects zero-length arrays).  The empty
+         * form `T[N]{ }` with N > 0 means N zero-initialized elements and
+         * DOES need one, emitted as `static T name[N] = {0};` — a
+         * null-backed slice whose .len says N passes every bounds check
+         * and faults on first access.  pass2 guarantees the size of a
+         * concrete slice literal is a folded EXPR_INT_LIT. */
+        bool zero_fill = e->array_lit.elem_count == 0 &&
+            e->array_lit.size_expr &&
+            e->array_lit.size_expr->kind == EXPR_INT_LIT &&
+            e->array_lit.size_expr->int_lit.value > 0;
+        if (e->array_lit.elem_count > 0 || zero_fill) {
             char buf[32];
             int n = snprintf(buf, sizeof buf, "_fc_const_backing_%d",
                              g_const_backing_counter++);
@@ -8708,12 +8718,19 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
             fprintf(out, al->array_lit.codegen_backing_rodata
                          ? "static const " : "static ");
             emit_elem_type(al->array_lit.elem_type, out);
-            fprintf(out, " %s[] = {", al->array_lit.codegen_backing_name);
-            for (int j = 0; j < al->array_lit.elem_count; j++) {
-                if (j > 0) fprintf(out, ", ");
-                emit_expr(al->array_lit.elems[j], out);
+            if (al->array_lit.elem_count == 0) {
+                /* Empty form `T[N]{ }`: N zero-initialized elements. */
+                fprintf(out, " %s[%" PRIu64 "] = {0};\n",
+                        al->array_lit.codegen_backing_name,
+                        al->array_lit.size_expr->int_lit.value);
+            } else {
+                fprintf(out, " %s[] = {", al->array_lit.codegen_backing_name);
+                for (int j = 0; j < al->array_lit.elem_count; j++) {
+                    if (j > 0) fprintf(out, ", ");
+                    emit_expr(al->array_lit.elems[j], out);
+                }
+                fprintf(out, "};\n");
             }
-            fprintf(out, "};\n");
         }
         g_const_context = false;
         fprintf(out, "\n");
