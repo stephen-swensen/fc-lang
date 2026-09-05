@@ -41,6 +41,45 @@ interpolation formatter → stdlib layering → `--profile <name>` bundles that 
 needs and ordering live there; the djgpp wolf-fc experiment needs none of it and comes
 first.
 
+## As-if elision of provably-dead bounds guards
+
+Sibling of the for-counter narrowing follow-up above — same as-if family, same
+range-analysis machinery, implement together. Purely an optimization by definition: a
+guard may be omitted only when pass2 proves it can never fire, so observable behavior
+(including which abort a program hits) is unchanged and no spec change is needed.
+
+Two facts prove a guard dead, and both are FC-visible where a C compiler is blind:
+
+- **Index range**: a small value-range lattice over the typed AST — literals, `& mask`,
+  `%`, range-form `for` variables, if/match branch refinement, widening casts. (The
+  counter-narrowing item needs exactly this lattice.)
+- **Length is constant**: fixed-size struct array fields (declared `N`), frozen module
+  slice literals, and — the case no C compiler can ever recover — a module `let mut`
+  slice whose *root is never reassigned* anywhere in the program (one whole-program
+  scan; FC compiles whole-program, so global knowledge is cheap — the semantic-`<`-gate
+  precedent). Locals bound directly to slice literals qualify the same way.
+
+With both proven, emit the bare access; for a frozen module slice additionally fold the
+header — its `.ptr`/`.len` are compile-time constants, so the emitted C can reference
+the backing array directly instead of loading the slice struct (the form handwritten C
+takes).
+
+Honest sizing, measured on the opl2 emulator bench (2026-08-30, host gcc -O2, 20M
+samples): of 221 emitted guards, gcc's own VRP+inlining already eliminated all but 16;
+freezing the tables (pregen migration) auto-killed the two hot survivors whose *index*
+was provable but whose *len* was a mut-global load; the residual FC-vs-C gap (~8%) was
+emission shape, not guards. So the value of this item is **not** host `-O2` speed — it
+is `-O0`/debug builds, retro toolchains that do far less VRP (djgpp gcc, gcc-ia16 — the
+targets the niche cares about), and smaller emitted C. Same gating as the counter item:
+do after real djgpp/ia16 measurements show it matters.
+
+Out of scope, deliberately: guards whose index is loaded from a heap field
+(`mult_val[c.op_mult[op]]` — the store-side `val & 15` invariant is a program-level
+fact this analysis does not track). The per-site answers there already exist: a
+use-site mask (`[x & 15]`, which makes the range locally provable and *earns* elision)
+or `unguarded` (the explicit spelling; the opl2 hot path measured both). No
+field-invariant tracking as part of this item — conservative-but-complete.
+
 ## Const generics (value parameters) — IMPLEMENTED 2026-07-17 on branch `n-const-generics`; evaluation open
 
 Generic parameters over compile-time integers, motivated by std::wideint's hand-enumerated
