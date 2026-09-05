@@ -41,44 +41,65 @@ interpolation formatter → stdlib layering → `--profile <name>` bundles that 
 needs and ordering live there; the djgpp wolf-fc experiment needs none of it and comes
 first.
 
-## As-if elision of provably-dead bounds guards
+## As-if elision of provably-dead bounds guards — TRIED AND REVERTED 2026-09-05
 
 Sibling of the for-counter narrowing follow-up above — same as-if family, same
-range-analysis machinery, implement together. Purely an optimization by definition: a
-guard may be omitted only when pass2 proves it can never fire, so observable behavior
-(including which abort a program hits) is unchanged and no spec change is needed.
+range-analysis machinery. Purely an optimization by definition: a guard may be omitted
+only when pass2 proves it can never fire, so observable behavior (including which abort a
+program hits) is unchanged and no spec change is needed.
 
-Two facts prove a guard dead, and both are FC-visible where a C compiler is blind:
+Implemented in full on 2026-09-05 (value-range lattice over the typed AST — literals,
+`& mask`, `%`, range-form `for` variables, if/match refinement, widening casts; constant
+length from fixed-array fields, slice literals, and module `let mut` slices never
+reassigned program-wide; frozen module slice headers folded onto their backing arrays)
+and measured against the C optimizer on wolf-fc before being reverted uncommitted,
+because the numbers said the analysis duplicates the C compiler:
 
-- **Index range**: a small value-range lattice over the typed AST — literals, `& mask`,
-  `%`, range-form `for` variables, if/match branch refinement, widening casts. (The
-  counter-narrowing item needs exactly this lattice.)
-- **Length is constant**: fixed-size struct array fields (declared `N`), frozen module
-  slice literals, and — the case no C compiler can ever recover — a module `let mut`
-  slice whose *root is never reassigned* anywhere in the program (one whole-program
-  scan; FC compiles whole-program, so global knowledge is cheap — the semantic-`<`-gate
-  precedent). Locals bound directly to slice literals qualify the same way.
+- Guards surviving the C optimizer, old C → new C: gcc 13 -O1 522 → 512, -O2 522 → 518,
+  -O3 617 → 610; clang 18 -O2 662 → 657 (textual sites 1009 → 803). Value-range
+  propagation already proves ~98% of the same guards — including the module `let mut`
+  never-reassigned case this item called "the case no C compiler can ever recover":
+  gcc treats a never-written, non-address-taken static as read-only (ipa-reference), so
+  it recovers exactly that fact from the single emitted C file. The residue only pass2
+  proves is FC-level type knowledge: enum-typed indices into module tables
+  (`fire_rate[g.weapon]`), four sites in wolf-fc.
+- Runtime at -O0: frame 1.80 → 1.21 ms, raycaster 1.44 → 0.87 ms, OPL2 474 → 357
+  ns/sample. gcc -O1/-O3 raycaster: unchanged. gcc -O2/-O3 OPL2: 2–5% *slower*, traced
+  (guard-stripping control on the old C) to the direct `c->field[i]` emission form, not
+  to the missing checks. clang -O3 raycaster 0.198 → 0.148 ms — also emission form
+  (clang's surviving guard set was identical): dropping the slice-header copy the guarded
+  statement expression makes around every access.
 
-With both proven, emit the bare access; for a frozen module slice additionally fold the
-header — its `.ptr`/`.len` are compile-time constants, so the emitted C can reference
-the backing array directly instead of loading the slice struct (the form handwritten C
-takes).
+Verdict: on any compiler with value-range propagation the analysis is redundant, and the
+shipping gcc -O3 build got slower. A wrongly elided guard is a silent out-of-bounds in
+code the programmer believes is checked; ~800 lines of interval analysis plus a
+whole-program mutation flag that every future global-mutation path must stamp is a poor
+trade for four guards. A to-C compiler's leverage is the *shape* of the emitted C, not
+re-proving what the C optimizer proves (next item). Reopen only against a real
+measurement on a compiler without range propagation (Watcom/Borland class — the DOS build
+goes through djgpp, which is gcc and already covered); the -O0 numbers above are the
+proxy for what such a target would gain.
 
-Honest sizing, measured on the opl2 emulator bench (2026-08-30, host gcc -O2, 20M
-samples): of 221 emitted guards, gcc's own VRP+inlining already eliminated all but 16;
-freezing the tables (pregen migration) auto-killed the two hot survivors whose *index*
-was provable but whose *len* was a mut-global load; the residual FC-vs-C gap (~8%) was
-emission shape, not guards. So the value of this item is **not** host `-O2` speed — it
-is `-O0`/debug builds, retro toolchains that do far less VRP (djgpp gcc, gcc-ia16 — the
-targets the niche cares about), and smaller emitted C. Same gating as the counter item:
-do after real djgpp/ia16 measurements show it matters.
+The out-of-scope boundary still holds if reopened: guards whose index is loaded from a
+heap field (`mult_val[c.op_mult[op]]`) — the per-site answers are a use-site mask
+(`[x & 15]`) or `unguarded`; no field-invariant tracking.
 
-Out of scope, deliberately: guards whose index is loaded from a heap field
-(`mult_val[c.op_mult[op]]` — the store-side `val & 15` invariant is a program-level
-fact this analysis does not track). The per-site answers there already exist: a
-use-site mask (`[x & 15]`, which makes the range locally provable and *earns* elision)
-or `unguarded` (the explicit spelling; the opl2 hot path measured both). No
-field-invariant tracking as part of this item — conservative-but-complete.
+## Guarded-access emission shape (salvaged from the elision experiment)
+
+The one thing the 2026-09-05 experiment found worth having is a codegen-only change with
+no analysis and no soundness exposure. The guarded index access copies the whole slice
+header into a temporary — `T _s = obj; int64_t _i = idx; if (…) fc_oob(…); _s.ptr + _i`
+— even when `obj` and `idx` are pure (a local, a parameter, a field path, a literal).
+Clang did not see through that copy in wolf-fc's per-column raycaster loop (`bd_*[k]`):
+the direct form was worth 0.198 → 0.148 ms per frame at -O3. Try: when both operands are
+pure (`expr_has_side_effects` false), check against `obj.len` and index `obj.ptr[idx]`
+(or the fixed-array field / literal backing array directly) with no header copy, keeping
+the guard. Keep it only if it wins or holds on *both* gcc and clang: the direct
+fixed-array-field form measured 2–5% slower on gcc -O2/-O3 in the OPL2 emulator
+(`c->op_stage[i]`-style accesses; mechanism not pinned), so measure that path
+specifically (`wolf-fc --test audiobench:30`, interleaved old/new runs, equal N — the
+song gets denser with N). Byte-identical C is not the oracle here; wolf-fc's golden suite
+(`make check` there) plus the perf numbers are.
 
 ## Const generics (value parameters) — IMPLEMENTED 2026-07-17 on branch `n-const-generics`; evaluation open
 
