@@ -29,6 +29,7 @@
 //
 //     fcc demos/shared/tools/midi_render.fc demos/shared/opl_midi.fc \
 //         demos/shared/opl_bank_gm.fc demos/shared/opl2.fc \
+//         demos/shared/opl2_tables.fc \
 //         stdlib/io.fc stdlib/math.fc stdlib/text.fc -o /tmp/mr.c
 //     cc -std=c11 -o /tmp/mr /tmp/mr.c -lm
 

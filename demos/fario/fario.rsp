@@ -21,6 +21,7 @@ main.fc
 
 # Sound engine, and the raylib device for it.
 ../shared/opl2.fc
+../shared/opl2_tables.fc
 ../shared/opl_midi.fc
 ../shared/opl_bank_gm.fc
 ../shared/opl_audio.fc

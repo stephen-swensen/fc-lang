@@ -29,7 +29,7 @@
 //
 //     Slow regime (eff_rate 4..47): step occurs once every 1 << shift
 //     samples, where shift = 12 - (eff_rate >> 2). On step samples,
-//     advance by eg_inc_fire(eff_rate & 3, (counter >> shift) & 7).
+//     advance by eg_fire[(eff_rate & 3) * 8 + ((counter >> shift) & 7)].
 //     The 4 sub-rate patterns fire 4/8, 5/8, 6/8, 7/8 of cycles
 //     respectively, giving equal-tempered intermediate speeds within
 //     each 4-rate doubling group.
@@ -169,20 +169,35 @@ module opl2 =
     let two_pi = 6.283185307179587
 
     // ============================================================
+    // Shared tables
+    // ============================================================
+
+    // The log-sin, gain, block-scale, and feedback-divisor tables are
+    // identical for every chip and derive from fixed formulas, so they
+    // are pregenerated source: frozen constants in the sibling module
+    // `opl2_tables` (opl2_tables.fc, produced by tools/mk_opl2_tables.fc).
+    // Read-only memory (ROM on retro targets), no per-chip copy, no
+    // startup build, no host-libm dependence at run time — every
+    // platform plays byte-identical tables. The precision model each
+    // table implements is documented in the file header above; the
+    // sample path indexes them below via `opl2_tables.<name>`.
+
+    // ============================================================
     // Chip state
     // ============================================================
 
-    // One emulated chip: every operator's and channel's state, the global
-    // LFO and rate-generator counter, and the precomputed log-sin and gain
-    // tables. State is flat arrays indexed by operator (0..17) or channel
-    // (0..8) rather than nested structs, which is what keeps the per-sample
-    // inner loop a straight walk over i32 arrays.
+    // One emulated chip: every operator's and channel's state plus the
+    // global LFO and rate-generator counter. State is flat arrays indexed
+    // by operator (0..17) or channel (0..8) rather than nested structs,
+    // which is what keeps the per-sample inner loop a straight walk over
+    // i32 arrays. The precomputed log-sin/gain tables are frozen
+    // constants in `opl2_tables` (see Shared tables above).
     //
     // Build one with `init` rather than by hand: a zeroed chip has every
-    // operator at full volume in the `off` stage with empty tables, whereas
-    // init silences the operators, seeds the rate caches, and fills the
-    // tables the sample path indexes. Nothing here is shared between chips,
-    // so a program can run as many as it has voices for.
+    // operator at full volume in the `off` stage, whereas init silences
+    // the operators and seeds the rate caches. No mutable state is
+    // shared between chips, so a program can run as many as it has
+    // voices for.
     struct chip =
         // ---- Per-operator state ----
         // Phase accumulator, 0..1 (wraps). Top 10 bits index the wave
@@ -248,47 +263,13 @@ module opl2 =
         rm_tc_bit3: i32
         rm_tc_bit5: i32
 
-        // ---- Precomputed tables ----
-        // First-quadrant log-sin attenuation in fine units. Each unit
-        // is 1/16 of an env unit = 0.01172 dB; logsin_table[i] is the
-        // attenuation to apply to a "1.0" reference to get |sin(x)| for
-        // x = (i + 0.5) * π/512. Range 0..~16400.
-        //
-        // The 16× finer resolution matches the YM3812's actual log_sin
-        // precision: per the datasheet the chip stores log_sin at
-        // ~12-bit precision (~0.0117 dB/LSB), finer than our 9-bit env
-        // unit (0.1875 dB). Storing at env-unit precision would round
-        // away the chip's real resolution and produce wider-than-spec
-        // flat plateaus at sine peaks on low-frequency voices. With
-        // 16× finer log_sin and a matching 16× wider gain_table, the
-        // wave-sample → gain pipeline carries through the chip's
-        // actual precision.
-        logsin_table: i32[256]
-        // Block → 2^(block-1), the octave multiplier in the YM3812
-        // frequency formula, and feedback level → 2^(9-fb), the divisor
-        // that turns the summed modulator history into a phase offset.
-        // Both are `math.pow` calls on small integer domains, and both
-        // sit in the per-sample per-channel path — nine voices at 44.1
-        // kHz is ~800k pow calls a second, which is worth eight table
-        // entries each to avoid.
-        block_scale: f64[8]
-        fb_div: f64[8]
-        // Atten (1/16 env unit) → linear amplitude scaled to op_peak.
-        // gain_table[i] = round(op_peak * 10^(-i * 0.01172 / 20)).
-        // 16384 entries cover 0..192 dB at 0.01172 dB per step; beyond
-        // i ≈ 6400 the value rounds to 0 (inaudibly quiet). wave_sample
-        // shifts env-unit-precision atten contributions into fine units
-        // before indexing.
-        gain_table: i32[16384]
-
     // ============================================================
     // Initialization
     // ============================================================
 
     // Allocate and initialize a chip for the given output sample rate (Hz).
-    // Every operator starts silent in the `off` stage, and the log-sin and
-    // gain tables are built here — the one place they are computed, since
-    // they never change afterwards. The caller owns the returned chip*.
+    // Every operator starts silent in the `off` stage. The caller owns the
+    // returned chip*.
     let init = (sample_rate: f64) ->
         let c = alloc(chip)!
         c.rate = sample_rate
@@ -302,28 +283,6 @@ module opl2 =
         // the register would never leave it, silencing the snare, cymbal and
         // hi-hat for the life of the chip.
         c.noise = 1u64
-        let pi = 3.14159265358979323846
-        // First-quadrant log-sin in 1/16 env units (0.01172 dB per
-        // unit). See the field comment for the chip-precision rationale.
-        let fine_unit_db = 0.01171875        // 0.1875 / 16
-        for i in 0..256 do
-            let x = ((f64) i + 0.5) * pi / 512.0
-            let s = math.sin(x)
-            let atten = 0.0 - 20.0 * math.log10(s) / fine_unit_db
-            c.logsin_table[i] = (i32) atten
-        // Gain table at 1/16 env-unit resolution. Each entry is the
-        // linear amplitude after the given attenuation in fine units.
-        // Past i≈6400 the value rounds to 0 (inaudibly quiet) but we
-        // size the table to cover the full possible total_fine range.
-        for i in 0..16384 do
-            let atten_db = (f64) i * fine_unit_db
-            let amp = (f64) op_peak * math.pow(10.0, 0.0 - atten_db / 20.0)
-            c.gain_table[i] = (i32) amp
-        // The two small exponent tables the sample path would otherwise
-        // recompute per channel per sample.
-        for b in 0..8 do
-            c.block_scale[b] = math.pow(2.0, (f64) (b - 1))
-            c.fb_div[b] = math.pow(2.0, (f64) (9 - b))
         c
 
     // ============================================================
@@ -361,23 +320,17 @@ module opl2 =
             let eff = (rate << 2) + bump
             if eff > 63 then 63 else eff
 
-    // Sub-rate fire pattern. For each of the 4 sub-rates within a
-    // rate-doubling group, fires on a fraction of the 8 cycle positions:
-    //   sub 0: 4/8 → [0,1,0,1,0,1,0,1]
-    //   sub 1: 5/8 → [0,1,0,1,1,1,0,1]
-    //   sub 2: 6/8 → [0,1,1,1,0,1,1,1]
-    //   sub 3: 7/8 → [0,1,1,1,1,1,1,1]
-    // The fire positions are spread evenly across the 8-cycle window
-    // so the envelope advances at the right average rate without
-    // bunching steps in time.
-    let eg_inc_fire = (sub: i32, cycle: i32) ->
-        if sub == 0 then cycle & 1
-        else if sub == 1 then
-            if cycle == 1 || cycle == 3 || cycle == 4 || cycle == 5 || cycle == 7 then 1 else 0
-        else if sub == 2 then
-            if cycle == 0 || cycle == 4 then 0 else 1
-        else
-            if cycle == 0 then 0 else 1
+    // Sub-rate fire pattern, indexed [sub * 8 + cycle]. For each of the
+    // 4 sub-rates within a rate-doubling group, fires on a fraction of
+    // the 8 cycle positions: 4/8, 5/8, 6/8, 7/8 respectively. The fire
+    // positions are spread evenly across the 8-cycle window so the
+    // envelope advances at the right average rate without bunching
+    // steps in time. Frozen module constant → read-only memory.
+    let eg_fire = i32[32]{
+        0, 1, 0, 1, 0, 1, 0, 1,     // sub 0: 4/8
+        0, 1, 0, 1, 1, 1, 0, 1,     // sub 1: 5/8
+        0, 1, 1, 1, 0, 1, 1, 1,     // sub 2: 6/8
+        0, 1, 1, 1, 1, 1, 1, 1 }    // sub 3: 7/8
 
     // Envelope advance per sample for a given effective rate and the
     // chip's free-running counter. Returns the step amount (0 = no
@@ -399,13 +352,13 @@ module opl2 =
             else
                 let sub = eff_rate & 3
                 let cycle = (i32) ((counter >> (u64) shift) & 7u64)
-                eg_inc_fire(sub, cycle)
+                eg_fire[sub * 8 + cycle]
         else
             let rate_class = (eff_rate - 48) >> 2
             let inc_mul = 1 << rate_class
             let sub = eff_rate & 3
             let cycle = (i32) (counter & 7u64)
-            eg_inc_fire(sub, cycle) * inc_mul
+            eg_fire[sub * 8 + cycle] * inc_mul
 
     // Attack: log-curve approach toward 0. Each step removes ~env/8
     // of the remaining attenuation; the +1 ensures we eventually reach
@@ -469,24 +422,9 @@ module opl2 =
     // YM3812 KSL ROM (16 entries indexed by fnum_msb4). Each unit is
     // 0.375 dB before scaling. The chip combines this with block via
     // `ksl_rom[fnum_msb4] - (7 - block) * 8`, floored at 0; the result
-    // is then scaled by the per-op KSL setting.
-    let ksl_rom = (i: i32) ->
-        if i == 0 then 0
-        else if i == 1 then 32
-        else if i == 2 then 40
-        else if i == 3 then 45
-        else if i == 4 then 48
-        else if i == 5 then 51
-        else if i == 6 then 53
-        else if i == 7 then 55
-        else if i == 8 then 56
-        else if i == 9 then 58
-        else if i == 10 then 59
-        else if i == 11 then 60
-        else if i == 12 then 61
-        else if i == 13 then 62
-        else if i == 14 then 63
-        else 64
+    // is then scaled by the per-op KSL setting. Frozen → read-only memory.
+    let ksl_rom = i32[16]{
+        0, 32, 40, 45, 48, 51, 53, 55, 56, 58, 59, 60, 61, 62, 63, 64 }
 
     // Recompute one operator's cached key-scale-level attenuation, which
     // depends on the channel's block and F-number as well as the KSL field.
@@ -497,7 +435,7 @@ module opl2 =
             c.op_ksl_atten[idx] = 0
         else
             let fnum_msb4 = (fnum >> 6) & 15
-            let raw = ksl_rom(fnum_msb4) - (7 - block) * 8
+            let raw = ksl_rom[fnum_msb4] - (7 - block) * 8
             let units = if raw < 0 then 0 else raw
             // KSL scaling per the actual silicon: KSL=1/2/3 → 3/1.5/6 dB
             // per octave. The original YM3812 datasheet printed 1.5/3/6 —
@@ -691,12 +629,11 @@ module opl2 =
     // Frequency multiplier table per the YM3812 spec (mapping value to
     // multiplier). Non-monotone in the 11/13/14 slots — those are
     // approximated as their neighbors per the chip's published table.
-    let mult_val = (m: i32) ->
-        if m == 0 then 0.5
-        else if m == 11 then 10.0
-        else if m == 13 then 12.0
-        else if m == 14 then 15.0
-        else (f64) m
+    // Frozen module constant → read-only memory; indexed in the
+    // per-sample path, where a table load beats a 5-way branch chain.
+    let mult_val = f64[16]{
+        0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0,
+        8.0, 9.0, 10.0, 10.0, 12.0, 12.0, 15.0, 15.0 }
 
     // Sample the OPL2 waveform at `phase` with total attenuation
     // `total_atten` (env + TL + KSL + AM, already summed). Returns the
@@ -738,20 +675,20 @@ module opl2 =
             // Combine attenuation contributions in fine units: shift the
             // env-unit total_atten (env + TL*4 + KSL + AM) left by 4 to
             // match the 1/16-unit precision of log_sin, then add.
-            let sin_atten = c.logsin_table[table_idx]
+            let sin_atten = opl2_tables.logsin_table[table_idx]
             let total_fine = (total_atten << 4) + sin_atten
             let amp = if total_fine >= 16384 || total_fine < 0 then 0
-                else c.gain_table[total_fine]
+                else opl2_tables.gain_table[total_fine]
             if positive then amp else 0 - amp
 
     // Advance one operator's phase by a sample and return its 10-bit phase
     // index. `ch` supplies fnum and block, because an operator's frequency is
     // its channel's times its own MULT.
     private let step_op = (c: chip*, op: i32, ch: i32, vib_mul: f64) ->
-        let base_freq = (f64) c.ch_fnum[ch] * c.block_scale[c.ch_block[ch]]
+        let base_freq = (f64) c.ch_fnum[ch] * opl2_tables.block_scale[c.ch_block[ch]]
             * 49716.0 / 524288.0
         let v = if c.op_vib[op] then vib_mul else 1.0
-        let f = base_freq * mult_val(c.op_mult[op]) * v
+        let f = base_freq * mult_val[c.op_mult[op]] * v
         c.op_phase[op] = c.op_phase[op] + f / c.rate
         if c.op_phase[op] >= 1.0 then
             c.op_phase[op] = c.op_phase[op] - math.floor(c.op_phase[op])
@@ -876,14 +813,14 @@ module opl2 =
             let fnum = c.ch_fnum[ch]
             let block = c.ch_block[ch]
             // YM3812 frequency formula: f = fnum * 2^(block-1) * 49716 / 2^19.
-            let base_freq = (f64) fnum * c.block_scale[block]
+            let base_freq = (f64) fnum * opl2_tables.block_scale[block]
                 * 49716.0 / 524288.0
             // Modulator phase advance (with vibrato if enabled).
             // floor wrap (not a single subtract) so per-sample advances
             // > 1 cycle stay bounded — possible at block=7 / mult=15 /
             // high fnum where mf can exceed the output sample rate.
             let m_vib_mul = if c.op_vib[mi] then vib_mul else 1.0
-            let mf = base_freq * mult_val(c.op_mult[mi]) * m_vib_mul
+            let mf = base_freq * mult_val[c.op_mult[mi]] * m_vib_mul
             c.op_phase[mi] = c.op_phase[mi] + mf / c.rate
             if c.op_phase[mi] >= 1.0 then
                 c.op_phase[mi] = c.op_phase[mi] - math.floor(c.op_phase[mi])
@@ -905,7 +842,7 @@ module opl2 =
             if fb > 0 then
                 let sum_int = c.ch_prev0[ch] + c.ch_prev1[ch]
                 fb_phase_offset = (f64) sum_int
-                    / c.fb_div[fb]
+                    / opl2_tables.fb_div[fb]
                     / 1024.0
             let mout = wave_sample(c, c.op_phase[mi] + fb_phase_offset,
                 c.op_wf[mi], m_total_atten)
@@ -914,7 +851,7 @@ module opl2 =
             // Carrier phase advance (with vibrato if enabled). Same
             // floor-wrap rationale as the modulator above.
             let c_vib_mul = if c.op_vib[ci] then vib_mul else 1.0
-            let cf = base_freq * mult_val(c.op_mult[ci]) * c_vib_mul
+            let cf = base_freq * mult_val[c.op_mult[ci]] * c_vib_mul
             c.op_phase[ci] = c.op_phase[ci] + cf / c.rate
             if c.op_phase[ci] >= 1.0 then
                 c.op_phase[ci] = c.op_phase[ci] - math.floor(c.op_phase[ci])
