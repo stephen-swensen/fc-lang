@@ -904,9 +904,13 @@ module opl2 =
             let mi = ch * 2
             let ci = ch * 2 + 1
             // Envelopes have already advanced for this sample (see the top
-            // of this function). A silent carrier means no audible output
-            // whatever the modulator is doing, so the whole voice drops out.
-            if c.op_stage[ci] == envelope_stage.off then continue
+            // of this function). In FM a silent carrier means no audible
+            // output whatever the modulator is doing, so the whole voice
+            // drops out; in an additive (connection-bit) channel the
+            // modulator reaches the output on its own, so the voice only
+            // drops out once *both* operators have finished releasing.
+            if c.op_stage[ci] == envelope_stage.off
+               && (!c.ch_add[ch] || c.op_stage[mi] == envelope_stage.off) then continue
             let fnum = c.ch_fnum[ch]
             let block = c.ch_block[ch]
             // YM3812 frequency formula: f = fnum * 2^(block-1) * 49716 / 2^19.
