@@ -1,0 +1,31 @@
+// The mirror image of const_ptr_wrapper_typedefs: a slice's element const
+// never reaches its C storage (that is spelled modulo const), so
+// `(const i32*)[]` and `const i32*[]` must name exactly ONE typedef —
+// otherwise the widen between them becomes an assignment between two
+// unrelated C structs. Every place that spells a slice's element ident has to
+// blind the element's const the same way, including the wrapper typedefs
+// (option, result, function type) that name a slice in turn.
+let ro_slice = (s: const i32*[]) -> (i32) s.len
+let ro_opt = (o: const i32*[]?) -> (i32) o!.len
+let ro_fn = (f: (const i32*[]) -> i32, s: const i32*[]) -> f(s)
+
+struct holder =
+    views: (const i32*)[]
+
+let main = (args: str[]) ->
+    let mut x = 4
+    let mut y = 9
+    let cs = const i32*[2] { (const i32*) &x, (const i32*) &y }
+
+    // the widen itself: read-only slots absorb into a read-only slice
+    assert(ro_slice(cs) == 2)
+
+    // and through each wrapper that names the slice's typedef
+    assert(ro_opt(some(cs)) == 2)
+    assert(ro_fn(ro_slice, cs) == 2)
+
+    // a struct field keeps the element spelling, and still widens out of it
+    let h = holder { views = cs }
+    assert(ro_slice(h.views) == 2)
+    assert(*h.views[1i64] == 9)
+    0

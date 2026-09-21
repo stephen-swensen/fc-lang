@@ -1203,6 +1203,23 @@ static void emit_elem_type(Type *t, FILE *out) {
     emit_type(t, out);
 }
 
+/* The ident naming a slice's typedef (`fc_slice_<elem ident>`). The element is
+ * spelled modulo const, exactly as its storage is (emit_elem_type), so
+ * `(const i32*)[]` and `const i32*[]` name one typedef — which is what lets
+ * the former widen into the latter in C, where two slice structs of different
+ * names would be unrelated types. FC enforces element constness at the type
+ * level; it never reaches C. */
+static void emit_slice_elem_ident(Type *elem, FILE *out) {
+    Type *el = subst_resolve(elem);
+    if (el && el->is_const) {
+        Type bare = *el;
+        bare.is_const = false;
+        emit_type_ident(&bare, out);
+        return;
+    }
+    emit_type_ident(elem, out);
+}
+
 static void emit_type(Type *t, FILE *out) {
     /* Handle type variable substitution during monomorphized emission */
     if (g_subst && t->kind == TYPE_TYPE_VAR) {
@@ -1247,7 +1264,7 @@ static void emit_type(Type *t, FILE *out) {
             fprintf(out, "fc_str");
         } else {
             fprintf(out, "fc_slice_");
-            emit_type_ident(t->slice.elem, out);
+            emit_slice_elem_ident(t->slice.elem, out);
         }
         break;
     case TYPE_OPTION: {
@@ -1357,7 +1374,7 @@ static void emit_type_ident(Type *t, FILE *out) {
     case TYPE_FLOAT64: fprintf(out, "double");    break;
     case TYPE_BOOL:    fprintf(out, "bool");      break;
     case TYPE_CHAR:    fprintf(out, "uint8_t");   break;
-    case TYPE_ANY_PTR: fprintf(out, "void_ptr");  break;
+    case TYPE_ANY_PTR: fprintf(out, t->is_const ? "void_cptr" : "void_ptr");  break;
     case TYPE_STRUCT:
         if (t->struc.is_tuple) {
             if (g_subst && type_contains_type_var(t))
@@ -1387,12 +1404,16 @@ static void emit_type_ident(Type *t, FILE *out) {
             fprintf(out, "fc_str");
         } else {
             fprintf(out, "fc_slice_");
-            emit_type_ident(t->slice.elem, out);
+            emit_slice_elem_ident(t->slice.elem, out);
         }
         break;
     case TYPE_POINTER:
+        /* const is part of the ident: a read-only pointer has a different C
+         * type (`T const*`) from a writable one, so an option, result or
+         * function type over each needs its own typedef. Slices stay
+         * const-blind (their C storage is). */
         emit_type_ident(t->pointer.pointee, out);
-        fprintf(out, "_ptr");
+        fprintf(out, t->is_const ? "_cptr" : "_ptr");
         break;
     case TYPE_FUNC:
         fprintf(out, "fc_fn_");
@@ -6064,9 +6085,54 @@ struct TypeSet {
     int cap;
 };
 
+/* Two types share one typedef iff they emit the same C ident (emit_type_ident).
+ * That is not type_eq_ignore_const: const on a pointer or any* is part of the
+ * ident (a read-only payload has a different C type, `T const*`), while const
+ * on a slice element is not (slice storage is spelled modulo const), and named
+ * types compare nominally. Keying the set on anything coarser merges two
+ * distinct C types onto one typedef — the second then stores or passes the
+ * wrong constness and the emitted C fails under -Wall -Werror. Kept structural
+ * rather than rendered so it needs no memstream. */
+static bool type_ident_eq(Type *a, Type *b) {
+    a = subst_resolve(a); b = subst_resolve(b);
+    if (!a || !b) return a == b;
+    if (a->kind != b->kind) return type_eq_ignore_const(a, b);   /* stub vs. resolved struct */
+    switch (a->kind) {
+    case TYPE_POINTER:
+        return a->is_const == b->is_const &&
+               type_ident_eq(a->pointer.pointee, b->pointer.pointee);
+    case TYPE_ANY_PTR:
+        return a->is_const == b->is_const;
+    case TYPE_SLICE: {
+        /* Mirrors emit_slice_elem_ident: the element is spelled modulo const. */
+        Type *ea = subst_resolve(a->slice.elem), *eb = subst_resolve(b->slice.elem);
+        if (!ea || !eb) return ea == eb;
+        Type ba = *ea, bb = *eb;
+        ba.is_const = bb.is_const = false;
+        return type_ident_eq(&ba, &bb);
+    }
+    case TYPE_OPTION:
+        return type_ident_eq(a->option.inner, b->option.inner);
+    case TYPE_RESULT:
+        return type_ident_eq(a->result.inner, b->result.inner);
+    case TYPE_FIXED_ARRAY:
+        return fixarr_size(a) == fixarr_size(b) &&
+               type_ident_eq(a->fixed_array.elem, b->fixed_array.elem);
+    case TYPE_FUNC: {
+        if (a->func.param_count != b->func.param_count ||
+            a->func.is_variadic != b->func.is_variadic) return false;
+        for (int i = 0; i < a->func.param_count; i++)
+            if (!type_ident_eq(a->func.param_types[i], b->func.param_types[i])) return false;
+        return type_ident_eq(a->func.return_type, b->func.return_type);
+    }
+    default:
+        return type_eq_ignore_const(a, b);
+    }
+}
+
 static bool typeset_contains(TypeSet *ts, Type *t) {
     for (int i = 0; i < ts->count; i++) {
-        if (type_eq_ignore_const(ts->types[i], t)) return true;
+        if (type_ident_eq(ts->types[i], t)) return true;
     }
     return false;
 }
@@ -7244,12 +7310,12 @@ static bool wrap_inner_complete(WrapEmit *we, Type *inner) {
     case TYPE_STUB:   name = inner->stub.name; break;
     case TYPE_OPTION:
         for (int i = 0; i < we->options->count; i++)
-            if (type_eq_ignore_const(we->options->types[i], inner))
+            if (type_ident_eq(we->options->types[i], inner))
                 return we->opt_done[i];
         return true;  /* not in the set: null-sentinel option — a plain pointer */
     case TYPE_RESULT:
         for (int i = 0; i < we->results->count; i++)
-            if (type_eq_ignore_const(we->results->types[i], inner))
+            if (type_ident_eq(we->results->types[i], inner))
                 return we->res_done[i];
         return true;  /* not collected — nothing to wait for */
     default:
@@ -8376,9 +8442,9 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Type *s = slices.types[i];
         if (is_str_type(s)) continue; /* str already emitted */
         fprintf(out, "typedef struct fc_slice_");
-        emit_type_ident(s->slice.elem, out);
+        emit_slice_elem_ident(s->slice.elem, out);
         fprintf(out, "_s fc_slice_");
-        emit_type_ident(s->slice.elem, out);
+        emit_slice_elem_ident(s->slice.elem, out);
         fprintf(out, ";\n");
     }
 
@@ -8411,7 +8477,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Type *s = slices.types[i];
         if (is_str_type(s)) continue;
         fprintf(out, "struct fc_slice_");
-        emit_type_ident(s->slice.elem, out);
+        emit_slice_elem_ident(s->slice.elem, out);
         fprintf(out, "_s { ");
         emit_elem_type(s->slice.elem, out);
         fprintf(out, "* ptr; fc_len_t len; };\n");

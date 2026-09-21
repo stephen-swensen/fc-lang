@@ -1,0 +1,27 @@
+// The three operands alloca(expr) accepts are exactly the ones that build
+// fresh stack storage, so the result is writable *and* independent of what it
+// was built from — the property the operand restriction protects.
+let main = (args: str[]) ->
+    let s = "hello"
+
+    let interp = alloca("%s{s}")
+    interp[0i64] = 88u8
+    assert(interp[0i64] == 88u8)
+    assert(s[0i64] == 104u8)           // the literal is untouched
+
+    let cs = alloca((cstr) s)
+    cs[0i64] = 88u8
+    assert(cs[0i64] == 88u8)
+    assert(s[0i64] == 104u8)
+
+    let lit = alloca(i32[3] { 1, 2, 3 })
+    lit[0i64] = 9
+    assert(lit[0i64] == 9)
+    assert(lit.len == 3)
+
+    let n = 4i64
+    let buf = alloca(u8[n] { })
+    buf[0i64] = 7u8
+    assert(buf[0i64] == 7u8)
+    assert(buf.len == 4)
+    0

@@ -136,7 +136,16 @@ one of them deliberately:
   boundary (`fc_tv_<U>__<V>` did, which is why enumerators are variant-first —
   `V` has no `__` and `U` always starts with `fc__`, so the split is forced).
   `mangled_tail` (pass1.c) splits non-overlapping from the left for the same
-  reason.
+  reason. A derived name built from a **type** (`fc_slice_…`, `fc_option_…`,
+  `fc_result_…`, `fc_fn_…`, all spelled by `emit_type_ident`) must distinguish
+  exactly what the emitted C type distinguishes, and the set that decides
+  whether to emit one must be keyed by that same relation — `type_ident_eq`,
+  its deliberate twin, never `type_eq*`. Coarser merges two C types onto one
+  typedef and the loser carries the wrong spelling (a `const T*` payload stored
+  into a `T*` field, rejected under `-Werror`); finer splits a name C never
+  distinguished and breaks assignment between the two. So `const` is *in* the
+  ident for a pointer or `any*` (`_cptr`) and *out* of it for a slice's element
+  (slice storage is spelled modulo const — `emit_slice_elem_ident`).
 - **`_l_<name>_<id>` / `_<temp><n>` — function-local names.** pass2 mints
   `_l_<name>_<id>` for *every* binding form — `let`, parameter, for-loop
   variable, pattern binding (`local_c_name` in pass2.c). That is what keeps

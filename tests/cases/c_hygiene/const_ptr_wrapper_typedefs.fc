@@ -1,0 +1,51 @@
+// A pointer's const is part of its emitted C type (`T const*`), so every
+// wrapper typedef named after that pointer — result, option, function type —
+// needs its own. Keying those typedef sets on a const-blind comparison merged
+// the const and non-const forms onto one name, and the loser then stored or
+// passed the wrong constness: rejected by the C compiler under -Werror.
+let mk_mut = (p: i32*) -> ok(p)
+let mk_const = (p: const i32*) -> ok(p)
+
+let mk_any_mut = (p: any*) -> ok(p)
+let mk_any_const = (p: const any*) -> ok(p)
+
+// One level down: the const sits on the pointee, not on the outer pointer.
+let mk_pp_mut = (p: i32**) -> ok(p)
+let mk_pp_const = (p: (const i32*)*) -> ok(p)
+
+let read_at = (p: const i32*) -> *p
+let bump_at = (p: i32*) ->
+    *p = *p + 1
+    *p
+
+// Function types that differ only in a parameter's const.
+struct ops =
+    read: (const i32*) -> i32
+    bump: (i32*) -> i32
+
+let main = (args: str[]) ->
+    let mut x = 7
+    let cx = (const i32*) &x
+
+    let rm = mk_mut(&x)
+    let rc = mk_const(cx)
+    assert(*rm! == 7)
+    assert(*rc! == 7)
+
+    let am = mk_any_mut((any*) &x)
+    let ac = mk_any_const((const any*) &x)
+    assert(am.is_ok)
+    assert(ac.is_ok)
+
+    let mut mp = &x
+    let mut cp = cx
+    let pm = mk_pp_mut(&mp)
+    let pc = mk_pp_const(&cp)
+    assert(**pm! == 7)
+    assert(**pc! == 7)
+
+    let o = ops { read = read_at, bump = bump_at }
+    assert(o.read(cx) == 7)
+    assert(o.bump(&x) == 8)
+    assert(o.read(cx) == 8)
+    0

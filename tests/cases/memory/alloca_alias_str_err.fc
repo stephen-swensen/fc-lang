@@ -1,0 +1,9 @@
+// alloca(expr) hands any other operand straight back — codegen emits no copy
+// for it — so accepting a plain str laundered the operand's const off and
+// returned an alias. `alloca(s)` on a string literal yielded a writable str
+// pointing into read-only storage; the write below segfaulted at runtime.
+let main = (args: str[]) ->
+    let s = "hello"
+    let m = alloca(s)
+    m[0i64] = 88u8
+    0

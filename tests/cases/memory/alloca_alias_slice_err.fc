@@ -1,0 +1,8 @@
+// Not const-specific: any slice operand was aliased rather than copied, so the
+// "stack temporary" shared storage (and lifetime) with whatever it was handed.
+let main = (args: str[]) ->
+    let mut xs = i32[3] { 1, 2, 3 }
+    let ys = alloca(xs)
+    ys[0i64] = 9
+    assert(xs[0i64] == 1)
+    0

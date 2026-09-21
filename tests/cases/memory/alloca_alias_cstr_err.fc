@@ -1,0 +1,7 @@
+// The cstr half of the same hole: a cstr-typed operand that is not a (cstr)
+// cast builds no buffer either.
+let main = (args: str[]) ->
+    let cs = c"hello"
+    let m = alloca(cs)
+    m[0i64] = 88u8
+    0

@@ -1,0 +1,8 @@
+// Only the *unbounded* (cstr) cast is an alloca operand: the bounded
+// (cstr[N]) form already writes into its own hoisted buffer, so alloca has no
+// home to give it. Same rule alloc(expr) applies to the two cast forms.
+let main = (args: str[]) ->
+    let s = "hello"
+    let cs = alloca((cstr[8]) s)
+    assert(cs[0i64] == 104u8)
+    0

@@ -8829,8 +8829,9 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->prov = PROV_STACK;
                 return e->type;
             }
-            /* alloca(expr) — only an interpolated string (str/cstr) or slice literal
-             * makes sense as a runtime-sized stack temporary. */
+            /* alloca(expr) — only an interpolated string, a slice literal or a
+             * licensed (cstr) cast makes sense as a runtime-sized stack
+             * temporary. */
             Expr *ie = e->alloc_expr.init_expr;
             Type *t = check_expr(ctx, ie);
             if (type_is_error(t)) { e->type = type_error(); return e->type; }
@@ -8841,8 +8842,14 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->type = type_error();
                 return e->type;
             }
+            /* Only these three build fresh stack storage, which is what makes
+             * the result writable. Any other operand is handed straight back —
+             * codegen emits no copy for it — so accepting one would return an
+             * alias to the operand's own storage with its const laundered off:
+             * `alloca(s)` on a string literal yielded a writable str pointing
+             * into .rodata. */
             if (ie->kind == EXPR_INTERP_STRING || ie->kind == EXPR_ARRAY_LIT ||
-                t->kind == TYPE_SLICE || is_cstr_type(t)) {
+                (ie->kind == EXPR_CAST && ie->cast.licensed)) {
                 Type *rt = t;
                 if (rt->is_const) {
                     rt = arena_alloc(ctx->arena, sizeof(Type));
@@ -8854,8 +8861,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 return e->type;
             }
             diag_error(e->loc,
-                "alloca(expr) requires an interpolated string or slice literal; "
-                "use alloca(T, n) or alloca(T[n] {}) for an uninitialized buffer");
+                "alloca(expr) requires an interpolated string, a slice literal "
+                "or an unbounded (cstr) cast — any other operand would be "
+                "aliased rather than copied; use alloca(T, n) or "
+                "alloca(T[n] {}) for an uninitialized buffer");
             e->type = type_error();
             return e->type;
         }
