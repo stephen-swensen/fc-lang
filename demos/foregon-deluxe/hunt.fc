@@ -1,0 +1,213 @@
+// Foregon Deluxe — the hunt.
+//
+// A field seen from above. The hunter walks it with the arrow keys and
+// fires with the space bar in the direction last walked; animals cross the
+// field from either side, faster ones smaller and worth less. Every shot
+// spends a bullet. The hunt ends when the clock runs out, the bullets do,
+// or you walk away (ESC) — and whatever you shot, the wagon only gets what
+// one person can carry back.
+//
+// What lives where follows the country: buffalo on the plains and the high
+// plains, elk and bear in the mountains, deer, rabbits and squirrels most
+// places. Hunting the same country again finds it thinner (`scarcity`,
+// kept by game.fc and eased by the miles).
+
+import pcg_random from std::random
+import math from std::
+
+enum species =
+    | squirrel
+    | rabbit
+    | deer
+    | elk
+    | buffalo
+    | bear
+
+struct critter =
+    kind: species
+    x: f64              // center
+    y: f64
+    vx: f64
+    vy: f64
+    live: bool          // the slot is in use
+    shot: bool          // down: a carcass, worth its meat
+    wander: f64         // time until the next change of heading
+
+struct ball =
+    x: f64
+    y: f64
+    vx: f64
+    vy: f64
+    live: bool
+
+struct hunt_state =
+    critters: critter[10]
+    balls: ball[4]
+    hx: f64             // the hunter, center
+    hy: f64
+    fx: i32             // facing: a unit step in x and y
+    fy: i32
+    step_t: f64         // walking animation
+    time_left: f64
+    spawn_t: f64
+    bullets: i32
+    meat: i32
+    region: i32
+    scarcity: f64
+    done: bool
+    flash: f64          // muzzle flash, for art.fc
+    sfx: i32[8]
+    nsfx: i32
+    rng: pcg_random
+
+module hunt =
+    let top = 14            // the status bar above the field
+    let length = 30.0       // seconds of daylight for the hunt
+
+    private let speeds = f64[6] { 58.0, 66.0, 42.0, 34.0, 20.0, 24.0 }
+    private let meats = i32[6] { 2, 3, 55, 180, 420, 130 }
+    // Half-sizes of each animal's body, for hits and for art.
+    let half_w = i32[6] { 3, 4, 8, 9, 11, 9 }
+    let half_h = i32[6] { 2, 3, 6, 7, 8, 6 }
+
+    // Where each thing lives, as weights over the six kinds: plains, high
+    // plains, mountains, far west.
+    private let habitat = i32[24] {
+        20, 30, 25, 0, 25, 0,
+        15, 25, 25, 10, 20, 5,
+        20, 20, 25, 20, 0, 15,
+        25, 25, 30, 10, 0, 10 }
+
+    let meat_of = (k: species) -> meats[(i32) k]
+
+    private let rnd = (h: hunt_state*) -> pcg_random.next_f64(&h.rng)
+
+    private let sound = (h: hunt_state*, id: i32) ->
+        if h.nsfx < 8 then
+            h.sfx[h.nsfx] = id
+            h.nsfx = h.nsfx + 1
+
+    let begin = (h: hunt_state*, region: i32, bullets: i32, scarcity: f64, seed: u64) ->
+        *h = hunt_state {
+            hx = 160.0, hy = 100.0, fx = 1, fy = 0,
+            time_left = length, spawn_t = 0.6,
+            bullets = bullets, region = region, scarcity = scarcity,
+            rng = pcg_random.make(seed) }
+
+    private let choose_kind = (h: hunt_state*) ->
+        let base = h.region * 6
+        let mut total = 0
+        for i in 0..6 do total = total + habitat[base + i]
+        let mut r = (i32) (rnd(h) * (f64) total)
+        let mut k = 0
+        loop
+            if k >= 5 || r < habitat[base + k] then break
+            r = r - habitat[base + k]
+            k = k + 1
+        match enum_of(species, k) with
+        | some(s) -> s
+        | none -> species.rabbit
+
+    private let spawn = (h: hunt_state*) ->
+        let mut slot = -1
+        let mut alive = 0
+        for i in 0..10 do
+            if h.critters[i].live && !h.critters[i].shot then alive = alive + 1
+            if !h.critters[i].live && slot < 0 then slot = i
+        if slot < 0 || alive >= 5 then return
+        let kind = choose_kind(h)
+        let from_left = rnd(h) < 0.5
+        let sp = speeds[(i32) kind] * (0.8 + 0.4 * rnd(h))
+        let c = &h.critters[slot]
+        c.kind = kind
+        c.x = if from_left then -12.0 else 332.0
+        c.y = (f64) (top + 16) + rnd(h) * (f64) (180 - top - 30)
+        c.vx = if from_left then sp else -sp
+        c.vy = (rnd(h) - 0.5) * sp * 0.4
+        c.live = true
+        c.shot = false
+        c.wander = 0.5 + rnd(h) * 1.5
+
+    let step = (h: hunt_state*, inp: const input*, dt: f64) ->
+        h.nsfx = 0
+        if h.done then return
+        h.time_left = h.time_left - dt
+        if h.flash > 0.0 then h.flash = h.flash - dt
+
+        // Walk. The last direction walked is the direction you face.
+        let mut dx = 0
+        let mut dy = 0
+        if plat.is_down(inp, plat.left) then dx = dx - 1
+        if plat.is_down(inp, plat.right) then dx = dx + 1
+        if plat.is_down(inp, plat.up) then dy = dy - 1
+        if plat.is_down(inp, plat.down) then dy = dy + 1
+        if dx != 0 || dy != 0 then
+            h.fx = dx
+            h.fy = dy
+            let norm = if dx != 0 && dy != 0 then 0.7071 else 1.0
+            h.hx = h.hx + (f64) dx * 36.0 * norm * dt
+            h.hy = h.hy + (f64) dy * 36.0 * norm * dt
+            h.step_t = h.step_t + dt
+            if h.hx < 8.0 then h.hx = 8.0
+            if h.hx > 312.0 then h.hx = 312.0
+            if h.hy < (f64) (top + 10) then h.hy = (f64) (top + 10)
+            if h.hy > 172.0 then h.hy = 172.0
+
+        // Fire.
+        if inp.space && h.bullets > 0 then
+            let mut slot = -1
+            for i in 0..4 do
+                if !h.balls[i].live && slot < 0 then slot = i
+            if slot >= 0 then
+                let norm = if h.fx != 0 && h.fy != 0 then 0.7071 else 1.0
+                let b = &h.balls[slot]
+                b.x = h.hx + (f64) h.fx * 6.0
+                b.y = h.hy + (f64) h.fy * 6.0
+                b.vx = (f64) h.fx * 230.0 * norm
+                b.vy = (f64) h.fy * 230.0 * norm
+                b.live = true
+                h.bullets = h.bullets - 1
+                h.flash = 0.08
+                sound(h, snd.sfx_shot)
+
+        // Animals come and go.
+        h.spawn_t = h.spawn_t - dt
+        if h.spawn_t <= 0.0 then
+            spawn(h)
+            h.spawn_t = (0.9 + rnd(h) * 1.8) * (1.0 + h.scarcity * 0.6)
+        for i in 0..10 do
+            let c = &h.critters[i]
+            if c.live && !c.shot then
+                c.x = c.x + c.vx * dt
+                c.y = c.y + c.vy * dt
+                c.wander = c.wander - dt
+                if c.wander <= 0.0 then
+                    c.vy = (rnd(h) - 0.5) * math.abs(c.vx) * 0.5
+                    c.wander = 0.5 + rnd(h) * 1.5
+                let ymin = (f64) (top + 8)
+                if c.y < ymin || c.y > 174.0 then c.vy = -c.vy
+                if c.x < -20.0 || c.x > 340.0 then c.live = false
+
+        // Shots in flight.
+        for i in 0..4 do
+            let b = &h.balls[i]
+            if b.live then
+                b.x = b.x + b.vx * dt
+                b.y = b.y + b.vy * dt
+                if b.x < 0.0 || b.x > 320.0 || b.y < (f64) top || b.y > 180.0 then
+                    b.live = false
+                else
+                    for j in 0..10 do
+                        let c = &h.critters[j]
+                        if b.live && c.live && !c.shot then
+                            let k = (i32) c.kind
+                            let near_x = math.abs(b.x - c.x) <= (f64) half_w[k]
+                            if near_x && math.abs(b.y - c.y) <= (f64) half_h[k] then
+                                c.shot = true
+                                b.live = false
+                                h.meat = h.meat + meats[k]
+                                sound(h, snd.sfx_hit)
+
+        let flying = h.balls[0].live || h.balls[1].live || h.balls[2].live || h.balls[3].live
+        if h.time_left <= 0.0 || inp.escape || (h.bullets == 0 && !flying) then
+            h.done = true

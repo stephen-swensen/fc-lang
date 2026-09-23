@@ -1,0 +1,213 @@
+// Foregon Deluxe — the lore.
+//
+// Everything the game knows that isn't a rule: the route and its landmarks,
+// the rivers, what the people along the way have to say, the instructions,
+// the professions, the stock of names. All the writing is this game's own.
+// The places are real and so are their approximate trail mileages; the
+// year is 1848, when the trail was busy but the Gold Rush hadn't yet turned
+// half its traffic toward California.
+
+enum place_kind =
+    | town          // where it starts
+    | river         // a crossing
+    | fort          // supplies for sale
+    | sight         // a landmark to see
+    | fork          // the trail divides
+    | finish
+
+struct place =
+    name: const str
+    kind: place_kind
+    next: i32           // the landmark after this one...
+    dist: i32           // ...and how far off it is
+    alt: i32            // at a fork: the other way, or -1
+    alt_dist: i32
+    sprite: i32         // which picture (sprites.fc)
+    // Rivers only:
+    width: i32          // feet
+    depth: f64          // feet, before the season and the weather
+    ferry: i32          // dollars, or 0 for no ferry
+    guide: bool         // a Shoshone guide can be hired
+    region: i32         // 0 plains, 1 high country, 2 mountains, 3 far west
+
+module lore =
+    // Sprite ids for the landmark pictures (sprites.fc draws them).
+    let pic_town   = 0
+    let pic_river  = 1
+    let pic_fort   = 2
+    let pic_rock   = 3
+    let pic_dome   = 4
+    let pic_pass   = 5
+    let pic_spring = 6
+    let pic_mtns   = 7
+    let pic_bluffs = 8
+    let pic_valley = 9
+
+    let independence = 0
+    let south_pass   = 7
+    let green_river  = 8
+    let blue_mtns    = 14
+    let the_dalles   = 16
+    let willamette   = 17
+
+    let places = place[18] {
+        place { name = "Independence", kind = place_kind.town, next = 1, dist = 102, alt = -1,
+                sprite = 0, region = 0 },
+        place { name = "the Kansas River crossing", kind = place_kind.river, next = 2, dist = 83, alt = -1,
+                sprite = 1, width = 620, depth = 3.4, ferry = 5, region = 0 },
+        place { name = "the Big Blue River crossing", kind = place_kind.river, next = 3, dist = 119, alt = -1,
+                sprite = 1, width = 210, depth = 2.6, region = 0 },
+        place { name = "Fort Kearny", kind = place_kind.fort, next = 4, dist = 250, alt = -1,
+                sprite = 2, region = 0 },
+        place { name = "Chimney Rock", kind = place_kind.sight, next = 5, dist = 86, alt = -1,
+                sprite = 3, region = 0 },
+        place { name = "Fort Laramie", kind = place_kind.fort, next = 6, dist = 190, alt = -1,
+                sprite = 2, region = 1 },
+        place { name = "Independence Rock", kind = place_kind.sight, next = 7, dist = 102, alt = -1,
+                sprite = 4, region = 1 },
+        place { name = "South Pass", kind = place_kind.fork, next = 8, dist = 57, alt = 9, alt_dist = 125,
+                sprite = 5, region = 2 },
+        place { name = "the Green River crossing", kind = place_kind.river, next = 10, dist = 144, alt = -1,
+                sprite = 1, width = 410, depth = 4.6, ferry = 10, region = 2 },
+        place { name = "Fort Bridger", kind = place_kind.fort, next = 10, dist = 162, alt = -1,
+                sprite = 2, region = 2 },
+        place { name = "Soda Springs", kind = place_kind.sight, next = 11, dist = 57, alt = -1,
+                sprite = 6, region = 2 },
+        place { name = "Fort Hall", kind = place_kind.fort, next = 12, dist = 182, alt = -1,
+                sprite = 2, region = 2 },
+        place { name = "the Snake River crossing", kind = place_kind.river, next = 13, dist = 114, alt = -1,
+                sprite = 1, width = 980, depth = 5.8, guide = true, region = 3 },
+        place { name = "Fort Boise", kind = place_kind.fort, next = 14, dist = 160, alt = -1,
+                sprite = 2, region = 3 },
+        place { name = "the Blue Mountains", kind = place_kind.fork, next = 15, dist = 55, alt = 16, alt_dist = 125,
+                sprite = 7, region = 2 },
+        place { name = "Fort Walla Walla", kind = place_kind.fort, next = 16, dist = 120, alt = -1,
+                sprite = 2, region = 3 },
+        place { name = "The Dalles", kind = place_kind.fork, next = 17, dist = 100, alt = -1,
+                sprite = 8, region = 3 },
+        place { name = "the Willamette Valley", kind = place_kind.finish, next = -1, dist = 0, alt = -1,
+                sprite = 9, region = 3 }
+    }
+
+    // A short name for the map and the status line.
+    let short_names = (const str)[18] {
+        "Independence", "Kansas River", "Big Blue River", "Fort Kearny",
+        "Chimney Rock", "Fort Laramie", "Independence Rock", "South Pass",
+        "Green River", "Fort Bridger", "Soda Springs", "Fort Hall",
+        "Snake River", "Fort Boise", "Blue Mountains", "Fort Walla Walla",
+        "The Dalles", "Willamette Valley" }
+
+    // Where each landmark sits on the map screen (320x180 logical pixels):
+    // the trail runs east (right) to west (left).
+    let map_xy = i32[36] {
+        292, 96,   272, 92,   258, 86,   236, 90,   200, 86,   176, 80,
+        150, 78,   128, 76,   112, 82,   110, 70,   96, 74,    84, 70,
+        66, 78,    52, 70,    40, 58,    30, 48,    24, 62,    10, 70 }
+
+    // What the people at each landmark have to say: two voices a place.
+    let talk = (const str)[36] {
+        // Independence
+        "A clerk at the outfitters: \"Folks buy flour as if it were gold and bullets as if they were free. Get that backwards and you'll not see the mountains.\"",
+        "A woman loading her wagon: \"My brother went out in '46. His letter said the river crossings are the worst of it. Don't rush a river.\"",
+        // Kansas River
+        "A ferryman, leaning on his pole: \"Five dollars and you'll ride over dry. Wade it yourself and you'll find out how deep 'shallow' is.\"",
+        "A Kaw man trading at the landing: \"The river is high after rain and gentle after a dry week. Watch it a day before you trust it.\"",
+        // Big Blue River
+        "A traveler drying his blankets: \"No ferry here. We floated the wagon and near lost it. Mind the current in the middle.\"",
+        "A boy fishing from the bank: \"Pa says the prairie's the easy part. It don't feel easy.\"",
+        // Fort Kearny
+        "A soldier at the gate: \"The army counts every wagon that passes. You're a good few hundred this month, and there's grass for none of you.\"",
+        "A sutler behind his counter: \"Prices go up with every mile from Missouri. So does the need. Buy what you can carry.\"",
+        // Chimney Rock
+        "A surveyor sketching the spire: \"It was taller once, the old hands say. The wind and the rain are carving it down, a little every year.\"",
+        "A woman writing in a small book: \"I have counted eleven graves since the Platte. I have stopped counting.\"",
+        // Fort Laramie
+        "A trader in a buckskin coat: \"From here the land climbs. Rest your oxen while there's grass. The next good grass is a long way off.\"",
+        "A Lakota woman selling moccasins: \"Your shoes will not last to the mountains. These will.\"",
+        // Independence Rock
+        "A man carving his name into the stone: \"They say if you're here by the Fourth of July you'll reach Oregon before the snow.\"",
+        "A mother with a sleeping child: \"Half the names on this rock are of people who went on. I hope the other half did too.\"",
+        // South Pass
+        "A guide pointing west: \"You're on the backbone of the continent and you'd hardly know it. The water runs toward the Pacific from here.\"",
+        "A worn-out teamster: \"There's a cutoff to the Green River that saves days, if your oxen can go without water. Or the long way, by Bridger's fort.\"",
+        // Green River
+        "A ferry hand: \"This river takes a wagon or two every week. Ten dollars and it won't be yours.\"",
+        "A mountain man: \"The cutoff's behind you now. Hope your water held. Mine didn't, the first time.\"",
+        // Fort Bridger
+        "A blacksmith at his forge: \"Wheels, axles, tongues, I fix them all. Or buy spares and fix them yourself when there's no smith for three hundred miles.\"",
+        "A Shoshone horse trader: \"The trail to the springs is dry. Water your animals well before you leave.\"",
+        // Soda Springs
+        "A child at the spring: \"The water fizzes! Ma says it's good for you. It tastes like a nail.\"",
+        "An old emigrant: \"There's a spring near here that puffs and snorts like a steamboat. Folks come just to hear it.\"",
+        // Fort Hall
+        "A Hudson's Bay clerk: \"The company would rather you took the trail to California. Many do. Oregon is a harder road from here.\"",
+        "A woman mending a wagon cover: \"Ahead is the Snake. The desert along it is worse than any river.\"",
+        // Snake River
+        "A Shoshone guide: \"There are islands in the river here. Cross from one to the next, and let me show you where the bottom is sound.\"",
+        "A drenched traveler: \"We tried it without a guide. The current took our flour and our best ox.\"",
+        // Fort Boise
+        "A trader: \"The Blue Mountains are next. Go steady on the slopes, and don't let the oxen run downhill.\"",
+        "A tired father: \"We've come so far that turning back would kill us as surely as going on. So we go on.\"",
+        // Blue Mountains
+        "A timber cutter: \"Forest again, after all that sage. The way to Fort Walla Walla is gentler. The direct road to The Dalles is shorter.\"",
+        "A missionary's wife: \"Fresh water, fresh game. The worst is behind you, if the weather holds.\"",
+        // Fort Walla Walla
+        "A Cayuse rider: \"The river goes to the sea. Your road goes beside it for a while.\"",
+        "A company man: \"From The Dalles you can float down the Columbia or pay to cross the mountains on Barlow's road.\"",
+        // The Dalles
+        "A raftsman: \"The Columbia is quick and it's cold. Keep off the rocks and keep your head. Or pay Barlow's toll and walk around the mountain.\"",
+        "A woman at the mission: \"You're nearly there. Nearly is the most dangerous word on this trail.\"",
+        // Willamette Valley (never shown: the journey ends on arrival)
+        "",
+        "" }
+
+    // "Learn about the trail": the instructions, a page at a time.
+    let learn_pages = (const str)[5] {
+        "The year is 1848. You are taking your family 2000 miles by covered wagon, from Independence, Missouri, to the Willamette Valley in Oregon Country. The trip takes five months or more. Leave too early and the grass isn't up for the oxen. Leave too late and you meet the snow in the mountains.",
+        "Before you leave, buy supplies. Oxen pull the wagon, and more of them pull it faster. Food is counted in pounds. Each person needs at least two sets of clothing for the cold. Bullets are for hunting. Spare wheels, axles and tongues mend a broken wagon when there's no blacksmith.",
+        "On the trail you choose your pace and your rations. A fast pace and short rations save time and food but wear your family down. Watch their health. Rest when they need it, and see that illness doesn't find them weak.",
+        "At rivers you can ford, caulk the wagon and float it, pay for a ferry, or hire a guide where one is found. Check the depth before you decide. Forts sell supplies at prices that rise the farther west you go. Talk to people along the way. They know things.",
+        "When food runs low, hunt: aim with the arrow keys and fire with the space bar. You can carry only 100 pounds of meat back to the wagon. Score comes from the family that arrives, and the supplies they bring. A farmer who makes it scores three times what a banker does." }
+
+    // The professions: where from, what they bring, what it's worth.
+    let professions = (const str)[3] { "a banker from Boston", "a carpenter from Ohio", "a farmer from Illinois" }
+    let profession_cash = f64[3] { 1600.0, 800.0, 400.0 }
+    let profession_bonus = i32[3] { 1, 2, 3 }
+    let profession_note = (const str)[3] {
+        "Bankers leave with the most money and the easiest start. The trail gives no extra credit for an easy start.",
+        "Carpenters have less money but know their tools: a carpenter mends a broken wagon more often than not.",
+        "Farmers have the least money and the hardest start, but they know animals: their oxen are less likely to go lame, and their score counts three times over." }
+
+    // Months a party might set out in, and what the season means.
+    let months = (const str)[12] {
+        "January", "February", "March", "April", "May", "June", "July",
+        "August", "September", "October", "November", "December" }
+    let depart_months = i32[5] { 2, 3, 4, 5, 6 }     // March..July
+    let month_days = i32[12] { 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }   // 1848 is a leap year
+
+    // Names offered when a name is left blank.
+    let names = (const str)[20] {
+        "Hannah", "Eli", "Martha", "Silas", "Ruth", "Amos", "Lydia", "Josiah",
+        "Clara", "Ezra", "Nell", "Wade", "Abigail", "Tobias", "Delia", "Jonas",
+        "Prudence", "Cyrus", "Mercy", "Gideon" }
+
+    // Illnesses and injuries: the name as said, how hard it drains health a
+    // day, and how many days it lasts at most.
+    let ills = (const str)[10] {
+        "dysentery", "cholera", "typhoid fever", "the measles", "mountain fever",
+        "exhaustion", "a snakebite", "a broken arm", "a broken leg", "a fever" }
+    let ill_drain = f64[10] { 3.0, 6.0, 4.0, 2.5, 3.0, 2.0, 4.5, 1.0, 2.0, 2.5 }
+    let ill_days = i32[10] { 10, 7, 14, 10, 12, 6, 6, 14, 20, 8 }
+
+    // The top ten a new player first sees: travelers of the imagination.
+    let legends = (const str)[10] {
+        "Ada Pennock", "Cornelius Hale", "Sarah Whitlow", "Obadiah Crane",
+        "Maggie Fenn", "Isaac Boyd", "Temperance Lott", "Walter Ames",
+        "Eunice Tate", "Barnabas Grey" }
+    let legend_scores = i32[10] { 7650, 6010, 4930, 3860, 3120, 2480, 1870, 1210, 790, 360 }
+
+    // What a score makes you.
+    let rating = (score: i32) ->
+        if score >= 6000 then "Wagon Master"
+        else if score >= 2500 then "Seasoned Hand"
+        else "Tenderfoot"

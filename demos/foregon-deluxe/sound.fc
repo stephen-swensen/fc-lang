@@ -1,0 +1,134 @@
+// Foregon Deluxe — the sounds.
+//
+// The engine is demos/shared/opl_audio.fc; the chip, demos/shared/opl2.fc.
+// This file is the instruments (foregon-frail's and fario's, a few retuned)
+// and the effect scripts. The tunes are old enough to be anyone's: the
+// first verse of Stephen Foster's "Oh! Susanna" (1848) plays over the title
+// and a fanfare built on its opening over an arrival; the opening of
+// Chopin's funeral march (1839) marks a death.
+
+import opl_audio from shared::
+import opl_midi from shared::
+
+module snd =
+
+    // ============================================================
+    // Instruments
+    // ============================================================
+
+    private let i_tick  = 0     // keys and menus
+    private let i_bell  = 1     // good news, coins, arrivals
+    private let i_crack = 2     // the rifle
+    private let i_reed  = 3     // bad news, the dirge
+    private let i_brass = 4     // the tunes
+    private let i_thud  = 5     // bumps and crashes
+    private let i_wash  = 6     // water
+
+    private let instruments = opl_audio.instrument[7] {
+        opl_audio.instrument {
+            m_char = 0x02, m_scale = 0x14, m_atk = 0xFA, m_sus = 0x6A, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x16, c_atk = 0xFA, c_sus = 0x3A, c_wave = 0x00,
+            n_conn = 0x0C },
+        opl_audio.instrument {
+            m_char = 0x07, m_scale = 0x51, m_atk = 0xF3, m_sus = 0x25, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x03, c_atk = 0xF4, c_sus = 0x26, c_wave = 0x00,
+            n_conn = 0x00 },
+        opl_audio.instrument {
+            m_char = 0x0F, m_scale = 0x00, m_atk = 0xF4, m_sus = 0x4B, m_wave = 0x03,
+            c_char = 0x02, c_scale = 0x00, c_atk = 0xF7, c_sus = 0x38, c_wave = 0x00,
+            n_conn = 0x0E },
+        opl_audio.instrument {
+            m_char = 0x21, m_scale = 0x1A, m_atk = 0x94, m_sus = 0x05, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x03, c_atk = 0x93, c_sus = 0x06, c_wave = 0x00,
+            n_conn = 0x06 },
+        // Brass, a touch brighter than fario's so the tune carries.
+        opl_audio.instrument {
+            m_char = 0x21, m_scale = 0x12, m_atk = 0xC4, m_sus = 0x16, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x04, c_atk = 0xB4, c_sus = 0x16, c_wave = 0x00,
+            n_conn = 0x0A },
+        opl_audio.instrument {
+            m_char = 0x01, m_scale = 0x12, m_atk = 0xF8, m_sus = 0x78, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x08, c_atk = 0xF7, c_sus = 0x58, c_wave = 0x00,
+            n_conn = 0x08 },
+        // Wash: noisy modulator, slow swell and fall — water over a wagon bed.
+        opl_audio.instrument {
+            m_char = 0x0E, m_scale = 0x04, m_atk = 0x74, m_sus = 0x46, m_wave = 0x03,
+            c_char = 0x02, c_scale = 0x0A, c_atk = 0x74, c_sus = 0x46, c_wave = 0x00,
+            n_conn = 0x0E }
+    }
+
+    // ============================================================
+    // Effects
+    // ============================================================
+
+    let sfx_key     = 0
+    let sfx_click   = 1
+    let sfx_bad     = 2
+    let sfx_good    = 3
+    let sfx_death   = 4
+    let sfx_arrive  = 5
+    let sfx_splash  = 6
+    let sfx_coin    = 7
+    let sfx_fanfare = 8
+    let sfx_dirge   = 9
+    let sfx_shot    = 10
+    let sfx_hit     = 11
+    let sfx_bump    = 12
+    let sfx_crash   = 13
+    let sfx_tune    = 14
+
+    private let tick_rate = 140
+
+    // (note, ticks) pairs; -1 rests; 48 is middle C. One effect a line, in
+    // id order. Foster's quarter note is 72 ticks; Chopin's, 60.
+    private let script = i32[142] {
+        79,1,                                                        // key       1
+        72,1, 76,1,                                                  // click     2
+        62,4, 55,10,                                                 // bad       2
+        76,3, 83,10,                                                 // good      2
+        57,20, 52,40,                                                // death     2
+        72,6, 76,6, 79,14,                                           // arrive    3
+        40,60,                                                       // splash    1
+        88,2, 95,8,                                                  // coin      2
+        60,18, 64,18, 67,18, 72,36, 67,18, 72,72,                    // fanfare   6
+        45,60, 45,44, 45,16, 45,84, 48,60, 47,44, 47,16, 45,44,      // dirge    11
+        45,16, 44,44, 45,120,
+        40,2, 31,8,                                                  // shot      2
+        50,2, 43,6,                                                  // hit       2
+        36,3,                                                        // bump      1
+        38,2, 31,4, 26,10,                                           // crash     3
+        60,18, 62,18, 64,36, 67,36, 67,54, 69,18, 67,36, 64,36,      // tune     31
+        60,54, 62,18, 64,36, 64,36, 62,36, 60,36, 62,108,
+        60,18, 62,18, 64,36, 67,36, 67,54, 69,18, 67,36, 64,36,
+        60,54, 62,18, 64,36, 64,36, 62,36, 62,36, 60,108, -1,1
+    }
+
+    private let sounds = opl_audio.sound[15] {
+        opl_audio.sound { instr = i_tick,  first = 0,  steps = 1 },
+        opl_audio.sound { instr = i_tick,  first = 1,  steps = 2 },
+        opl_audio.sound { instr = i_reed,  first = 3,  steps = 2 },
+        opl_audio.sound { instr = i_bell,  first = 5,  steps = 2 },
+        opl_audio.sound { instr = i_reed,  first = 7,  steps = 2 },
+        opl_audio.sound { instr = i_bell,  first = 9,  steps = 3 },
+        opl_audio.sound { instr = i_wash,  first = 12, steps = 1 },
+        opl_audio.sound { instr = i_bell,  first = 13, steps = 2 },
+        opl_audio.sound { instr = i_brass, first = 15, steps = 6 },
+        opl_audio.sound { instr = i_reed,  first = 21, steps = 11 },
+        opl_audio.sound { instr = i_crack, first = 32, steps = 2 },
+        opl_audio.sound { instr = i_thud,  first = 34, steps = 2 },
+        opl_audio.sound { instr = i_thud,  first = 36, steps = 1 },
+        opl_audio.sound { instr = i_thud,  first = 37, steps = 3 },
+        opl_audio.sound { instr = i_brass, first = 40, steps = 31 }
+    }
+
+    private let music_gain = 0.0
+    private let sfx_gain   = 2.00
+
+    let init = (sample_rate: i32, music: opl_midi.player*) ->
+        opl_audio.init(sample_rate,
+            opl_audio.bank {
+                instruments = instruments,
+                sounds = sounds,
+                script = script,
+                tick_rate = tick_rate },
+            music, music_gain, sfx_gain)

@@ -1,0 +1,50 @@
+// Foregon Deluxe — the platform contract.
+//
+// Fario's and foregon-frail's layering: one `struct input` per frame in the
+// game's own vocabulary, and a `module gfx` that gfx.fc defines on raylib.
+// Nothing below gfx.fc ever learns a key code or a library name.
+//
+// This game is played three ways: by menu (a digit picks a line), by typing
+// (names, amounts, an epitaph), and by hand (the hunt and the river, on the
+// arrow keys and the space bar). The input carries all three.
+
+struct input =
+    quit: bool
+
+    // Printable characters typed this frame, in order, as typed (case kept:
+    // names and epitaphs are written in mixed case).
+    typed: u8[16]
+    ntyped: i32
+
+    enter: bool         // RETURN: choose, confirm, continue
+    rubout: bool        // backspace, repeating while held
+    escape: bool        // back out of a screen, or stop a hunt early
+    space: bool         // fire, in the hunt
+
+    held: i32           // the arrow keys down right now (plat.up etc.)
+    tapped: i32         // ... and those that went down this frame
+
+module plat =
+    let up    = 1
+    let down  = 2
+    let left  = 4
+    let right = 8
+
+    let is_down = (inp: const input*, d: i32) -> inp.held & d != 0
+    let is_tap  = (inp: const input*, d: i32) -> inp.tapped & d != 0
+
+// ============================================================
+// What the backend must define
+//
+// module gfx =
+//   Lifecycle:  open(lw, lh, title), close(),
+//               audio_start(a: opl_audio.audio*) -> bool
+//   Frame:      pump(inp: input*), frame_begin(r, g, b), frame_end(),
+//               now() -> f64  (seconds, monotonic)
+//   Primitives (logical coordinates, alpha blended, loose u8 channels):
+//     fill(x, y, w, h, r, g, b, a)                  filled rect
+//
+// One primitive. The game draws at 320x180 — a DOS-era screen, stretched to
+// the window — so everything is a rectangle of whole pixels: the type, the
+// sprites (pixel art kept as text in sprites.fc), the scenery.
+// ============================================================

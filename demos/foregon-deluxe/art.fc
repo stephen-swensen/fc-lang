@@ -1,0 +1,783 @@
+// Foregon Deluxe — the look.
+//
+// A 320x180 screen drawn one rectangle at a time: black backgrounds and
+// bright type for the menus, as the machines of the day did it, and small
+// painted scenes for the trail — the season in the sky, the landmark coming
+// over the horizon, the wagon and its team, the rivers, the hunt, the
+// Columbia's gorge. Pixel art lives in sprites.fc; everything else here is
+// built from gfx.fill (triangles by scanline, for the mountains).
+//
+// It reads the world and draws the screen it's on. Nothing here changes
+// the game.
+
+import math from std::
+
+module art =
+    let w = 320
+    let h = 180
+
+    // ============================================================
+    // Palette
+    // ============================================================
+
+    private let white  = rgb { r = 240u8, g = 236u8, b = 224u8 }
+    private let yellow = rgb { r = 246u8, g = 214u8, b = 96u8 }
+    private let dim    = rgb { r = 150u8, g = 146u8, b = 138u8 }
+    private let red    = rgb { r = 226u8, g = 92u8, b = 72u8 }
+    private let green  = rgb { r = 130u8, g = 206u8, b = 110u8 }
+    private let cyan   = rgb { r = 120u8, g = 200u8, b = 220u8 }
+    private let black  = rgb { r = 0u8, g = 0u8, b = 0u8 }
+
+    private let rect = (x: i32, y: i32, rw: i32, rh: i32, c: rgb) ->
+        gfx.fill(x, y, rw, rh, c.r, c.g, c.b, 255u8)
+
+    private let shade = (x: i32, y: i32, rw: i32, rh: i32, c: rgb, a: u8) ->
+        gfx.fill(x, y, rw, rh, c.r, c.g, c.b, a)
+
+    private let mix = (a: rgb, b: rgb, t: f64) ->
+        let f = (x: u8, y: u8) -> (u8) ((f64) x + ((f64) y - (f64) x) * t)
+        rgb { r = f(a.r, b.r), g = f(a.g, b.g), b = f(a.b, b.b) }
+
+    private let text = (s: const str, x: i32, y: i32, c: rgb) -> font.draw(s, x, y, 1, c)
+    private let centered = (s: const str, y: i32, c: rgb) -> font.centered(s, w / 2, y, 1, c)
+
+    // A filled triangle, by horizontal spans.
+    private let tri = (x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, c: rgb) ->
+        let top = if y1 < y2 then (if y1 < y3 then y1 else y3) else (if y2 < y3 then y2 else y3)
+        let bot = if y1 > y2 then (if y1 > y3 then y1 else y3) else (if y2 > y3 then y2 else y3)
+        for y in top..(bot + 1) do
+            let fy = (f64) y + 0.5
+            let mut lo = 100000.0
+            let mut hi = -100000.0
+            let edge = (ax: i32, ay: i32, bx: i32, by: i32) ->
+                let a_y = (f64) ay
+                let b_y = (f64) by
+                if (fy >= a_y && fy <= b_y) || (fy >= b_y && fy <= a_y) then
+                    if ay == by then { (f64) (if ax < bx then ax else bx), (f64) (if ax > bx then ax else bx) }
+                    else
+                        let t = (fy - a_y) / (b_y - a_y)
+                        let x = (f64) ax + t * (f64) (bx - ax)
+                        { x, x }
+                else { 100000.0, -100000.0 }
+            let { a0, a1 } = edge(x1, y1, x2, y2)
+            let { b0, b1 } = edge(x2, y2, x3, y3)
+            let { c0, c1 } = edge(x3, y3, x1, y1)
+            lo = math.min(a0, math.min(b0, c0))
+            hi = math.max(a1, math.max(b1, c1))
+            if hi >= lo then
+                let xa = (i32) math.floor(lo + 0.5)
+                let xb = (i32) math.floor(hi + 0.5)
+                rect(xa, y, xb - xa + 1, 1, c)
+
+    // A framed panel, the way these games boxed their words.
+    private let panel = (x: i32, y: i32, pw: i32, ph: i32) ->
+        rect(x, y, pw, ph, rgb { r = 10u8, g = 12u8, b = 30u8 })
+        rect(x, y, pw, 1, dim)
+        rect(x, y + ph - 1, pw, 1, dim)
+        rect(x, y, 1, ph, dim)
+        rect(x + pw - 1, y, 1, ph, dim)
+
+    private let prompt = (s: const str) -> centered(s, 170, dim)
+
+    // A menu line: the key in yellow, the words in white (or dim if the
+    // choice is not open).
+    private let option = (k: i32, s: const str, x: i32, y: i32, open: bool) ->
+        text("%d{k}.", x, y, if open then yellow else dim)
+        text(s, x + 18, y, if open then white else dim)
+
+    // The line being typed, with a blinking cursor.
+    private let typed = (g: const world*, x: i32, y: i32, t: f64) ->
+        let s = game.entry(g)
+        text(s, x, y, yellow)
+        if math.fmod(t, 0.8) < 0.5 then
+            rect(x + font.width(s, 1) + (if s.len > 0 then 2 else 0), y + 7, 5, 1, yellow)
+
+    // ============================================================
+    // Scenery
+    // ============================================================
+
+    private let sky_for = (g: const world*) ->
+        if g.snow then rgb { r = 170u8, g = 176u8, b = 190u8 }
+        else if g.rain then rgb { r = 120u8, g = 132u8, b = 150u8 }
+        else
+            let { m, _ } = game.calendar(g.day)
+            if m <= 3 then rgb { r = 130u8, g = 176u8, b = 222u8 }
+            else if m <= 7 then rgb { r = 92u8, g = 150u8, b = 222u8 }
+            else if m <= 9 then rgb { r = 150u8, g = 168u8, b = 196u8 }
+            else rgb { r = 140u8, g = 146u8, b = 164u8 }
+
+    private let ground_for = (g: const world*) ->
+        let { m, _ } = game.calendar(g.day)
+        let reg = game.region(g)
+        let base = if m <= 5 then rgb { r = 92u8, g = 150u8, b = 70u8 }
+                   else if m <= 8 then rgb { r = 160u8, g = 150u8, b = 84u8 }
+                   else if m <= 10 then rgb { r = 140u8, g = 110u8, b = 70u8 }
+                   else rgb { r = 214u8, g = 216u8, b = 222u8 }
+        if reg == 1 || reg == 2 then mix(base, rgb { r = 176u8, g = 158u8, b = 116u8 }, 0.35)
+        else base
+
+    // Sky and land for a scene `sh` pixels tall, horizon at `hy`.
+    private let backdrop = (g: const world*, sh: i32, hy: i32) ->
+        let sky = sky_for(g)
+        let top = mix(sky, rgb { r = 30u8, g = 50u8, b = 110u8 }, 0.4)
+        let bands = 6
+        for i in 0..bands do
+            let c = mix(top, sky, (f64) i / (f64) (bands - 1))
+            rect(0, i * hy / bands, w, hy / bands + 1, c)
+        let gr = ground_for(g)
+        rect(0, hy, w, sh - hy, gr)
+        rect(0, hy, w, 1, mix(gr, sky, 0.5))
+
+    private let rain_over = (g: const world*, sh: i32, t: f64) ->
+        if g.rain then
+            for i in 0..40 do
+                let x = (i * 37 + (i32) (t * 90.0)) % w
+                let y = (i * 53 + (i32) (t * 160.0)) % sh
+                rect(x, y, 1, 3, rgb { r = 200u8, g = 210u8, b = 230u8 })
+        if g.snow then
+            for i in 0..50 do
+                let x = (i * 41 + (i32) (math.sin(t + (f64) i) * 4.0)) % w
+                let y = (i * 29 + (i32) (t * 22.0)) % sh
+                rect(x, y, 1, 1, white)
+
+    // ============================================================
+    // Landmark pictures: each drawn with its foot at (x, ground).
+    // ============================================================
+
+    private let pic_town = (x: i32, gy: i32) ->
+        let fronts = i32[5] { 0, 26, 50, 78, 104 }
+        let heights = i32[5] { 22, 30, 18, 26, 20 }
+        let cols = (const str)[5] { "b", "t", "d", "o", "b" }
+        for i in 0..5 do
+            let c = sprites.color(cols[i][0])
+            rect(x + fronts[i], gy - heights[i], 22, heights[i], c)
+            rect(x + fronts[i] + 4, gy - heights[i] + 5, 5, 5, yellow)
+            rect(x + fronts[i] + 13, gy - heights[i] + 5, 5, 5, yellow)
+            rect(x + fronts[i] + 8, gy - 9, 6, 9, sprites.color('k'))
+
+    private let pic_river = (x: i32, gy: i32) ->
+        // Cottonwoods on the far bank, the water, a ferry flat at the landing.
+        for i in 0..6 do
+            sprites.draw(sprites.tree, x - 10 + i * 26, gy - 13 - (i % 2) * 2, false)
+        rect(x - 40, gy + 1, 220, 12, rgb { r = 56u8, g = 100u8, b = 170u8 })
+        rect(x - 40, gy + 4, 220, 1, rgb { r = 130u8, g = 170u8, b = 220u8 })
+        rect(x - 30, gy + 9, 60, 1, rgb { r = 130u8, g = 170u8, b = 220u8 })
+        rect(x + 120, gy + 6, 30, 4, sprites.color('b'))
+        rect(x + 120, gy + 6, 30, 1, sprites.color('d'))
+
+    private let pic_fort = (x: i32, gy: i32) ->
+        let wood = sprites.color('b')
+        for i in 0..14 do
+            let ph = if i == 0 || i == 13 then 30 else 22
+            rect(x + i * 7, gy - ph, 6, ph, wood)
+            rect(x + i * 7 + 2, gy - ph - 2, 2, 2, wood)
+        rect(x + 40, gy - 14, 16, 14, sprites.color('d'))
+        rect(x + 70, gy - 48, 1, 26, sprites.color('G'))
+        rect(x + 71, gy - 48, 9, 6, red)
+        rect(x + 71, gy - 45, 9, 1, white)
+
+    private let pic_chimney = (x: i32, gy: i32) ->
+        let rock = rgb { r = 196u8, g = 160u8, b = 120u8 }
+        let dark = rgb { r = 150u8, g = 118u8, b = 86u8 }
+        tri(x, gy, x + 100, gy, x + 50, gy - 30, rock)
+        rect(x + 46, gy - 70, 8, 42, rock)
+        rect(x + 51, gy - 70, 3, 42, dark)
+        rect(x + 47, gy - 74, 6, 4, rock)
+
+    private let pic_dome = (x: i32, gy: i32) ->
+        let rock = rgb { r = 160u8, g = 144u8, b = 130u8 }
+        for i in 0..24 do
+            let half = (i32) (math.sqrt((f64) (24 * 24 - i * i)) * 2.4)
+            rect(x + 60 - half, gy - i, half * 2, 1, rock)
+        rect(x + 30, gy - 10, 20, 1, dim)
+        rect(x + 58, gy - 16, 24, 1, dim)
+
+    private let pic_pass = (x: i32, gy: i32) ->
+        let far = rgb { r = 120u8, g = 120u8, b = 150u8 }
+        tri(x - 40, gy, x + 60, gy, x + 10, gy - 40, far)
+        tri(x + 80, gy, x + 200, gy, x + 150, gy - 50, far)
+        tri(x + 10, gy - 40, x + 18, gy - 33, x + 2, gy - 33, white)
+        tri(x + 150, gy - 50, x + 159, gy - 42, x + 141, gy - 42, white)
+
+    private let pic_spring = (x: i32, gy: i32) ->
+        rect(x + 10, gy - 2, 70, 6, rgb { r = 110u8, g = 170u8, b = 190u8 })
+        for i in 0..8 do
+            rect(x + 16 + i * 7, gy - 5 - (i % 3), 2, 2, white)
+        rect(x + 90, gy - 12, 6, 12, dim)
+        rect(x + 91, gy - 18, 4, 5, white)
+
+    private let pic_mtns = (x: i32, gy: i32) ->
+        let far = rgb { r = 70u8, g = 96u8, b = 110u8 }
+        let pine = sprites.color('N')
+        tri(x - 30, gy, x + 90, gy, x + 30, gy - 44, far)
+        tri(x + 60, gy, x + 200, gy, x + 130, gy - 56, far)
+        for i in 0..12 do
+            let px = x + i * 14
+            tri(px, gy, px + 8, gy, px + 4, gy - 14, pine)
+
+    private let pic_bluffs = (x: i32, gy: i32) ->
+        let rock = rgb { r = 90u8, g = 80u8, b = 78u8 }
+        rect(x - 20, gy - 34, 70, 34, rock)
+        rect(x + 110, gy - 28, 80, 28, rock)
+        for i in 0..6 do
+            rect(x - 16 + i * 11, gy - 34, 1, 34, sprites.color('k'))
+        rect(x + 50, gy - 4, 60, 8, rgb { r = 56u8, g = 100u8, b = 170u8 })
+
+    private let pic_valley = (x: i32, gy: i32) ->
+        for i in 0..6 do
+            rect(x + i * 30, gy - 3, 26, 3, if i % 2 == 0 then yellow else green)
+        rect(x + 70, gy - 22, 30, 22, sprites.color('b'))
+        tri(x + 66, gy - 22, x + 104, gy - 22, x + 85, gy - 36, sprites.color('d'))
+        rect(x + 82, gy - 12, 6, 12, sprites.color('k'))
+
+    let picture = (id: i32, x: i32, gy: i32) ->
+        if id == lore.pic_town then pic_town(x, gy)
+        else if id == lore.pic_river then pic_river(x, gy)
+        else if id == lore.pic_fort then pic_fort(x, gy)
+        else if id == lore.pic_rock then pic_chimney(x, gy)
+        else if id == lore.pic_dome then pic_dome(x, gy)
+        else if id == lore.pic_pass then pic_pass(x, gy)
+        else if id == lore.pic_spring then pic_spring(x, gy)
+        else if id == lore.pic_mtns then pic_mtns(x, gy)
+        else if id == lore.pic_bluffs then pic_bluffs(x, gy)
+        else pic_valley(x, gy)
+
+    // ============================================================
+    // The wagon
+    // ============================================================
+
+    // The wagon and its two yoke, facing west, feet on `gy`. `t` turns the
+    // wheels and walks the oxen.
+    let wagon = (x: i32, gy: i32, t: f64, moving: bool) ->
+        let frame = if moving then (i32) (t * 6.0) % 2 else 0
+        let ox = if frame == 0 then sprites.ox_a else sprites.ox_b
+        let ox2 = if frame == 0 then sprites.ox_b else sprites.ox_a
+        sprites.draw(ox2, x - 40, gy - 9, false)
+        sprites.draw(ox, x - 22, gy - 9, false)
+        rect(x - 8, gy - 6, 10, 1, sprites.color('d'))
+        sprites.draw(sprites.wagon, x, gy - 17, false)
+        let wh = if frame == 0 then sprites.wheel_a else sprites.wheel_b
+        sprites.draw(wh, x + 1, gy - 9, false)
+        sprites.draw(wh, x + 15, gy - 9, false)
+
+    // ============================================================
+    // Screens
+    // ============================================================
+
+    private let status_line = (g: const world*, y: i32) ->
+        let { m, d } = game.calendar(g.day)
+        text("%.9s{lore.months[m]} %d{d}, 1848", 8, y, white)
+        font.right("Weather: %.10s{game.weather_word(g)}", 312, y, 1, white)
+
+    private let draw_title = (g: const world*, t: f64) ->
+        backdrop(g, 90, 70)
+        pic_mtns(150, 70)
+        wagon(200, 84, t, true)
+        font.centered("FOREGON", w / 2, 8, 3, rgb { r = 60u8, g = 36u8, b = 20u8 })
+        font.centered("FOREGON", w / 2, 6, 3, white)
+        font.centered("DELUXE", w / 2, 34, 2, yellow)
+        let y = 100
+        option(1, "Travel the trail", 88, y, true)
+        option(2, "Learn about the trail", 88, y + 12, true)
+        option(3, "See the Oregon Top Ten", 88, y + 24, true)
+        option(4, if g.sound_on then "Turn sound off" else "Turn sound on", 88, y + 36, true)
+        option(5, "End", 88, y + 48, true)
+        prompt("Press a number")
+
+    private let draw_learn = (g: const world*) ->
+        centered("Learning about the trail", 12, yellow)
+        ignore font.draw_wrapped(lore.learn_pages[g.page], 20, 32, 46, white)
+        centered("Page %d{g.page + 1} of 5", 150, dim)
+        prompt("RETURN for more, ESC to go back")
+
+    private let draw_top = (g: const world*) ->
+        centered("The Oregon Top Ten", 10, yellow)
+        text("Name", 60, 28, dim)
+        font.right("Score", 220, 28, 1, dim)
+        text("Rating", 232, 28, dim)
+        for i in 0..g.archive.ntop do
+            let e = &g.archive.top[i]
+            let y = 40 + i * 11
+            text(records.top_name(e), 60, y, white)
+            font.right("%d{e.score}", 220, y, 1, white)
+            text(lore.rating(e.score), 232, y, cyan)
+        prompt("Press RETURN")
+
+    private let draw_profession = () ->
+        centered("Who are you, setting out for Oregon?", 20, yellow)
+        option(1, "A banker from Boston ($1600)", 40, 50, true)
+        option(2, "A carpenter from Ohio ($800)", 40, 64, true)
+        option(3, "A farmer from Illinois ($400)", 40, 78, true)
+        option(4, "Which should I be?", 40, 100, true)
+        prompt("Press a number")
+
+    private let draw_profession_info = () ->
+        centered("Which should I be?", 12, yellow)
+        let mut y = 30
+        for i in 0..3 do
+            text("%.24s{lore.professions[i]}:", 16, y, cyan)
+            y = y + 10
+            y = y + font.draw_wrapped(lore.profession_note[i], 24, y, 48, white) * font.cell_h + 6
+        prompt("Press RETURN")
+
+    private let draw_names = (g: const world*, t: f64) ->
+        if g.page == 0 then
+            centered("What is the name of your wagon leader?", 20, yellow)
+        else
+            centered("What are the names of the others?", 20, yellow)
+        for i in 0..5 do
+            let y = 44 + i * 13
+            let c = if i == g.page then yellow else dim
+            text("%d{i + 1}.", 70, y, c)
+            if i < g.page then text(game.name_of(&g.people[i]), 90, y, white)
+            else if i == g.page then typed(g, 90, y, t)
+        text("(leave a name blank and one will be chosen)", 30, 120, dim)
+        prompt("Type a name and press RETURN")
+
+    private let draw_names_ok = (g: const world*) ->
+        centered("Your party:", 20, yellow)
+        for i in 0..5 do
+            text(game.name_of(&g.people[i]), 110, 44 + i * 13, white)
+            if i == 0 then text("(leader)", 190, 44, dim)
+        centered("Are these names right? (Y/N)", 130, yellow)
+
+    private let draw_month = () ->
+        centered("When will you leave Independence?", 20, yellow)
+        let mut y = 44
+        for i in 0..5 do
+            option(i + 1, lore.months[lore.depart_months[i]], 110, y, true)
+            y = y + 12
+        option(6, "Which month is best?", 110, y + 8, true)
+        prompt("Press a number")
+
+    private let draw_month_info = () ->
+        centered("Which month is best?", 16, yellow)
+        ignore font.draw_wrapped("Leave in March and the grass is still thin, the rivers are high with melting snow, and the nights are cold. Leave in July and you will be crossing the Blue Mountains in the first snows of autumn. Most parties aim for April or May: grass for the oxen, and time enough to beat the winter.", 20, 40, 46, white)
+        prompt("Press RETURN")
+
+    private let draw_store = (g: const world*, t: f64) ->
+        let at_start = g.days_out == 0 && g.place == lore.independence
+        let who = if at_start then "Hollis & Sons, Outfitters" else lore.short_names[g.place]
+        centered(who, 6, yellow)
+        if at_start then centered("Independence, Missouri", 16, dim)
+        else centered("Prices here are steep", 16, dim)
+        text("Item", 14, 32, dim)
+        font.right("Each", 214, 32, 1, dim)
+        font.right("Have", 260, 32, 1, dim)
+        for i in 0..7 do
+            let y = 44 + i * 12
+            let sel = g.screen == screen.store_qty && g.sel == i
+            option(i + 1, game.item_names[i], 14, y, true)
+            let cost = game.item_cost(g, i)
+            font.right("$%.2f{cost}", 214, y, 1, if sel then yellow else white)
+            font.right("%d{game.item_have(g, i)}", 260, y, 1, white)
+        text("Cash on hand: $%.2f{g.cash}", 14, 134, green)
+        if g.screen == screen.store_qty then
+            text("How many?", 14, 150, yellow)
+            typed(g, 76, 150, t)
+            prompt("Type an amount and press RETURN")
+        else if at_start then prompt("Press a number to buy; RETURN to set out")
+        else prompt("Press a number to buy; RETURN to leave")
+
+    // The travel scene, top 108 pixels: the landmark coming over the
+    // horizon from the west, the wagon rolling toward it.
+    private let travel_scene = (g: const world*, t: f64, moving: bool) ->
+        let gy = 92
+        backdrop(g, 108, 72)
+        // The next landmark appears within 60 miles, sliding in from the
+        // left as the wagon closes on it.
+        if g.leg_left < 60.0 && g.next >= 0 then
+            let px = -150 + (i32) ((1.0 - g.leg_left / 60.0) * 170.0)
+            picture(lore.places[g.next].sprite, px, 72)
+        wagon(220, gy, g.anim, moving)
+        rain_over(g, 108, t)
+
+    private let draw_travel = (g: const world*, t: f64) ->
+        travel_scene(g, t, true)
+        panel(8, 112, 304, 56)
+        let { m, d } = game.calendar(g.day)
+        text("Date:", 16, 118, dim)
+        text("%.9s{lore.months[m]} %d{d}, 1848", 108, 118, white)
+        text("Weather:", 16, 127, dim)
+        text(game.weather_word(g), 108, 127, white)
+        text("Health:", 16, 136, dim)
+        text(game.health_word(game.avg_health(g)), 108, 136, white)
+        text("Food:", 16, 145, dim)
+        text("%d{(i32) g.food} pounds", 108, 145, white)
+        text("Next landmark:", 16, 154, dim)
+        text("%d{(i32) math.ceil(g.leg_left)} miles", 108, 154, white)
+        font.right("%d{(i32) g.miles}", 300, 118, 1, white)
+        font.right("miles traveled", 300, 127, 1, dim)
+        if g.broken != 0 then font.right("wagon limping", 300, 145, 1, red)
+        prompt("Press RETURN to stop")
+
+    private let draw_landmark = (g: const world*, t: f64) ->
+        backdrop(g, 120, 80)
+        picture(lore.places[g.place].sprite, 90, 100)
+        rain_over(g, 120, t)
+        panel(20, 126, 280, 30)
+        let pl = lore.places[g.place]
+        font.centered(pl.name, w / 2, 132, 1, yellow)
+        let { m, d } = game.calendar(g.day)
+        font.centered("%.9s{lore.months[m]} %d{d}, 1848", w / 2, 143, 1, white)
+        prompt("Press RETURN")
+
+    private let draw_menu = (g: const world*) ->
+        let pl = lore.places[g.place]
+        let here = if g.at_landmark then lore.short_names[g.place] else "On the trail"
+        centered(here, 4, yellow)
+        status_line(g, 16)
+        text("Health: %.9s{game.health_word(game.avg_health(g))}", 8, 26, white)
+        font.right("Pace: %.9s{game.pace_word(g.pace)}", 312, 26, 1, white)
+        font.right("Rations: %.10s{game.rations_word(g.rations)}", 312, 36, 1, white)
+        let x = 60
+        let mut y = 52
+        option(1, "Continue on the trail", x, y, true)
+        option(2, "Check the supplies", x, y + 10, true)
+        option(3, "Look at the map", x, y + 20, true)
+        option(4, "Change the pace", x, y + 30, true)
+        option(5, "Change the rations", x, y + 40, true)
+        option(6, "Stop to rest", x, y + 50, true)
+        option(7, "Try to trade", x, y + 60, true)
+        option(8, "Go hunting", x, y + 70, true)
+        option(9, "Talk to people", x, y + 80, g.at_landmark)
+        let shop = g.at_landmark && (pl.kind == place_kind.fort || pl.kind == place_kind.town)
+        option(0, "Buy supplies", x, y + 90, shop)
+        prompt("What will you do? Press a number")
+
+    private let draw_supplies = (g: const world*) ->
+        centered("Your supplies", 10, yellow)
+        let rows = (const str)[8] { "Oxen", "Food (pounds)", "Clothing (sets)", "Bullets",
+                                    "Spare wheels", "Spare axles", "Spare tongues", "Cash" }
+        let vals = i32[8] { g.oxen, (i32) g.food, g.clothing, g.bullets, g.wheels, g.axles,
+                            g.tongues, (i32) g.cash }
+        for i in 0..8 do
+            let y = 32 + i * 12
+            text(rows[i], 70, y, white)
+            font.right(if i == 7 then "$%d{vals[i]}" else "%d{vals[i]}", 250, y, 1, white)
+        let mut y = 134
+        for i in 0..5 do
+            let p = &g.people[i]
+            if p.alive then
+                let tag = if p.ill >= 0 then lore.ills[p.ill] else (const str) game.health_word(p.health)
+                text("%.12s{game.name_of(p)}: %.16s{tag}", 14 + (i % 3) * 102, y + (i / 3) * 10,
+                     if p.ill >= 0 then red else dim)
+        prompt("Press RETURN")
+
+    private let draw_map = (g: const world*) ->
+        rect(0, 0, w, h, rgb { r = 214u8, g = 196u8, b = 150u8 })
+        // The mountains, roughly where they stand.
+        let hill = rgb { r = 176u8, g = 150u8, b = 110u8 }
+        tri(96, 90, 150, 90, 124, 56, hill)
+        tri(120, 88, 180, 88, 150, 60, hill)
+        tri(30, 80, 70, 80, 48, 50, hill)
+        tri(10, 76, 40, 76, 22, 40, hill)
+        centered("The trail to Oregon", 6, rgb { r = 70u8, g = 44u8, b = 28u8 })
+        let ink = rgb { r = 90u8, g = 60u8, b = 40u8 }
+        let path = rgb { r = 150u8, g = 40u8, b = 30u8 }
+        // Every leg, faint; the legs behind you, bold.
+        for i in 0..18 do
+            let pl = lore.places[i]
+            let ax = lore.map_xy[i * 2]
+            let ay = lore.map_xy[i * 2 + 1]
+            let draw_leg = (to: i32) ->
+                if to >= 0 then
+                    let bx = lore.map_xy[to * 2]
+                    let by = lore.map_xy[to * 2 + 1]
+                    for s in 0..24 do
+                        let px = ax + (bx - ax) * s / 24
+                        let py = ay + (by - ay) * s / 24
+                        rect(px, py, 1, 1, ink)
+            draw_leg(pl.next)
+            draw_leg(pl.alt)
+        for i in 0..18 do
+            let x = lore.map_xy[i * 2]
+            let y = lore.map_xy[i * 2 + 1]
+            rect(x - 1, y - 1, 3, 3, if i == g.place then path else ink)
+        // Where the wagon is now, between the last landmark and the next.
+        let fx = lore.map_xy[g.place * 2]
+        let fy = lore.map_xy[g.place * 2 + 1]
+        let tx = if g.next >= 0 && g.leg_len > 0.0 then lore.map_xy[g.next * 2] else fx
+        let ty = if g.next >= 0 && g.leg_len > 0.0 then lore.map_xy[g.next * 2 + 1] else fy
+        let f = if g.leg_len > 0.0 then 1.0 - g.leg_left / g.leg_len else 0.0
+        let wx = fx + (i32) ((f64) (tx - fx) * f)
+        let wy = fy + (i32) ((f64) (ty - fy) * f)
+        rect(wx - 2, wy - 2, 5, 5, path)
+        rect(wx - 1, wy - 1, 3, 3, white)
+        text("Last: %.20s{lore.short_names[g.place]}", 8, 130, ink)
+        if g.next >= 0 && g.leg_len > 0.0 then
+            text("Next: %.20s{lore.short_names[g.next]} (%d{(i32) math.ceil(g.leg_left)} miles)",
+                 8, 140, ink)
+        text("Miles traveled: %d{(i32) g.miles}", 8, 150, ink)
+        font.centered("Press RETURN", w / 2, 168, 1, ink)
+
+    private let draw_choice3 = (title: const str, a: const str, b: const str, c: const str,
+                                note: const str, cur: i32) ->
+        centered(title, 20, yellow)
+        option(1, a, 50, 50, true)
+        option(2, b, 50, 64, true)
+        option(3, c, 50, 78, true)
+        ignore font.draw_wrapped(note, 30, 104, 44, dim)
+        text("Now: %.12s{if cur == 1 then a else if cur == 2 then b else c}", 50, 150, cyan)
+        prompt("Press a number, or ESC")
+
+    private let draw_rest = (g: const world*, t: f64) ->
+        draw_travel_frame(g, t)
+        panel(40, 120, 240, 40)
+        text("How many days will you rest? (1-9)", 52, 130, yellow)
+        typed(g, 150, 144, t)
+
+    private let draw_travel_frame = (g: const world*, t: f64) ->
+        travel_scene(g, t, false)
+
+    private let draw_trade = (g: const world*, t: f64) ->
+        draw_travel_frame(g, t)
+        panel(20, 112, 280, 56)
+        let give = game.trade_names[g.give_item]
+        let want = game.trade_names[g.want_item]
+        ignore font.draw_wrapped("A traveler offers %d{g.give_n} %.16s{give} for %d{g.want_n} %.16s{want}.", 28, 118, 44, white)
+        if game.can_trade(g) then text("Will you trade? (Y/N)", 28, 150, yellow)
+        else text("You don't have that much to give. (RETURN)", 28, 150, red)
+
+    private let draw_talk = (g: const world*) ->
+        let pl = lore.places[g.place]
+        backdrop(g, 70, 50)
+        picture(pl.sprite, 90, 64)
+        font.centered(pl.name, w / 2, 76, 1, yellow)
+        ignore font.draw_wrapped(lore.talk[g.place * 2 + g.page], 20, 92, 46, white)
+        prompt("Press RETURN")
+
+    private let draw_river = (g: const world*, t: f64) ->
+        let pl = lore.places[g.place]
+        backdrop(g, 70, 50)
+        rect(0, 54, w, 16, rgb { r = 56u8, g = 100u8, b = 170u8 })
+        for i in 0..10 do
+            rect((i * 37 + (i32) (t * 20.0)) % w, 58 + (i % 3) * 4, 8, 1,
+                 rgb { r = 140u8, g = 180u8, b = 230u8 })
+        wagon(250, 52, t, false)
+        font.centered(pl.name, w / 2, 74, 1, yellow)
+        font.centered("%d{g.width} feet across, %.1f{g.depth} feet deep in the middle.", w / 2, 86, 1, white)
+        option(1, "Ford it: drive the wagon across", 30, 100, true)
+        option(2, "Caulk the wagon and float it", 30, 110, true)
+        option(3, if pl.ferry > 0 then (const str) "Take the ferry ($%d{pl.ferry})" else "Take a ferry (none here)", 30, 120, pl.ferry > 0)
+        option(4, if pl.guide then "Hire a Shoshone guide (3 sets of clothing)" else "Hire a guide (none here)", 30, 130, pl.guide)
+        option(5, "Wait a day and see", 30, 140, true)
+        option(6, "Learn about crossing", 30, 150, true)
+        prompt("How will you cross?")
+
+    private let draw_river_info = () ->
+        centered("Crossing a river", 14, yellow)
+        ignore font.draw_wrapped("A wagon can be driven across water up to about two and a half feet deep; deeper than three and the current starts to win. A wagon caulked with tar and floated needs deep water and a slow river; a wide one is harder. Ferries and guides cost money or goods, but they know the river. Rain raises every river, and spring melt raises them most.", 20, 34, 46, white)
+        prompt("Press RETURN")
+
+    private let draw_crossing = (g: const world*, t: f64) ->
+        backdrop(g, 180, 60)
+        rect(0, 90, w, 60, rgb { r = 56u8, g = 100u8, b = 170u8 })
+        for i in 0..24 do
+            rect((i * 29 + (i32) (t * 30.0)) % w, 94 + (i % 6) * 9, 10, 1,
+                 rgb { r = 140u8, g = 180u8, b = 230u8 })
+        let x = 300 - (i32) (g.cross_t / 2.6 * 330.0)
+        let bob = (i32) (math.sin(t * 6.0) * 1.5)
+        wagon(x, 124 + bob, t, true)
+        rect(x - 44, 120, 70, 4, rgb { r = 56u8, g = 100u8, b = 170u8 })
+
+    private let draw_fork = (g: const world*) ->
+        let pl = lore.places[g.place]
+        centered("The trail divides at %.20s{lore.short_names[g.place]}.", 30, yellow)
+        option(1, "Head for %.20s{lore.short_names[pl.next]} (%d{pl.dist} miles)", 40, 60, true)
+        option(2, "Head for %.20s{lore.short_names[pl.alt]} (%d{pl.alt_dist} miles)", 40, 74, true)
+        option(3, "Look at the map", 40, 88, true)
+        prompt("Which way?")
+
+    private let draw_dalles = (g: const world*) ->
+        backdrop(g, 64, 44)
+        pic_bluffs(70, 60)
+        centered("The Dalles", 68, yellow)
+        ignore font.draw_wrapped("The road ends at the Columbia. From here you may lash the wagon to a raft and ride the river down through the gorge, or pay Sam Barlow's toll and take his road around the south side of Mount Hood.", 20, 82, 46, white)
+        option(1, "Float down the Columbia", 50, 136, true)
+        option(2, "Take the Barlow Road ($%.2f{game.barlow_toll(g)})", 50, 148, g.cash >= game.barlow_toll(g))
+        prompt("Which will it be?")
+
+    // The hunt: a field from above, a status line across the top.
+    private let hunt_decor = i32[20] { 30, 40, 90, 150, 140, 60, 250, 120, 280, 44,
+                                       60, 130, 200, 160, 110, 100, 220, 70, 170, 40 }
+
+    private let critter_art = (k: species) ->
+        match k with
+        | squirrel -> sprites.squirrel
+        | rabbit -> sprites.rabbit
+        | deer -> sprites.deer
+        | elk -> sprites.elk
+        | buffalo -> sprites.buffalo
+        | bear -> sprites.bear
+
+    private let draw_hunt = (g: const world*) ->
+        let hs = &g.hunt
+        let grass = ground_for(g)
+        rect(0, hunt.top, w, h - hunt.top, grass)
+        for i in 0..10 do
+            let x = hunt_decor[i * 2]
+            let y = hunt_decor[i * 2 + 1]
+            if i % 2 == 0 then sprites.draw(sprites.tree, x, y - 13, false)
+            else sprites.draw(sprites.bush, x, y - 5, false)
+        for i in 0..10 do
+            let c = &hs.critters[i]
+            if c.live then
+                let art = critter_art(c.kind)
+                let x = (i32) c.x - sprites.width(art) / 2
+                let y = (i32) c.y - sprites.height(art) / 2
+                if c.shot then
+                    sprites.draw_fallen(art, x, y + 2, c.vx < 0.0, rgb { r = 92u8, g = 40u8, b = 30u8 })
+                else sprites.draw(art, x, y, c.vx < 0.0)
+        // The hunter and the line of his aim.
+        let hx = (i32) hs.hx
+        let hy = (i32) hs.hy
+        sprites.draw(sprites.hunter, hx - 3, hy - 6, hs.fx < 0)
+        for s in 3..9 do
+            rect(hx + hs.fx * s, hy + hs.fy * s, 1, 1, sprites.color('k'))
+        if hs.flash > 0.0 then rect(hx + hs.fx * 10 - 1, hy + hs.fy * 10 - 1, 3, 3, yellow)
+        for i in 0..4 do
+            let b = &hs.balls[i]
+            if b.live then rect((i32) b.x, (i32) b.y, 1, 1, black)
+        rect(0, 0, w, hunt.top, black)
+        text("Bullets: %d{hs.bullets}", 4, 3, white)
+        text("Meat: %d{hs.meat} lb", 120, 3, white)
+        font.right("%d{(i32) math.ceil(hs.time_left)}s", 316, 3, 1, yellow)
+
+    private let draw_raft = (g: const world*, t: f64) ->
+        let r = &g.raft
+        let water = rgb { r = 50u8, g = 94u8, b = 160u8 }
+        let bank = rgb { r = 96u8, g = 84u8, b = 70u8 }
+        for y in 0..h do
+            let d = raft.river_at(r, (f64) y)
+            let l = (i32) raft.left_bank(d)
+            let rt = (i32) raft.right_bank(d)
+            rect(0, y, l, 1, bank)
+            rect(l, y, rt - l, 1, water)
+            rect(rt, y, w - rt, 1, bank)
+            if ((i32) d) % 23 == 0 then rect(l + ((y * 7) % (rt - l)), y, 6, 1,
+                                             rgb { r = 130u8, g = 170u8, b = 220u8 })
+        for i in 0..14 do
+            let k = &r.rocks[i]
+            if k.live then
+                rect((i32) k.x - k.r, (i32) k.y - k.r, k.r * 2, k.r * 2, rgb { r = 110u8, g = 108u8, b = 104u8 })
+                rect((i32) k.x - k.r + 1, (i32) k.y - k.r, k.r, 2, rgb { r = 160u8, g = 158u8, b = 150u8 })
+        let shake = if r.bump < 0.3 then (i32) (math.sin(t * 60.0) * 2.0) else 0
+        sprites.draw(sprites.raft, (i32) r.x - 7 + shake, (i32) raft.raft_y - 7, false)
+        rect(0, 0, w, 12, black)
+        let left = (i32) ((raft.length - r.dist) / raft.flow)
+        text("The Columbia River", 4, 2, yellow)
+        font.right("Rocks struck: %d{r.hits}", 316, 2, 1, if r.hits > 0 then red else white)
+        font.centered("%d{if left < 0 then 0 else left}s", w / 2, 2, 1, dim)
+
+    private let draw_marker = (name: const str, epitaph: const str, g: const world*, t: f64) ->
+        backdrop(g, 120, 90)
+        sprites.draw_scaled(sprites.tombstone, 148, 62, 2)
+        rain_over(g, 120, t)
+        panel(30, 124, 260, 36)
+        font.centered("Here lies %.12s{name}", w / 2, 130, 1, yellow)
+        font.centered(epitaph, w / 2, 144, 1, white)
+
+    private let draw_score = (g: const world*) ->
+        centered("Points for arriving", 4, yellow)
+        let mut y = 18
+        for i in 0..5 do
+            let p = &g.people[i]
+            if p.alive then
+                text("%.12s{game.name_of(p)} (%.9s{game.health_word(p.health)})", 40, y, white)
+                font.right("%d{game.health_points(p.health)}", 280, y, 1, white)
+                y = y + 9
+        let parts = (g.wheels + g.axles + g.tongues) * 3
+        let lines = (const str)[6] { "The wagon", "Oxen", "Spare parts", "Clothing", "Bullets and food", "Cash" }
+        let pts = i32[6] { 50, g.oxen * 5, parts, g.clothing * 2,
+                           g.bullets / 40 + (i32) (g.food / 20.0), (i32) (g.cash / 4.0) }
+        for i in 0..6 do
+            text(lines[i], 40, y, dim)
+            font.right("%d{pts[i]}", 280, y, 1, dim)
+            y = y + 9
+        let bonus = lore.profession_bonus[g.profession]
+        text("Times %d{bonus} for %.24s{lore.professions[g.profession]}", 40, y + 3, cyan)
+        text("Total: %d{g.score}", 40, y + 14, yellow)
+        font.right(lore.rating(g.score), 280, y + 14, 1, green)
+        if g.rank >= 0 then centered("Number %d{g.rank + 1} on the Oregon Top Ten!", y + 25, green)
+        prompt("Press RETURN")
+
+    // The messages, over whatever screen is up.
+    private let draw_messages = (g: const world*) ->
+        let mut lines = 0
+        for i in 0..g.nmsgs do lines = lines + font.count_wrapped(game.message(g, i), 46)
+        let ph = lines * font.cell_h + (g.nmsgs - 1) * 3 + 22
+        let py = 118 - ph / 2
+        panel(16, py, 288, ph)
+        let mut y = py + 6
+        for i in 0..g.nmsgs do
+            let n = font.draw_wrapped(game.message(g, i), 24, y, 46, white)
+            y = y + n * font.cell_h + 3
+        font.centered("Press RETURN", w / 2, py + ph - 11, 1, dim)
+
+    let render = (g: const world*, t: f64) ->
+        gfx.frame_begin(0u8, 0u8, 0u8)
+        match g.screen with
+        | title -> draw_title(g, t)
+        | learn -> draw_learn(g)
+        | top_ten -> draw_top(g)
+        | profession -> draw_profession()
+        | profession_info -> draw_profession_info()
+        | names -> draw_names(g, t)
+        | names_ok -> draw_names_ok(g)
+        | month -> draw_month()
+        | month_info -> draw_month_info()
+        | store -> draw_store(g, t)
+        | store_qty -> draw_store(g, t)
+        | depart ->
+            travel_scene(g, t, false)
+            panel(20, 116, 280, 44)
+            centered("You set out from Independence,", 124, yellow)
+            centered("bound for the Willamette Valley.", 134, yellow)
+            centered("Press RETURN to begin", 148, dim)
+        | travel -> draw_travel(g, t)
+        | landmark -> draw_landmark(g, t)
+        | menu -> draw_menu(g)
+        | supplies -> draw_supplies(g)
+        | map -> draw_map(g)
+        | pace -> draw_choice3("Change the pace", "Steady", "Strenuous", "Grueling",
+                               "Steady: about 16 miles a day on good ground, and rest at night. Strenuous: dawn to dusk, and the family feels it. Grueling: as far as the oxen can go, and everyone pays.", g.pace)
+        | rations -> draw_choice3("Change the rations", "Filling", "Meager", "Bare bones",
+                                  "Filling: two pounds a person a day. Meager: a pound and a half. Bare bones: one, and hunger makes people weak and sick.", g.rations)
+        | rest -> draw_rest(g, t)
+        | trade -> draw_trade(g, t)
+        | talk -> draw_talk(g)
+        | river -> draw_river(g, t)
+        | river_info -> draw_river_info()
+        | crossing -> draw_crossing(g, t)
+        | fork -> draw_fork(g)
+        | dalles -> draw_dalles(g)
+        | hunt -> draw_hunt(g)
+        | raft -> draw_raft(g, t)
+        | grave_marker ->
+            let gr = &g.archive.graves[g.grave]
+            draw_marker(records.grave_name(gr), records.grave_epitaph(gr), g, t)
+            prompt("Press RETURN")
+        | epitaph ->
+            draw_marker(game.leader(g), game.entry(g), g, t)
+            centered("What shall the marker say?", 6, yellow)
+            if math.fmod(t, 0.8) < 0.5 then
+                let e = game.entry(g)
+                rect(w / 2 + font.width(e, 1) / 2 + 2, 151, 5, 1, yellow)
+            prompt("Type the words and press RETURN")
+        | game_over ->
+            centered("The journey ends here.", 50, yellow)
+            text("%.12s{game.leader(g)} and the party came %d{(i32) g.miles} miles", 40, 76, white)
+            text("from Independence before the trail won.", 40, 86, white)
+            prompt("Press RETURN")
+        | arrival ->
+            backdrop(g, 120, 80)
+            pic_valley(60, 100)
+            wagon(240, 108, t, false)
+            panel(20, 124, 280, 40)
+            centered("You have reached the Willamette Valley!", 130, yellow)
+            centered("After %d{g.days_out} days and %d{(i32) g.miles} miles.", 142, white)
+            prompt("Press RETURN")
+        | final_score -> draw_score(g)
+        if g.nmsgs > 0 then draw_messages(g)
+        gfx.frame_end()

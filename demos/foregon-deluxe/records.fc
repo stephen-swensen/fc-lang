@@ -1,0 +1,192 @@
+// Foregon Deluxe — what outlasts a journey.
+//
+// Two small files in ~/.foregon-deluxe/:
+//
+//   topten.txt   the ten best scores: `score|name` a line
+//   graves.txt   every trail leader who didn't make it: where they fell and
+//                what their epitaph says, `origin|to|miles|name|epitaph`
+//
+// The graves are the game's long memory. A party that passes the spot where
+// an earlier party's leader was buried stops to read the marker — the dead
+// of your own past journeys, waiting on the trail for the next one.
+//
+// Both files are best effort: a missing, unreadable or mangled file is an
+// empty one, and a failed write loses a line, never the game.
+
+import io from std::
+import sys from std::
+import text from std::
+
+struct score_entry =
+    name: u8[24]
+    name_len: i32
+    score: i32
+
+struct grave =
+    origin: i32         // the landmark the leg starts at...
+    to: i32             // ...and the one it heads for
+    at: f64             // miles along that leg
+    name: u8[12]
+    name_len: i32
+    epitaph: u8[32]
+    epitaph_len: i32
+
+struct archive =
+    top: score_entry[10]
+    ntop: i32
+    graves: grave[48]
+    ngraves: i32
+
+module records =
+    let epitaph_max = 30
+
+    private let copy_into = (dst: u8[], s: const str) ->
+        let n = if s.len < dst.len then s.len else dst.len
+        for i in 0i64..n do dst[i] = s[i]
+        (i32) n
+
+    let top_name = (e: const score_entry*) -> (const str) e.name[0i64..(i64) e.name_len]
+    let grave_name = (g: const grave*) -> (const str) g.name[0i64..(i64) g.name_len]
+    let grave_epitaph = (g: const grave*) -> (const str) g.epitaph[0i64..(i64) g.epitaph_len]
+
+    // The best scores so far start as the legends' — until someone beats
+    // them.
+    private let seed_top = (a: archive*) ->
+        for i in 0..10 do
+            a.top[i].name_len = copy_into(a.top[i].name, lore.legends[i])
+            a.top[i].score = lore.legend_scores[i]
+        a.ntop = 10
+
+    private let read_file = (tail: const str) ->
+        match sys.home_dir() with
+        | some(hd) ->
+            match io.read_all(alloca("%s{hd}/.foregon-deluxe/%s{tail}")) with
+            | ok(b) -> some(b)
+            | err(_) -> none(u8[])
+        | none -> none(u8[])
+
+    private let number = (s: const str) ->
+        match text.parse_i32(text.trim(s)) with
+        | ok(v) -> v
+        | err(_) -> -1
+
+    let load = (a: archive*) ->
+        seed_top(a)
+        a.ngraves = 0
+        match read_file("topten.txt") with
+        | some(bytes) ->
+            defer free(bytes)
+            let lines = text.split((const str) bytes, "\n")
+            defer free(lines)
+            let mut n = 0
+            for ln in lines do
+                let parts = text.split((const str) ln, "|")
+                defer free(parts)
+                if parts.len == 2 && n < 10 then
+                    let s = number(parts[0])
+                    if s >= 0 then
+                        a.top[n].score = s
+                        a.top[n].name_len = copy_into(a.top[n].name, text.trim(parts[1]))
+                        n = n + 1
+            if n > 0 then
+                a.ntop = n
+        | none -> void()
+        match read_file("graves.txt") with
+        | some(bytes) ->
+            defer free(bytes)
+            let lines = text.split((const str) bytes, "\n")
+            defer free(lines)
+            for ln in lines do
+                let parts = text.split((const str) ln, "|")
+                defer free(parts)
+                if parts.len == 5 && a.ngraves < 48 then
+                    let f = number(parts[0])
+                    let t = number(parts[1])
+                    let m = number(parts[2])
+                    if f >= 0 && f < 18 && t >= 0 && t < 18 && m >= 0 then
+                        let gr = &a.graves[a.ngraves]
+                        gr.origin = f
+                        gr.to = t
+                        gr.at = (f64) m
+                        gr.name_len = copy_into(gr.name, parts[3])
+                        gr.epitaph_len = copy_into(gr.epitaph, parts[4])
+                        a.ngraves = a.ngraves + 1
+        | none -> void()
+
+    private let open_for_write = (tail: const str, mode: const str) ->
+        match sys.home_dir() with
+        | some(hd) ->
+            ignore io.ensure_dir(alloca("%s{hd}/.foregon-deluxe"))
+            match io.open(alloca("%s{hd}/.foregon-deluxe/%s{tail}"), mode) with
+            | ok(f) -> some(f)
+            | err(_) -> none(any*)
+        | none -> none(any*)
+
+    private let save_top = (a: const archive*) ->
+        match open_for_write("topten.txt", "w") with
+        | some(f) ->
+            for i in 0..a.ntop do
+                io.write("%d{a.top[i].score}|", f)
+                io.write(top_name(&a.top[i]), f)
+                io.write("\n", f)
+            ignore io.close(f)
+        | none -> void()
+
+    // Where this score would place, 0-based, or -1 if it doesn't make the
+    // ten.
+    let rank_of = (a: const archive*, score: i32) ->
+        let mut r = a.ntop
+        loop
+            if r == 0 || a.top[r - 1].score >= score then break
+            r = r - 1
+        if r >= 10 then -1 else r
+
+    // Enter a score; returns its place, or -1.
+    let add_score = (a: archive*, name: const str, score: i32) ->
+        let r = rank_of(a, score)
+        if r < 0 then return -1
+        let last = if a.ntop < 10 then a.ntop else 9
+        let mut i = last
+        loop
+            if i <= r then break
+            a.top[i] = a.top[i - 1]
+            i = i - 1
+        a.top[r].score = score
+        a.top[r].name_len = copy_into(a.top[r].name, name)
+        if a.ntop < 10 then a.ntop = a.ntop + 1
+        save_top(a)
+        r
+
+    // A leader fell here. Keep the marker, newest last; the file keeps them
+    // all, the game the last 48.
+    let add_grave = (a: archive*, origin: i32, to: i32, at: f64,
+                     name: const str, epitaph: const str) ->
+        if a.ngraves >= 48 then
+            for i in 0..47 do a.graves[i] = a.graves[i + 1]
+            a.ngraves = 47
+        let gr = &a.graves[a.ngraves]
+        gr.origin = origin
+        gr.to = to
+        gr.at = at
+        gr.name_len = copy_into(gr.name, name)
+        gr.epitaph_len = copy_into(gr.epitaph, epitaph)
+        a.ngraves = a.ngraves + 1
+        match open_for_write("graves.txt", "a") with
+        | some(f) ->
+            io.write("%d{origin}|%d{to}|%d{(i32) at}|", f)
+            io.write(name, f)
+            io.write("|", f)
+            io.write(epitaph, f)
+            io.write("\n", f)
+            ignore io.close(f)
+        | none -> void()
+
+    // The grave, if any, that lies on this leg between two points on it.
+    // The newest wins when several do.
+    let grave_between = (a: const archive*, origin: i32, to: i32, lo: f64, hi: f64) ->
+        let mut found = -1
+        for i in 0..a.ngraves do
+            let gr = &a.graves[i]
+            if gr.origin == origin && gr.to == to && gr.at > lo && gr.at <= hi then
+                found = i
+        found

@@ -1,0 +1,192 @@
+// Foregon Deluxe — the type.
+//
+// A 5x8 dot font covering printable ASCII (32..126), kept as text: each
+// character is eight rows of five, `|` between rows, `#` a dot. Capitals
+// and figures stand on rows 0-6; row 7 is for the descenders of g, j, p, q
+// and y. The capitals are foregon-frail's 5x7 set; the rest is new.
+//
+// A character cell is 6x9 logical pixels (a dot of space right and below),
+// so the 320x180 screen holds 53 columns by 20 lines — the proportions of
+// the 40- and 80-column text screens this kind of game used to live on.
+// Everything is drawn with gfx.fill, one rectangle per dot.
+
+struct rgb =
+    r: u8
+    g: u8
+    b: u8
+
+module font =
+    let cell_w = 6
+    let cell_h = 9
+
+    private let glyphs = (const str)[95] {
+        "     |     |     |     |     |     |     |     ",   // space
+        "  #  |  #  |  #  |  #  |  #  |     |  #  |     ",   // !
+        " # # | # # |     |     |     |     |     |     ",   // "
+        " # # | # # |#####| # # |#####| # # | # # |     ",   // #
+        "  #  | ####|# #  | ### |  # #|#### |  #  |     ",   // $
+        "##   |##  #|   # |  #  | #   |#  ##|   ##|     ",   // %
+        " ##  |#  # |# #  | #   |# # #|#  # | ## #|     ",   // &
+        "  #  |  #  |     |     |     |     |     |     ",   // '
+        "   # |  #  | #   | #   | #   |  #  |   # |     ",   // (
+        " #   |  #  |   # |   # |   # |  #  | #   |     ",   // )
+        "     |  #  |# # #| ### |# # #|  #  |     |     ",   // *
+        "     |  #  |  #  |#####|  #  |  #  |     |     ",   // +
+        "     |     |     |     |     |  ## |   # |  #  ",   // ,
+        "     |     |     |#####|     |     |     |     ",   // -
+        "     |     |     |     |     | ##  | ##  |     ",   // .
+        "     |    #|   # |  #  | #   |#    |     |     ",   // /
+        " ### |#   #|#  ##|# # #|##  #|#   #| ### |     ",   // 0
+        "  #  | ##  |  #  |  #  |  #  |  #  | ### |     ",   // 1
+        " ### |#   #|    #|   # |  #  | #   |#####|     ",   // 2
+        "#####|   # |  #  |   # |    #|#   #| ### |     ",   // 3
+        "   # |  ## | # # |#  # |#####|   # |   # |     ",   // 4
+        "#####|#    |#### |    #|    #|#   #| ### |     ",   // 5
+        "  ## | #   |#    |#### |#   #|#   #| ### |     ",   // 6
+        "#####|    #|   # |  #  | #   | #   | #   |     ",   // 7
+        " ### |#   #|#   #| ### |#   #|#   #| ### |     ",   // 8
+        " ### |#   #|#   #| ####|    #|   # | ##  |     ",   // 9
+        "     | ##  | ##  |     | ##  | ##  |     |     ",   // :
+        "     | ##  | ##  |     | ##  |  #  | #   |     ",   // ;
+        "   # |  #  | #   |#    | #   |  #  |   # |     ",   // <
+        "     |     |#####|     |#####|     |     |     ",   // =
+        " #   |  #  |   # |    #|   # |  #  | #   |     ",   // >
+        " ### |#   #|    #|   # |  #  |     |  #  |     ",   // ?
+        " ### |#   #|    #| ## #|# # #|# # #| ### |     ",   // @
+        " ### |#   #|#   #|#####|#   #|#   #|#   #|     ",   // A
+        "#### |#   #|#   #|#### |#   #|#   #|#### |     ",   // B
+        " ### |#   #|#    |#    |#    |#   #| ### |     ",   // C
+        "###  |#  # |#   #|#   #|#   #|#  # |###  |     ",   // D
+        "#####|#    |#    |#### |#    |#    |#####|     ",   // E
+        "#####|#    |#    |#### |#    |#    |#    |     ",   // F
+        " ### |#   #|#    |# ###|#   #|#   #| ####|     ",   // G
+        "#   #|#   #|#   #|#####|#   #|#   #|#   #|     ",   // H
+        " ### |  #  |  #  |  #  |  #  |  #  | ### |     ",   // I
+        "  ###|   # |   # |   # |   # |#  # | ##  |     ",   // J
+        "#   #|#  # |# #  |##   |# #  |#  # |#   #|     ",   // K
+        "#    |#    |#    |#    |#    |#    |#####|     ",   // L
+        "#   #|## ##|# # #|# # #|#   #|#   #|#   #|     ",   // M
+        "#   #|#   #|##  #|# # #|#  ##|#   #|#   #|     ",   // N
+        " ### |#   #|#   #|#   #|#   #|#   #| ### |     ",   // O
+        "#### |#   #|#   #|#### |#    |#    |#    |     ",   // P
+        " ### |#   #|#   #|#   #|# # #|#  # | ## #|     ",   // Q
+        "#### |#   #|#   #|#### |# #  |#  # |#   #|     ",   // R
+        " ####|#    |#    | ### |    #|    #|#### |     ",   // S
+        "#####|  #  |  #  |  #  |  #  |  #  |  #  |     ",   // T
+        "#   #|#   #|#   #|#   #|#   #|#   #| ### |     ",   // U
+        "#   #|#   #|#   #|#   #|#   #| # # |  #  |     ",   // V
+        "#   #|#   #|#   #|# # #|# # #|# # #| # # |     ",   // W
+        "#   #|#   #| # # |  #  | # # |#   #|#   #|     ",   // X
+        "#   #|#   #| # # |  #  |  #  |  #  |  #  |     ",   // Y
+        "#####|    #|   # |  #  | #   |#    |#####|     ",   // Z
+        " ### | #   | #   | #   | #   | #   | ### |     ",   // [
+        "     |#    | #   |  #  |   # |    #|     |     ",   // backslash
+        " ### |   # |   # |   # |   # |   # | ### |     ",   // ]
+        "  #  | # # |#   #|     |     |     |     |     ",   // ^
+        "     |     |     |     |     |     |#####|     ",   // _
+        " #   |  #  |     |     |     |     |     |     ",   // `
+        "     |     | ### |    #| ####|#   #| ####|     ",   // a
+        "#    |#    |#### |#   #|#   #|#   #|#### |     ",   // b
+        "     |     | ### |#    |#    |#   #| ### |     ",   // c
+        "    #|    #| ####|#   #|#   #|#   #| ####|     ",   // d
+        "     |     | ### |#   #|#####|#    | ### |     ",   // e
+        "  ## | #   |#### | #   | #   | #   | #   |     ",   // f
+        "     |     | ####|#   #|#   #| ####|    #| ### ",   // g
+        "#    |#    |#### |#   #|#   #|#   #|#   #|     ",   // h
+        "  #  |     | ##  |  #  |  #  |  #  | ### |     ",   // i
+        "   # |     |  ## |   # |   # |   # |#  # | ##  ",   // j
+        "#    |#    |#  # |# #  |##   |# #  |#  # |     ",   // k
+        " ##  |  #  |  #  |  #  |  #  |  #  | ### |     ",   // l
+        "     |     |## # |# # #|# # #|# # #|#   #|     ",   // m
+        "     |     |#### |#   #|#   #|#   #|#   #|     ",   // n
+        "     |     | ### |#   #|#   #|#   #| ### |     ",   // o
+        "     |     |#### |#   #|#   #|#### |#    |#    ",   // p
+        "     |     | ####|#   #|#   #| ####|    #|    #",   // q
+        "     |     |# ## |##   |#    |#    |#    |     ",   // r
+        "     |     | ####|#    | ### |    #|#### |     ",   // s
+        " #   | #   |#### | #   | #   | #  #|  ## |     ",   // t
+        "     |     |#   #|#   #|#   #|#  ##| ## #|     ",   // u
+        "     |     |#   #|#   #|#   #| # # |  #  |     ",   // v
+        "     |     |#   #|#   #|# # #|# # #| # # |     ",   // w
+        "     |     |#   #| # # |  #  | # # |#   #|     ",   // x
+        "     |     |#   #|#   #|#   #| ####|    #| ### ",   // y
+        "     |     |#####|   # |  #  | #   |#####|     ",   // z
+        "   ##|  #  |  #  | #   |  #  |  #  |   ##|     ",   // {
+        "  #  |  #  |  #  |  #  |  #  |  #  |  #  |     ",   // |
+        "##   |  #  |  #  |   # |  #  |  #  |##   |     ",   // }
+        "     |     | #   |# # #|   # |     |     |     "    // ~
+    }
+
+    // One character, `dot` logical pixels to a dot.
+    let draw_char = (ch: u8, x: i32, y: i32, dot: i32, c: rgb) ->
+        if ch <= ' ' || ch > '~' then return
+        let src = glyphs[(i64) (ch - ' ')]
+        for row in 0..8 do
+            for col in 0..5 do
+                if src[(i64) (row * 6 + col)] == '#' then
+                    gfx.fill(x + col * dot, y + row * dot, dot, dot, c.r, c.g, c.b, 255u8)
+
+    let width = (s: const str, dot: i32) ->
+        if s.len == 0 then 0 else (i32) s.len * cell_w * dot - dot
+
+    let draw = (s: const str, x: i32, y: i32, dot: i32, c: rgb) ->
+        let mut cx = x
+        for ch in s do
+            draw_char(ch, cx, y, dot, c)
+            cx = cx + cell_w * dot
+
+    let centered = (s: const str, cx: i32, y: i32, dot: i32, c: rgb) ->
+        draw(s, cx - width(s, dot) / 2, y, dot, c)
+
+    let right = (s: const str, rx: i32, y: i32, dot: i32, c: rgb) ->
+        draw(s, rx - width(s, dot), y, dot, c)
+
+    // Where the next wrapped line starts, and where this one ends, for a
+    // paragraph `s` from `start` in a column `cols` characters wide.
+    // Returns { end, next }: the line is s[start..end]; next is where the
+    // following line begins (spaces after a break are dropped). A `\n`
+    // always breaks.
+    let wrap_at = (s: const str, start: i64, cols: i32) ->
+        let limit = start + (i64) cols
+        let mut i = start
+        let mut last_space = -1i64
+        loop
+            if i >= s.len then break
+            if s[i] == '\n' then break
+            if i >= limit then break
+            if s[i] == ' ' then last_space = i
+            i = i + 1i64
+        if i >= s.len || s[i] == '\n' then
+            { i, i + 1i64 }
+        else if last_space > start then
+            let mut n = last_space
+            loop
+                if n >= s.len || s[n] != ' ' then break
+                n = n + 1i64
+            { last_space, n }
+        else
+            { i, i }
+
+    // A paragraph, word-wrapped to `cols` characters; returns the number of
+    // lines it took.
+    let draw_wrapped = (s: const str, x: i32, y: i32, cols: i32, c: rgb) ->
+        let mut start = 0i64
+        let mut lines = 0
+        loop
+            if start >= s.len then break
+            let { e, next } = wrap_at(s, start, cols)
+            draw(s[start..e], x, y + lines * cell_h, 1, c)
+            lines = lines + 1
+            start = next
+        lines
+
+    // How many lines draw_wrapped would take, without drawing.
+    let count_wrapped = (s: const str, cols: i32) ->
+        let mut start = 0i64
+        let mut lines = 0
+        loop
+            if start >= s.len then break
+            let { _, next } = wrap_at(s, start, cols)
+            lines = lines + 1
+            start = next
+        lines

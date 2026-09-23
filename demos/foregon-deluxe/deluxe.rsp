@@ -1,0 +1,36 @@
+# Foregon Deluxe — the build.
+#
+# Used by run.sh (`fcc @demos/foregon-deluxe/deluxe.rsp`), and by the editor
+# through lsp.rsp. Paths are relative to this file.
+
+# The backend, and the bindings only it needs.
+../shared/raylib.fc
+gfx.fc
+
+# The game.
+plat.fc
+lore.fc
+records.fc
+hunt.fc
+raft.fc
+game.fc
+font.fc
+sprites.fc
+art.fc
+sound.fc
+main.fc
+
+# Sound engine, and the raylib device for it.
+../shared/opl2.fc
+../shared/opl2_tables.fc
+../shared/opl_midi.fc
+../shared/opl_bank_gm.fc
+../shared/opl_audio.fc
+../shared/opl_audio_raylib.fc
+
+# stdlib modules this demo imports
+../../stdlib/io.fc
+../../stdlib/text.fc
+../../stdlib/sys.fc
+../../stdlib/math.fc
+../../stdlib/random.fc

@@ -1,0 +1,76 @@
+// Foregon Deluxe — the Oregon journey the way the classroom computers of
+// the late 1980s told it: a profession and a family of five, a general
+// store, and then the trail, day by day, to the Willamette Valley. A new
+// game in that game's spirit; see README.md for what that means.
+//
+// Pure FC: no C helper files. The layers, bottom to top — fario's and the
+// foregon-frail's architecture:
+//
+//     plat.fc      the contract: what input looks like, what `gfx` must be
+//     gfx.fc       `module gfx` on raylib — the only file that names it
+//     lore.fc      the route, the rivers, the words
+//     records.fc   the Top Ten and the graves, kept on disk
+//     hunt.fc      the hunt
+//     raft.fc      the Columbia
+//     game.fc      the rules and the screens. No pixels, no keys.
+//     font.fc      the type
+//     sprites.fc   the pixel art, kept as text
+//     art.fc       the look
+//     sound.fc     the instruments and effects
+//     main.fc      this file: hand the pieces to each other and loop
+
+import opl_audio from shared::
+import opl_midi from shared::
+import opl_bank_gm from shared::
+import io from std::
+import sys from std::
+
+// The engine plays a tune under the effects; this game's tunes are effects
+// themselves, so its player gets a song with nothing in it.
+let silent_song = () ->
+    opl_midi.song { events = alloc(opl_midi.event[0] {})!,
+                    division = 480, length = 0 }
+
+let main = (args: str[]) ->
+    io.write("=== FOREGON DELUXE ===\n", stdout)
+    io.write("The Oregon journey, 1848 (raylib + OPL2)\n\n", stdout)
+    io.write("  Menus: press a number.  Typing: RETURN to finish.\n", stdout)
+    io.write("  Hunting: arrow keys to walk and aim, SPACE to fire.\n", stdout)
+    io.write("  The river: LEFT and RIGHT to steer.\n", stdout)
+    io.write("  F11 toggles full screen; close the window to quit.\n", stdout)
+    io.write("  The Top Ten and the graves live in ~/.foregon-deluxe/\n\n", stdout)
+
+    gfx.open(game.screen_w, game.screen_h, c"Foregon Deluxe")
+
+    let w = game.make((u64) sys.time())
+    w.screen = screen.title
+
+    let music = opl_midi.init(44100, silent_song(), opl_bank_gm.make())
+    let s = snd.init(44100, music)
+    if !gfx.audio_start(s) then
+        io.write("Audio: device open failed - running silent\n", stdout)
+
+    let mut inp = default(input)
+    let start = gfx.now()
+    let mut last = start
+    // The title tune plays each time the title comes up.
+    let mut was = screen.menu
+
+    loop
+        gfx.pump(&inp)
+        if inp.quit || w.quit then break
+        let now = gfx.now()
+        let dt0 = now - last
+        let dt = if dt0 > 0.1 then 0.1 else dt0
+        last = now
+
+        game.step(w, &inp, dt)
+        if w.screen == screen.title && was != screen.title then game.sound(w, snd.sfx_tune)
+        was = w.screen
+        if w.sound_on then
+            for i in 0..w.nsfx do opl_audio.play(s, w.sfx[i])
+
+        art.render(w, now - start)
+
+    gfx.close()
+    0

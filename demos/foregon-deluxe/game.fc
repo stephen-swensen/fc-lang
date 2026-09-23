@@ -1,0 +1,1201 @@
+// Foregon Deluxe — the rules.
+//
+// The journey as the classroom computers of the late 1980s told it: a
+// profession and a family of five, a general store, then day after day on
+// the trail — pace, rations, weather and health, landmarks and forts,
+// rivers to ford or float or ferry, a hunt when the food runs low, and at
+// the end the Columbia or the Barlow Road.
+//
+// This is a new game in that game's spirit, not a copy of it: the systems
+// are the ones people remember, but every number below is this game's own
+// choice, tuned by playing it (see README.md), and every word is its own.
+//
+// Nothing here draws, plays a sound, or names a key. `step` is handed one
+// `input` a frame and moves the state machine; art.fc reads the world and
+// draws whichever screen it is on. The two action scenes, the hunt and the
+// river, have their own files (hunt.fc, raft.fc) and are driven from here.
+
+import pcg_random from std::random
+import text from std::
+import math from std::
+
+// ============================================================
+// Types
+// ============================================================
+
+enum screen =
+    | title             // the main menu
+    | learn             // the instructions, a page at a time
+    | top_ten
+    | profession
+    | profession_info
+    | names             // typing the five names
+    | names_ok          // are these right?
+    | month
+    | month_info
+    | store             // the outfitter at Independence, and every fort
+    | store_qty         // how many of the item chosen
+    | depart
+    | travel            // the wagon on the move
+    | landmark          // arriving somewhere: its picture and name
+    | menu              // stopped: what now?
+    | supplies
+    | map
+    | pace
+    | rations
+    | rest              // how many days?
+    | trade
+    | talk
+    | river             // how to cross
+    | river_info
+    | crossing          // the crossing itself, animated
+    | fork              // which way?
+    | dalles            // the river or the road
+    | hunt              // the hunt (hunt.fc)
+    | raft              // the Columbia (raft.fc)
+    | grave_marker      // passing someone's grave
+    | epitaph           // the leader has died: what should the marker say?
+    | game_over
+    | arrival
+    | final_score
+
+enum ending =
+    | on_trail
+    | arrived
+    | died
+
+struct person =
+    name: u8[12]
+    name_len: i32
+    health: f64         // 100 is hale; 0 is dead
+    alive: bool
+    ill: i32            // an index into lore.ills, or -1 when well
+    ill_left: i32       // days of it left
+
+struct world =
+    screen: screen
+    ending: ending
+
+    // A line being typed: a name, an amount, an epitaph.
+    entry: u8[40]
+    entry_len: i32
+    entry_max: i32
+
+    // Screen-local state: which item, which page, which name, which voice.
+    sel: i32
+    page: i32
+
+    // The party.
+    profession: i32
+    people: person[5]
+    depart_month: i32
+
+    // The wagon.
+    cash: f64
+    oxen: i32
+    food: f64           // pounds
+    clothing: i32       // sets
+    bullets: i32
+    wheels: i32
+    axles: i32
+    tongues: i32
+    broken: i32         // 0 whole; else a missing wheel (1), axle (2) or tongue (3)
+
+    // Where and when.
+    day: i32            // day of 1848, 0 = January 1
+    days_out: i32
+    miles: f64
+    place: i32          // the last landmark reached
+    next: i32           // the one ahead
+    leg_len: f64
+    leg_left: f64
+    at_landmark: bool   // stopped at `place` itself, not somewhere after it
+    pace: i32           // 1 steady, 2 strenuous, 3 grueling
+    rations: i32        // 1 filling, 2 meager, 3 bare bones
+
+    temp: i32           // degrees Fahrenheit today
+    rain: bool
+    snow: bool
+    wet: f64            // recent rain, which raises the rivers
+    scarcity: f64       // game hunted out hereabouts
+    via_barlow: bool
+
+    // A river being crossed: today's conditions.
+    depth: f64
+    width: i32
+    cross_t: f64        // the crossing's animation clock
+    cross_how: i32      // 1 ford, 2 float, 3 ferry, 4 guide
+
+    // The trade on offer.
+    give_item: i32
+    give_n: i32
+    want_item: i32
+    want_n: i32
+
+    // Messages waiting to be read, and where reading them leads.
+    msg: u8[]           // heap: `max_msgs` rows of `msg_cap` bytes
+    msg_len: i32[6]
+    nmsgs: i32
+    after: screen
+
+    // The travel clock: a day passes every `day_secs` of travel.
+    tick: f64
+    anim: f64           // the wheels' turning, for art.fc
+
+    grave: i32          // the marker being read
+
+    score: i32
+    rank: i32
+
+    sound_on: bool
+    quit: bool
+
+    // Sound for main.fc to play: effect ids queued this frame.
+    sfx: i32[8]
+    nsfx: i32
+
+    hunt: hunt_state
+    raft: raft_state
+    archive: archive
+
+    rng: pcg_random
+
+module game =
+    let screen_w = 320
+    let screen_h = 180
+
+    private let msg_cap = 200
+    private let max_msgs = 6
+    private let day_secs = 0.42
+
+    // ============================================================
+    // Small helpers
+    // ============================================================
+
+    let rnd = (w: world*) -> pcg_random.next_f64(&w.rng)
+    let pick = (w: world*, n: i32) -> (i32) pcg_random.next_bounded_u32(&w.rng, (u32) n)
+
+    let name_of = (p: const person*) -> (const str) p.name[0i64..(i64) p.name_len]
+    let leader = (w: const world*) -> name_of(&w.people[0])
+    let entry = (w: const world*) -> (const str) w.entry[0i64..(i64) w.entry_len]
+
+    private let name_used = (w: const world*, s: const str) ->
+        let mut used = false
+        for i in 0..w.page do
+            if name_of(&w.people[i]) == s then used = true
+        used
+
+    private let set_name = (p: person*, s: const str) ->
+        let n = if s.len > 12i64 then 12i64 else s.len
+        for i in 0i64..n do p.name[i] = s[i]
+        p.name_len = (i32) n
+
+    let sound = (w: world*, id: i32) ->
+        if w.nsfx < 8 then
+            w.sfx[w.nsfx] = id
+            w.nsfx = w.nsfx + 1
+
+    // Queue a message; the screen shows them all until RETURN.
+    let say = (w: world*, s: const str) ->
+        if w.nmsgs >= max_msgs then return
+        let base = (i64) w.nmsgs * (i64) msg_cap
+        let n = if s.len > (i64) msg_cap then (i64) msg_cap else s.len
+        for i in 0i64..n do w.msg[base + i] = s[i]
+        w.msg_len[w.nmsgs] = (i32) n
+        w.nmsgs = w.nmsgs + 1
+
+    let message = (w: const world*, i: i32) ->
+        let base = (i64) i * (i64) msg_cap
+        (const str) w.msg[base..base + (i64) w.msg_len[i]]
+
+    // After the messages are read, go here.
+    private let then_go = (w: world*, s: screen) ->
+        w.after = s
+
+    let living = (w: const world*) ->
+        let mut n = 0
+        for i in 0..5 do
+            if w.people[i].alive then n = n + 1
+        n
+
+    let avg_health = (w: const world*) ->
+        let mut sum = 0.0
+        let mut n = 0
+        for i in 0..5 do
+            if w.people[i].alive then
+                sum = sum + w.people[i].health
+                n = n + 1
+        if n == 0 then 0.0 else sum / (f64) n
+
+    let health_word = (h: f64) ->
+        if h >= 75.0 then "good" else if h >= 50.0 then "fair"
+        else if h >= 25.0 then "poor" else "very poor"
+
+    let pace_word = (p: i32) ->
+        if p == 1 then "steady" else if p == 2 then "strenuous" else "grueling"
+
+    let rations_word = (r: i32) ->
+        if r == 1 then "filling" else if r == 2 then "meager" else "bare bones"
+
+    let weather_word = (w: const world*) ->
+        if w.snow then "snowing" else if w.rain then "rainy"
+        else if w.temp < 10 then "very cold" else if w.temp < 32 then "cold"
+        else if w.temp < 50 then "cool" else if w.temp < 72 then "warm"
+        else if w.temp < 90 then "hot" else "very hot"
+
+    // Day `n` of 1848 as { month index, day of month }.
+    let calendar = (n: i32) ->
+        let mut d = n
+        let mut m = 0
+        loop
+            if m >= 11 || d < lore.month_days[m] then break
+            d = d - lore.month_days[m]
+            m = m + 1
+        { m, d + 1 }
+
+    // Prices climb with the miles from Missouri.
+    let price_factor = (w: const world*) -> 1.0 + w.miles / 1000.0 * 0.8
+
+    let item_names = (const str)[7] {
+        "Oxen (a yoke of two)", "Food (pounds)", "Clothing (sets)",
+        "Ammunition (boxes of 20)", "Wagon wheels", "Wagon axles", "Wagon tongues" }
+    let item_price = f64[7] { 40.0, 0.20, 10.0, 2.0, 10.0, 10.0, 10.0 }
+
+    let item_have = (w: const world*, i: i32) ->
+        match i with
+        | 0 -> w.oxen / 2
+        | 1 -> (i32) w.food
+        | 2 -> w.clothing
+        | 3 -> w.bullets / 20
+        | 4 -> w.wheels
+        | 5 -> w.axles
+        | _ -> w.tongues
+
+    // What the wagon can hold of each, in the store's units.
+    private let item_cap = i32[7] { 10, 2000, 50, 99, 3, 3, 3 }
+
+    // ============================================================
+    // Setting out
+    // ============================================================
+
+    let make = (seed: u64) ->
+        let w = alloc(world {
+            msg = alloc(u8[(i64) (max_msgs * msg_cap)] {})!,
+            rng = pcg_random.make(seed),
+            sound_on = true })!
+        records.load(&w.archive)
+        w
+
+    // Back to the title with a fresh wagon, keeping what outlasts journeys.
+    let reset = (w: world*) ->
+        let msg = w.msg
+        let rng = w.rng
+        let archive = w.archive
+        let sound_on = w.sound_on
+        *w = world { msg = msg, rng = rng, archive = archive, sound_on = sound_on }
+        w.screen = screen.title
+
+    private let begin_entry = (w: world*, max: i32) ->
+        w.entry_len = 0
+        w.entry_max = max
+
+    private let start_names = (w: world*) ->
+        w.page = 0
+        begin_entry(w, 12)
+        w.screen = screen.names
+
+    private let open_store = (w: world*) ->
+        w.screen = screen.store
+
+    private let depart = (w: world*) ->
+        w.day = 0
+        for m in 0..lore.depart_months[w.depart_month] do
+            w.day = w.day + lore.month_days[m]
+        w.place = lore.independence
+        w.next = 1
+        w.leg_len = (f64) lore.places[0].dist
+        w.leg_left = w.leg_len
+        w.pace = 1
+        w.rations = 1
+        w.at_landmark = true
+        for i in 0..5 do
+            w.people[i].health = 100.0
+            w.people[i].alive = true
+            w.people[i].ill = -1
+        roll_weather(w)
+        w.screen = screen.depart
+
+    // ============================================================
+    // Weather
+    // ============================================================
+
+    private let month_temp = i32[12] { 24, 30, 42, 55, 65, 75, 82, 80, 70, 56, 42, 30 }
+    private let month_wet = f64[12] { 0.12, 0.14, 0.2, 0.24, 0.22, 0.16, 0.1, 0.1, 0.1, 0.12, 0.16, 0.16 }
+    private let region_temp = i32[4] { 0, -6, -18, -4 }
+
+    let region = (w: const world*) -> lore.places[w.place].region
+
+    private let roll_weather = (w: world*) ->
+        let { m, _ } = calendar(w.day)
+        let noise = (rnd(w) + rnd(w) - 1.0) * 12.0
+        w.temp = month_temp[m] + region_temp[region(w)] + (i32) noise
+        let wet = rnd(w) < month_wet[m]
+        w.snow = wet && w.temp < 33
+        w.rain = wet && !w.snow
+        w.wet = w.wet * 0.85 + (if w.rain then 0.35 else 0.0)
+
+    // ============================================================
+    // A day on the trail
+    // ============================================================
+
+    private let pace_miles = f64[4] { 0.0, 16.0, 20.0, 24.0 }
+
+    // How many miles today, as things stand.
+    let day_miles = (w: const world*) ->
+        let ox = if w.oxen >= 6 then 1.0 else 0.4 + 0.1 * (f64) w.oxen
+        let h = avg_health(w)
+        let hf = if h >= 50.0 then 1.0 else 0.6 + h / 125.0
+        let terrain = if region(w) == 2 then 0.8 else 1.0
+        let sky = if w.snow then 0.45 else if w.rain then 0.85 else 1.0
+        let limp = if w.broken != 0 then 0.5 else 1.0
+        if w.oxen == 0 then 0.0
+        else pace_miles[w.pace] * ox * hf * terrain * sky * limp
+
+    // Someone falls ill.
+    private let fall_ill = (w: world*, i: i32, ill: i32) ->
+        let p = &w.people[i]
+        if !p.alive || p.ill >= 0 then return
+        p.ill = ill
+        p.ill_left = 3 + pick(w, lore.ill_days[ill])
+        say(w, "%.12s{name_of(p)} has %.16s{lore.ills[ill]}.")
+        sound(w, snd.sfx_bad)
+
+    private let pick_illness = (w: world*) ->
+        let r = pick(w, 100)
+        if r < 26 then 0                                 // dysentery
+        else if r < 34 then 1                            // cholera
+        else if r < 46 then 2                            // typhoid
+        else if r < 54 then 3                            // measles
+        else if r < 66 then (if region(w) >= 1 then 4 else 9)
+        else if r < 84 then (if w.pace >= 2 then 5 else 9)
+        else 9                                           // a fever
+
+    // Everyone's health, for one day. `resting` spares them the pace.
+    private let tend = (w: world*, resting: bool, starving: bool) ->
+        let need = 2 * living(w)
+        let lack = if w.clothing >= need then 0.0
+                   else (f64) (need - w.clothing) / (f64) need
+        for i in 0..5 do
+            let p = &w.people[i]
+            if p.alive then
+                let mut d = 0.5
+                d = d + (if w.rations == 1 then 0.8 else if w.rations == 2 then 0.0 else -1.5)
+                if resting then d = d + 2.5
+                else d = d - (if w.pace == 1 then 0.0 else if w.pace == 2 then 0.8 else 2.0)
+                if starving then d = d - 5.0
+                if w.temp < 32 then d = d - 3.0 * lack - (if w.temp < 10 then 1.0 else 0.0)
+                if w.temp >= 90 then d = d - 0.5
+                if p.ill >= 0 then
+                    let drain = lore.ill_drain[p.ill]
+                    d = d - (if resting then drain * 0.5 else drain)
+                    p.ill_left = p.ill_left - (if resting then 2 else 1)
+                    if p.ill_left <= 0 then
+                        say(w, "%.12s{name_of(p)} is well again.")
+                        p.ill = -1
+                p.health = p.health + d
+                if p.health > 100.0 then p.health = 100.0
+                if p.health <= 0.0 then
+                    p.health = 0.0
+                    p.alive = false
+                    sound(w, snd.sfx_death)
+                    let cause = if p.ill >= 0 then lore.ills[p.ill]
+                                else if starving then "starvation"
+                                else if w.temp < 32 && lack > 0.0 then "the cold"
+                                else "exhaustion"
+                    say(w, "%.12s{name_of(p)} has died of %.16s{cause}.")
+                else if p.ill < 0 then
+                    // Weak, hungry, cold people catch what's going round.
+                    let mut odds = 0.003 + (100.0 - p.health) * 0.0003
+                    if w.rations == 3 then odds = odds + 0.004
+                    if lack > 0.0 && w.temp < 32 then odds = odds + 0.005
+                    if rnd(w) < odds then fall_ill(w, i, pick_illness(w))
+
+    // Eat for a day. Returns whether there was nothing to eat.
+    private let eat = (w: world*) ->
+        let per = if w.rations == 1 then 2.0 else if w.rations == 2 then 1.5 else 1.0
+        let need = per * (f64) living(w)
+        if w.food >= need then
+            w.food = w.food - need
+            false
+        else
+            w.food = 0.0
+            true
+
+    // One day passes. `moving`: the wagon travels. `resting`: nobody works.
+    // Returns the miles covered.
+    let pass_day = (w: world*, moving: bool, resting: bool) ->
+        roll_weather(w)
+        let had_food = w.food > 0.0
+        let starving = eat(w)
+        if starving && had_food then say(w, "You have run out of food.")
+        tend(w, resting, starving)
+        w.day = w.day + 1
+        w.days_out = w.days_out + 1
+        w.scarcity = w.scarcity * 0.93
+        if w.day >= 366 then
+            // A new year on the trail is the end of it.
+            say(w, "Winter closes the trail. Your party cannot go on.")
+            w.people[0].alive = false
+        if moving then
+            let m0 = day_miles(w)
+            let m = if m0 > w.leg_left then w.leg_left else m0
+            w.leg_left = w.leg_left - m
+            w.miles = w.miles + m
+            m
+        else 0.0
+
+    // ============================================================
+    // Things that happen
+    // ============================================================
+
+    private let part_names = (const str)[4] { "", "wheel", "axle", "tongue" }
+
+    // The spares on hand for a part (1 wheel, 2 axle, 3 tongue).
+    private let spares_of = (w: const world*, part: i32) ->
+        if part == 1 then w.wheels else if part == 2 then w.axles else w.tongues
+
+    private let use_spare = (w: world*, part: i32) ->
+        if part == 1 then w.wheels = w.wheels - 1
+        else if part == 2 then w.axles = w.axles - 1
+        else w.tongues = w.tongues - 1
+
+    // A limping wagon is mended the moment a spare of the right kind is on
+    // hand, whether bought, traded for, or found.
+    private let mend_if_spare = (w: world*) ->
+        if w.broken != 0 && spares_of(w, w.broken) > 0 then
+            use_spare(w, w.broken)
+            w.broken = 0
+            say(w, "You fit the new part. The wagon is whole again.")
+
+    private let breakdown = (w: world*, part: i32) ->
+        if spares_of(w, part) > 0 then
+            use_spare(w, part)
+            say(w, "A wagon %.6s{part_names[part]} breaks. You replace it with a spare.")
+        else
+            let skill = if w.profession == 1 then 0.7 else 0.35
+            if rnd(w) < skill then
+                say(w, "A wagon %.6s{part_names[part]} breaks. You lose a day, but you mend it.")
+                ignore pass_day(w, false, false)
+            else
+                say(w, "A wagon %.6s{part_names[part]} breaks, and it can't be mended. You go on at half speed until you find a spare.")
+                w.broken = part
+        sound(w, snd.sfx_bad)
+
+    private let lose_days = (w: world*, n: i32) ->
+        for i in 0..n do ignore pass_day(w, false, false)
+
+    // At most one event a day, and none most days.
+    private let events = (w: world*) ->
+        let { m, _ } = calendar(w.day)
+        let summer = m >= 4 && m <= 8
+        if rnd(w) > 0.07 then return
+        let r = pick(w, 100)
+        if w.snow && region(w) >= 1 && r < 30 then
+            let n = 1 + pick(w, 3)
+            say(w, "A blizzard. You lose %d{n} days waiting it out.")
+            for i in 0..5 do
+                if w.people[i].alive then w.people[i].health = w.people[i].health - 4.0
+            lose_days(w, n)
+        else if r < 9 then
+            if w.oxen > 0 && (w.profession != 2 || rnd(w) < 0.5) then
+                w.oxen = w.oxen - 1
+                say(w, "One of the oxen is lame. You leave it behind.")
+                sound(w, snd.sfx_bad)
+        else if r < 13 then
+            if w.oxen > 0 then
+                w.oxen = w.oxen - 1
+                say(w, "An ox has died.")
+                sound(w, snd.sfx_bad)
+        else if r < 24 then
+            breakdown(w, 1 + pick(w, 3))
+        else if r < 30 then
+            let what = pick(w, 3)
+            if what == 0 && w.food > 10.0 then
+                let lost = (i32) (w.food * (0.1 + 0.2 * rnd(w)))
+                w.food = w.food - (f64) lost
+                say(w, "A thief comes in the night and steals %d{lost} pounds of food.")
+            else if what == 1 && w.bullets > 0 then
+                let lost = w.bullets / 2
+                w.bullets = w.bullets - lost
+                say(w, "A thief comes in the night and steals %d{lost} bullets.")
+            else if w.clothing > 0 then
+                let lost = 1 + pick(w, if w.clothing < 3 then w.clothing else 3)
+                let taken = if lost > w.clothing then w.clothing else lost
+                w.clothing = w.clothing - taken
+                say(w, "A thief comes in the night and steals %d{taken} sets of clothing.")
+            sound(w, snd.sfx_bad)
+        else if r < 36 then
+            let n = 1 + pick(w, 4)
+            say(w, "You lose the trail. It takes %d{n} days to find it.")
+            lose_days(w, n)
+        else if r < 40 then
+            say(w, "Fog so thick you can't see the oxen. You lose a day.")
+            lose_days(w, 1)
+        else if r < 44 && region(w) == 0 && summer then
+            say(w, "Hail pounds the wagon. You stop for a day.")
+            lose_days(w, 1)
+        else if r < 50 then
+            say(w, "The water is bad. Everyone feels it.")
+            for i in 0..5 do
+                if w.people[i].alive then w.people[i].health = w.people[i].health - 6.0
+            fall_ill(w, pick(w, 5), 0)
+        else if r < 54 && region(w) >= 1 then
+            say(w, "The water is scarce. Everyone is parched.")
+            for i in 0..5 do
+                if w.people[i].alive then w.people[i].health = w.people[i].health - 3.0
+        else if r < 58 && region(w) >= 1 then
+            say(w, "There's no grass for the oxen here.")
+            if w.oxen > 0 && rnd(w) < 0.3 then
+                w.oxen = w.oxen - 1
+                say(w, "One of the oxen weakens and dies.")
+        else if r < 64 && summer then
+            let n = 20 + pick(w, 40)
+            w.food = w.food + (f64) n
+            let fruit = (const str)[3] { "wild currants", "chokecherries", "wild plums" }
+            say(w, "You find %.14s{fruit[pick(w, 3)]} and gather %d{n} pounds.")
+            sound(w, snd.sfx_good)
+        else if r < 67 then
+            let what = pick(w, 4)
+            if what == 0 then
+                let n = 20 + pick(w, 60)
+                w.food = w.food + (f64) n
+                say(w, "You find an abandoned wagon. Inside: %d{n} pounds of food.")
+            else if what == 1 then
+                let n = 10 + pick(w, 30)
+                w.bullets = w.bullets + n
+                say(w, "You find an abandoned wagon. Inside: %d{n} bullets.")
+            else if what == 2 then
+                w.clothing = w.clothing + 2
+                say(w, "You find an abandoned wagon. Inside: 2 sets of clothing.")
+            else
+                w.wheels = w.wheels + 1
+                say(w, "You find an abandoned wagon, and take a spare wheel from it.")
+            sound(w, snd.sfx_good)
+        else if r < 71 && w.temp > 55 then
+            fall_ill(w, pick(w, 5), 6)
+        else if r < 75 then
+            fall_ill(w, pick(w, 5), if rnd(w) < 0.5 then 7 else 8)
+        else if r < 79 then
+            let i = 1 + pick(w, 4)
+            if w.people[i].alive then
+                let n = 1 + pick(w, 3)
+                say(w, "%.12s{name_of(&w.people[i])} wanders off. You spend %d{n} days searching.")
+                lose_days(w, n)
+        else if r < 85 && w.rain then
+            say(w, "Heavy rain turns the trail to mud. You lose a day.")
+            w.wet = w.wet + 0.6
+            lose_days(w, 1)
+        else if r < 91 && region(w) == 2 then
+            say(w, "The trail is rough and steep. You lose a day.")
+            lose_days(w, 1)
+            if rnd(w) < 0.2 then breakdown(w, 1 + pick(w, 3))
+
+    // ============================================================
+    // Travel
+    // ============================================================
+
+    // What happens after the messages about a death are read: the leader's
+    // death ends the journey; anyone else's does not.
+    private let leader_dead = (w: const world*) -> !w.people[0].alive
+
+    private let check_death = (w: world*) ->
+        if leader_dead(w) then
+            w.ending = ending.died
+            begin_entry(w, records.epitaph_max)
+            then_go(w, screen.epitaph)
+            if w.nmsgs == 0 then w.screen = screen.epitaph
+            true
+        else false
+
+    // One day of travel, from the travel screen.
+    private let travel_day = (w: world*) ->
+        let before = w.leg_len - w.leg_left
+        ignore pass_day(w, true, false)
+        if w.oxen == 0 then
+            say(w, "You have no oxen to pull the wagon. You'll have to trade for some.")
+            then_go(w, screen.menu)
+            return
+        w.at_landmark = false
+        if check_death(w) then return
+        events(w)
+        if check_death(w) then return
+        let after = w.leg_len - w.leg_left
+        // A grave on this stretch?
+        let g = records.grave_between(&w.archive, w.place, w.next, before, after)
+        if g >= 0 && w.nmsgs == 0 then
+            w.grave = g
+            w.screen = screen.grave_marker
+            return
+        if w.leg_left <= 0.0 then
+            arrive(w)
+            return
+        if w.nmsgs > 0 then then_go(w, screen.travel)
+
+    // Reaching the next landmark.
+    private let arrive = (w: world*) ->
+        w.place = w.next
+        w.at_landmark = true
+        let pl = lore.places[w.place]
+        sound(w, snd.sfx_arrive)
+        match pl.kind with
+        | fork ->
+            w.leg_len = 0.0
+            w.leg_left = 0.0
+        | finish -> void()
+        | town -> set_leg(w, pl.next, pl.dist)
+        | river -> set_leg(w, pl.next, pl.dist)
+        | fort -> set_leg(w, pl.next, pl.dist)
+        | sight -> set_leg(w, pl.next, pl.dist)
+        w.screen = screen.landmark
+        if w.nmsgs > 0 then then_go(w, screen.landmark)
+
+    private let set_leg = (w: world*, to: i32, dist: i32) ->
+        w.next = to
+        w.leg_len = (f64) dist
+        w.leg_left = w.leg_len
+
+    // After the landmark picture: what that kind of place asks of you.
+    private let after_landmark = (w: world*) ->
+        let pl = lore.places[w.place]
+        match pl.kind with
+        | river -> open_river(w)
+        | fork ->
+            if w.place == lore.the_dalles then w.screen = screen.dalles
+            else w.screen = screen.fork
+        | finish -> finish(w)
+        | town -> w.screen = screen.menu
+        | fort -> w.screen = screen.menu
+        | sight -> w.screen = screen.menu
+
+    // ============================================================
+    // Rivers
+    // ============================================================
+
+    private let river_season = f64[12] { 0.8, 0.85, 1.1, 1.25, 1.35, 1.3, 1.0, 0.8, 0.7, 0.7, 0.8, 0.9 }
+
+    private let open_river = (w: world*) ->
+        let pl = lore.places[w.place]
+        let { m, _ } = calendar(w.day)
+        w.depth = pl.depth * river_season[m] * (0.85 + 0.3 * rnd(w)) + w.wet
+        w.width = pl.width + (i32) ((rnd(w) - 0.5) * 60.0)
+        w.screen = screen.river
+
+    // Try the crossing. The animation plays first; `cross_done` reports.
+    private let start_crossing = (w: world*, how: i32) ->
+        w.cross_how = how
+        w.cross_t = 0.0
+        w.screen = screen.crossing
+        sound(w, snd.sfx_splash)
+
+    // A river takes a share of the load.
+    private let river_takes = (w: world*, frac: f64) ->
+        let f = (i32) (w.food * frac)
+        let c = (i32) ((f64) w.clothing * frac)
+        let b = (i32) ((f64) w.bullets * frac)
+        w.food = w.food - (f64) f
+        w.clothing = w.clothing - c
+        w.bullets = w.bullets - b
+        say(w, "Lost to the river: %d{f} pounds of food, %d{c} sets of clothing and %d{b} bullets.")
+
+    private let drown = (w: world*) ->
+        // Anyone may be lost, the leader too.
+        let i = pick(w, 5)
+        let p = &w.people[i]
+        if p.alive then
+            p.alive = false
+            p.health = 0.0
+            say(w, "%.12s{name_of(p)} is swept away and drowns.")
+            sound(w, snd.sfx_death)
+
+    private let tip_over = (w: world*) ->
+        say(w, "The wagon tips over in the current!")
+        sound(w, snd.sfx_bad)
+        river_takes(w, 0.25 + 0.35 * rnd(w))
+        if rnd(w) < 0.22 then drown(w)
+        if w.oxen > 0 && rnd(w) < 0.25 then
+            w.oxen = w.oxen - 1
+            say(w, "An ox drowns.")
+
+    private let cross_done = (w: world*) ->
+        match w.cross_how with
+        | 1 ->
+            if w.depth < 2.5 then
+                if rnd(w) < 0.15 then
+                    say(w, "The wagon sticks fast in the mud. It takes a day to pull it free.")
+                    lose_days(w, 1)
+                else say(w, "You ford the river safely.")
+            else if w.depth < 3.2 then
+                if rnd(w) < 0.4 then
+                    say(w, "The water comes in over the wagon bed.")
+                    river_takes(w, 0.08 + 0.12 * rnd(w))
+                else say(w, "You ford the river, wet but whole.")
+            else if rnd(w) < 0.25 + (w.depth - 3.2) * 0.22 then tip_over(w)
+            else say(w, "Against the odds, you ford the river.")
+        | 2 ->
+            if w.depth < 1.5 then
+                say(w, "The river is too shallow to float in. The wagon grounds, and you lose a day working it over.")
+                lose_days(w, 1)
+            else if rnd(w) < 0.06 + (f64) w.width / 9000.0 + (if w.depth > 6.0 then (w.depth - 6.0) * 0.05 else 0.0) then
+                tip_over(w)
+            else say(w, "The caulked wagon floats across safely.")
+        | 3 ->
+            if rnd(w) < 0.02 then
+                say(w, "The ferry lurches, and a crate goes over the side.")
+                river_takes(w, 0.05)
+            else say(w, "The ferry carries you across.")
+        | _ ->
+            if rnd(w) < 0.03 then
+                say(w, "Even with the guide, the current takes some of the load.")
+                river_takes(w, 0.06)
+            else say(w, "The guide leads you across, island to island, safely.")
+        if !check_death(w) then then_go(w, screen.travel)
+        if w.nmsgs == 0 && w.ending == ending.on_trail then w.screen = screen.travel
+
+    private let river_choice = (w: world*, k: i32) ->
+        let pl = lore.places[w.place]
+        if k == 1 then start_crossing(w, 1)
+        else if k == 2 then start_crossing(w, 2)
+        else if k == 3 && pl.ferry > 0 then
+            if w.cash < (f64) pl.ferry then
+                say(w, "You don't have $%d{pl.ferry} for the ferry.")
+                then_go(w, screen.river)
+            else
+                let wait = 1 + pick(w, 3)
+                w.cash = w.cash - (f64) pl.ferry
+                say(w, "The ferry is busy. You wait %d{wait} days for your turn.")
+                lose_days(w, wait)
+                start_crossing(w, 3)
+        else if k == 4 && pl.guide then
+            if w.clothing < 3 then
+                say(w, "The guide asks three sets of clothing. You don't have them.")
+                then_go(w, screen.river)
+            else
+                w.clothing = w.clothing - 3
+                start_crossing(w, 4)
+        else if k == 5 then
+            ignore pass_day(w, false, true)
+            say(w, "You wait a day beside the river.")
+            if check_death(w) then return
+            let pl2 = lore.places[w.place]
+            let { m, _ } = calendar(w.day)
+            w.depth = pl2.depth * river_season[m] * (0.85 + 0.3 * rnd(w)) + w.wet
+            then_go(w, screen.river)
+        else if k == 6 then w.screen = screen.river_info
+
+    // ============================================================
+    // Forks and endings
+    // ============================================================
+
+    private let fork_choice = (w: world*, k: i32) ->
+        let pl = lore.places[w.place]
+        if k == 1 then
+            set_leg(w, pl.next, pl.dist)
+            w.screen = screen.travel
+        else if k == 2 && pl.alt >= 0 then
+            set_leg(w, pl.alt, pl.alt_dist)
+            w.screen = screen.travel
+        else if k == 3 then w.screen = screen.map
+
+    let barlow_toll = (w: const world*) -> 5.0 + 0.1 * (f64) w.oxen
+
+    private let dalles_choice = (w: world*, k: i32) ->
+        if k == 1 then
+            raft.begin(&w.raft, pcg_random.next_u64(&w.rng))
+            w.screen = screen.raft
+        else if k == 2 then
+            let toll = barlow_toll(w)
+            if w.cash < toll then
+                say(w, "You can't pay Barlow's toll. It's the river, then.")
+                then_go(w, screen.dalles)
+            else
+                w.cash = w.cash - toll
+                w.via_barlow = true
+                say(w, "You pay the toll and turn onto the Barlow Road, around the shoulder of Mount Hood.")
+                set_leg(w, lore.willamette, 100)
+                then_go(w, screen.travel)
+
+    private let finish = (w: world*) ->
+        w.ending = ending.arrived
+        w.score = final_score(w)
+        w.rank = records.add_score(&w.archive, leader(w), w.score)
+        w.screen = screen.arrival
+        sound(w, snd.sfx_fanfare)
+
+    // The score: points for everyone who arrives and everything they bring,
+    // times the profession's multiplier.
+    let health_points = (h: f64) ->
+        if h >= 75.0 then 400 else if h >= 50.0 then 300 else if h >= 25.0 then 200 else 100
+
+    let final_score = (w: const world*) ->
+        let mut s = 0
+        for i in 0..5 do
+            if w.people[i].alive then s = s + health_points(w.people[i].health)
+        s = s + 50 + w.oxen * 5 + (w.wheels + w.axles + w.tongues) * 3
+        s = s + w.clothing * 2 + w.bullets / 40 + (i32) (w.food / 20.0) + (i32) (w.cash / 4.0)
+        s * lore.profession_bonus[w.profession]
+
+    // ============================================================
+    // Stores and trading
+    // ============================================================
+
+    let item_cost = (w: const world*, i: i32) ->
+        let f = if w.place == lore.independence && w.days_out == 0 then 1.0 else price_factor(w)
+        item_price[i] * f
+
+    private let buy = (w: world*, item: i32, n: i32) ->
+        if n <= 0 then return
+        let have = item_have(w, item)
+        if have + n > item_cap[item] then
+            say(w, "Your wagon can't carry that much.")
+            return
+        let cost = item_cost(w, item) * (f64) n
+        if cost > w.cash + 0.001 then
+            say(w, "You don't have enough money for that.")
+            return
+        w.cash = w.cash - cost
+        sound(w, snd.sfx_coin)
+        match item with
+        | 0 -> w.oxen = w.oxen + 2 * n
+        | 1 -> w.food = w.food + (f64) n
+        | 2 -> w.clothing = w.clothing + n
+        | 3 -> w.bullets = w.bullets + 20 * n
+        | 4 -> w.wheels = w.wheels + n
+        | 5 -> w.axles = w.axles + n
+        | _ -> w.tongues = w.tongues + n
+        mend_if_spare(w)
+
+    let trade_names = (const str)[6] { "oxen", "pounds of food", "sets of clothing", "bullets",
+                                       "wagon wheels", "wagon axles" }
+
+    private let have_trade = (w: const world*, item: i32) ->
+        match item with
+        | 0 -> w.oxen
+        | 1 -> (i32) w.food
+        | 2 -> w.clothing
+        | 3 -> w.bullets
+        | 4 -> w.wheels
+        | _ -> w.axles
+
+    private let trade_amount = (w: world*, item: i32) ->
+        match item with
+        | 0 -> 1 + pick(w, 2)
+        | 1 -> 25 * (1 + pick(w, 4))
+        | 2 -> 1 + pick(w, 3)
+        | 3 -> 20 * (1 + pick(w, 3))
+        | _ -> 1
+
+    private let new_offer = (w: world*) ->
+        // A party with no team to pull it is exactly who traders look for.
+        w.give_item = if w.oxen < 2 then 0 else pick(w, 6)
+        w.want_item = pick(w, 6)
+        if w.want_item == w.give_item then w.want_item = (w.want_item + 1) % 6
+        w.give_n = trade_amount(w, w.give_item)
+        w.want_n = trade_amount(w, w.want_item)
+
+    private let add_trade = (w: world*, item: i32, n: i32) ->
+        match item with
+        | 0 -> w.oxen = w.oxen + n
+        | 1 -> w.food = w.food + (f64) n
+        | 2 -> w.clothing = w.clothing + n
+        | 3 -> w.bullets = w.bullets + n
+        | 4 -> w.wheels = w.wheels + n
+        | _ -> w.axles = w.axles + n
+
+    let can_trade = (w: const world*) -> have_trade(w, w.want_item) >= w.want_n
+
+    // ============================================================
+    // The hunt's return
+    // ============================================================
+
+    private let hunt_over = (w: world*) ->
+        let h = &w.hunt
+        w.bullets = h.bullets
+        let carried = if h.meat > 100 then 100 else h.meat
+        if h.meat == 0 then
+            say(w, "You come back empty-handed.")
+        else if h.meat > 100 then
+            say(w, "You shot %d{h.meat} pounds of meat, but you can carry only 100 pounds back to the wagon.")
+        else
+            say(w, "You bring %d{h.meat} pounds of meat back to the wagon.")
+        w.food = w.food + (f64) carried
+        w.scarcity = w.scarcity + 1.0
+        ignore pass_day(w, false, false)
+        if !check_death(w) then then_go(w, screen.menu)
+        if w.nmsgs == 0 && w.ending == ending.on_trail then w.screen = screen.menu
+
+    private let raft_over = (w: world*) ->
+        let r = &w.raft
+        if r.hits == 0 then say(w, "You ride the Columbia down without a scratch.")
+        // Each rock struck: mostly cargo lost, once in a while a life.
+        for i in 0..r.hits do
+            if rnd(w) < 0.15 then drown(w)
+            else river_takes(w, 0.06 + 0.1 * rnd(w))
+        lose_days(w, 5)
+        if check_death(w) then return
+        w.place = lore.willamette
+        w.miles = w.miles + 100.0
+        then_go(w, screen.arrival)
+        finish(w)
+        if w.nmsgs > 0 then w.screen = screen.arrival
+
+    // ============================================================
+    // Input, screen by screen
+    // ============================================================
+
+    // A digit key typed this frame, or -1.
+    private let digit = (inp: const input*) ->
+        let mut d = -1
+        for i in 0..inp.ntyped do
+            let ch = inp.typed[i]
+            if ch >= '0' && ch <= '9' then d = (i32) (ch - '0')
+        d
+
+    private let yes_no = (inp: const input*) ->
+        let mut r = 0
+        for i in 0..inp.ntyped do
+            let ch = inp.typed[i]
+            if ch == 'y' || ch == 'Y' then r = 1
+            if ch == 'n' || ch == 'N' then r = 2
+        r
+
+    // Edit the line being typed. `digits` restricts it to a number.
+    private let edit = (w: world*, inp: const input*, digits: bool) ->
+        for i in 0..inp.ntyped do
+            let ch = inp.typed[i]
+            let fits = if digits then ch >= '0' && ch <= '9' else ch != '|'
+            if fits && w.entry_len < w.entry_max then
+                w.entry[w.entry_len] = ch
+                w.entry_len = w.entry_len + 1
+                sound(w, snd.sfx_key)
+        if inp.rubout && w.entry_len > 0 then w.entry_len = w.entry_len - 1
+
+    private let entry_number = (w: const world*) ->
+        match text.parse_i32(entry(w)) with
+        | ok(v) -> v
+        | err(_) -> -1
+
+    let step = (w: world*, inp: const input*, dt: f64) ->
+        w.nsfx = 0
+        // Messages first: nothing else moves until they're read.
+        if w.nmsgs > 0 then
+            if inp.enter || inp.space then
+                w.nmsgs = 0
+                w.screen = w.after
+                sound(w, snd.sfx_click)
+            return
+        let k = digit(inp)
+        match w.screen with
+        | title ->
+            if k == 1 then
+                w.screen = screen.profession
+            else if k == 2 then
+                w.page = 0
+                w.screen = screen.learn
+            else if k == 3 then w.screen = screen.top_ten
+            else if k == 4 then w.sound_on = !w.sound_on
+            else if k == 5 then w.quit = true
+        | learn ->
+            if inp.escape then w.screen = screen.title
+            else if inp.enter || inp.space then
+                w.page = w.page + 1
+                if w.page >= 5 then w.screen = screen.title
+        | top_ten ->
+            if inp.enter || inp.escape || inp.space then w.screen = screen.title
+        | profession ->
+            if k >= 1 && k <= 3 then
+                w.profession = k - 1
+                w.cash = lore.profession_cash[w.profession]
+                start_names(w)
+            else if k == 4 then w.screen = screen.profession_info
+            else if inp.escape then w.screen = screen.title
+        | profession_info ->
+            if inp.enter || inp.escape || inp.space then w.screen = screen.profession
+        | names ->
+            edit(w, inp, false)
+            if inp.enter then
+                let e = text.trim(entry(w))
+                if e.len == 0 then
+                    // A name nobody else in the party has.
+                    let mut k = pick(w, 20)
+                    loop
+                        let taken = name_used(w, lore.names[k])
+                        if !taken then break
+                        k = (k + 1) % 20
+                    set_name(&w.people[w.page], lore.names[k])
+                else set_name(&w.people[w.page], e)
+                w.page = w.page + 1
+                begin_entry(w, 12)
+                if w.page >= 5 then w.screen = screen.names_ok
+            else if inp.escape then w.screen = screen.profession
+        | names_ok ->
+            let yn = yes_no(inp)
+            if yn == 1 then w.screen = screen.month
+            else if yn == 2 then start_names(w)
+        | month ->
+            if k >= 1 && k <= 5 then
+                w.depart_month = k - 1
+                w.screen = screen.store
+                w.days_out = 0
+            else if k == 6 then w.screen = screen.month_info
+        | month_info ->
+            if inp.enter || inp.escape || inp.space then w.screen = screen.month
+        | store ->
+            if k >= 1 && k <= 7 then
+                w.sel = k - 1
+                begin_entry(w, 4)
+                w.screen = screen.store_qty
+            else if inp.enter || inp.escape then
+                if w.days_out == 0 && w.place == lore.independence then
+                    if w.oxen == 0 then
+                        say(w, "You can't leave without oxen to pull the wagon.")
+                        then_go(w, screen.store)
+                    else depart(w)
+                else w.screen = screen.menu
+        | store_qty ->
+            edit(w, inp, true)
+            if inp.enter then
+                buy(w, w.sel, entry_number(w))
+                then_go(w, screen.store)
+                w.screen = screen.store
+            else if inp.escape then w.screen = screen.store
+        | depart ->
+            if inp.enter || inp.space then
+                w.screen = screen.travel
+                w.tick = 0.0
+        | travel ->
+            if inp.enter || inp.escape then
+                w.screen = screen.menu
+            else
+                w.tick = w.tick + dt
+                w.anim = w.anim + dt
+                if w.tick >= day_secs then
+                    w.tick = 0.0
+                    travel_day(w)
+        | landmark ->
+            if inp.enter || inp.space then after_landmark(w)
+        | menu -> menu_choice(w, k)
+        | supplies ->
+            if inp.enter || inp.escape || inp.space then w.screen = screen.menu
+        | map ->
+            if inp.enter || inp.escape || inp.space then
+                w.screen = if lore.places[w.place].kind == place_kind.fork && w.leg_len == 0.0
+                           then (if w.place == lore.the_dalles then screen.dalles else screen.fork)
+                           else screen.menu
+        | pace ->
+            if k >= 1 && k <= 3 then
+                w.pace = k
+                w.screen = screen.menu
+            else if inp.escape then w.screen = screen.menu
+        | rations ->
+            if k >= 1 && k <= 3 then
+                w.rations = k
+                w.screen = screen.menu
+            else if inp.escape then w.screen = screen.menu
+        | rest ->
+            edit(w, inp, true)
+            if inp.enter then
+                let n = entry_number(w)
+                if n >= 1 && n <= 9 then
+                    for i in 0..n do
+                        if !leader_dead(w) then ignore pass_day(w, false, true)
+                    say(w, "You rest for %d{n} days.")
+                    if !check_death(w) then then_go(w, screen.menu)
+                else w.screen = screen.menu
+            else if inp.escape then w.screen = screen.menu
+        | trade ->
+            let yn = yes_no(inp)
+            if yn == 1 && can_trade(w) then
+                add_trade(w, w.want_item, -w.want_n)
+                add_trade(w, w.give_item, w.give_n)
+                mend_if_spare(w)
+                say(w, "It's a deal.")
+                sound(w, snd.sfx_coin)
+                then_go(w, screen.menu)
+            else if yn == 2 || inp.escape || (inp.enter && !can_trade(w)) then
+                w.screen = screen.menu
+        | talk ->
+            if inp.enter || inp.space then
+                w.page = w.page + 1
+                if w.page >= 2 then w.screen = screen.menu
+            else if inp.escape then w.screen = screen.menu
+        | river ->
+            if k >= 1 && k <= 6 then river_choice(w, k)
+        | river_info ->
+            if inp.enter || inp.escape || inp.space then w.screen = screen.river
+        | crossing ->
+            w.cross_t = w.cross_t + dt
+            w.anim = w.anim + dt
+            if w.cross_t >= 2.6 then cross_done(w)
+        | fork -> fork_choice(w, k)
+        | dalles -> dalles_choice(w, k)
+        | hunt ->
+            hunt.step(&w.hunt, inp, dt)
+            for i in 0..w.hunt.nsfx do sound(w, w.hunt.sfx[i])
+            if w.hunt.done then hunt_over(w)
+        | raft ->
+            raft.step(&w.raft, inp, dt)
+            for i in 0..w.raft.nsfx do sound(w, w.raft.sfx[i])
+            if w.raft.done then raft_over(w)
+        | grave_marker ->
+            if inp.enter || inp.space then
+                w.screen = screen.travel
+                if w.leg_left <= 0.0 then arrive(w)
+        | epitaph ->
+            edit(w, inp, false)
+            if inp.enter then
+                records.add_grave(&w.archive, w.place, w.next, w.leg_len - w.leg_left,
+                                  leader(w), text.trim(entry(w)))
+                w.screen = screen.game_over
+                sound(w, snd.sfx_dirge)
+        | game_over ->
+            if inp.enter || inp.space then reset(w)
+        | arrival ->
+            if inp.enter || inp.space then w.screen = screen.final_score
+        | final_score ->
+            if inp.enter || inp.space then
+                reset(w)
+                w.screen = screen.top_ten
+
+    private let menu_choice = (w: world*, k: i32) ->
+        let pl = lore.places[w.place]
+        if k == 1 then
+            if w.oxen == 0 then
+                say(w, "You have no oxen to pull the wagon.")
+                then_go(w, screen.menu)
+            else
+                w.screen = screen.travel
+                w.tick = 0.0
+        else if k == 2 then w.screen = screen.supplies
+        else if k == 3 then w.screen = screen.map
+        else if k == 4 then w.screen = screen.pace
+        else if k == 5 then w.screen = screen.rations
+        else if k == 6 then
+            begin_entry(w, 1)
+            w.screen = screen.rest
+        else if k == 7 then
+            new_offer(w)
+            ignore pass_day(w, false, false)
+            if !check_death(w) then w.screen = screen.trade
+        else if k == 8 then
+            if w.bullets <= 0 then
+                say(w, "You have no bullets to hunt with.")
+                then_go(w, screen.menu)
+            else
+                hunt.begin(&w.hunt, region(w), w.bullets, w.scarcity,
+                           pcg_random.next_u64(&w.rng))
+                w.screen = screen.hunt
+        else if k == 9 && w.at_landmark then
+            w.page = 0
+            w.screen = screen.talk
+        else if k == 0 && w.at_landmark && (pl.kind == place_kind.fort || pl.kind == place_kind.town) then
+            w.screen = screen.store

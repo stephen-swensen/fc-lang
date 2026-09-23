@@ -1,0 +1,284 @@
+// Foregon Deluxe — the pixel art.
+//
+// Every sprite is kept as text: an array of rows, one character a pixel,
+// the palette below turning letters into colors and `.` into nothing. The
+// art stays editable as art — fario's trick, at a DOS screen's scale.
+// Sprites face one way; `draw` can mirror them.
+
+module sprites =
+    // The palette: a handful of earth colors and a few bright ones.
+    let color = (ch: u8) ->
+        match ch with
+        | 'k' -> rgb { r = 20u8, g = 16u8, b = 14u8 }       // black
+        | 'w' -> rgb { r = 246u8, g = 242u8, b = 228u8 }    // white
+        | 'c' -> rgb { r = 214u8, g = 204u8, b = 178u8 }    // canvas shade
+        | 'b' -> rgb { r = 138u8, g = 90u8, b = 52u8 }      // brown
+        | 'd' -> rgb { r = 76u8, g = 50u8, b = 32u8 }       // dark brown
+        | 't' -> rgb { r = 186u8, g = 138u8, b = 86u8 }     // tan
+        | 'g' -> rgb { r = 150u8, g = 150u8, b = 146u8 }    // grey
+        | 'G' -> rgb { r = 86u8, g = 86u8, b = 90u8 }       // dark grey
+        | 'r' -> rgb { r = 176u8, g = 52u8, b = 40u8 }      // red
+        | 'y' -> rgb { r = 234u8, g = 196u8, b = 72u8 }     // yellow
+        | 'o' -> rgb { r = 196u8, g = 110u8, b = 44u8 }     // orange
+        | 'n' -> rgb { r = 78u8, g = 140u8, b = 62u8 }      // green
+        | 'N' -> rgb { r = 40u8, g = 88u8, b = 44u8 }       // dark green
+        | 'u' -> rgb { r = 60u8, g = 90u8, b = 150u8 }      // blue
+        | 's' -> rgb { r = 222u8, g = 170u8, b = 130u8 }    // skin
+        | _   -> rgb { r = 255u8, g = 0u8, b = 255u8 }      // (unused)
+
+    // Draw rows of pixel text with the top-left at (x, y), mirrored when
+    // `flip`. Runs of one color are drawn as one rectangle.
+    let draw = (rows: const (const str)[], x: i32, y: i32, flip: bool) ->
+        for r in 0i64..rows.len do
+            let row = rows[r]
+            let w = (i32) row.len
+            let mut i = 0
+            loop
+                if i >= w then break
+                let ch = row[(i64) i]
+                if ch == '.' then
+                    i = i + 1
+                else
+                    let mut j = i + 1
+                    loop
+                        if j >= w || row[(i64) j] != ch then break
+                        j = j + 1
+                    let c = color(ch)
+                    let px = if flip then x + w - j else x + i
+                    gfx.fill(px, y + (i32) r, j - i, 1, c.r, c.g, c.b, 255u8)
+                    i = j
+
+    // The same, each pixel a `scale`-sized block.
+    let draw_scaled = (rows: const (const str)[], x: i32, y: i32, scale: i32) ->
+        for r in 0i64..rows.len do
+            let row = rows[r]
+            for i in 0i64..row.len do
+                let ch = row[i]
+                if ch != '.' then
+                    let c = color(ch)
+                    gfx.fill(x + (i32) i * scale, y + (i32) r * scale, scale, scale,
+                             c.r, c.g, c.b, 255u8)
+
+    // A fallen animal: upside down, and darkened to the one color.
+    let draw_fallen = (rows: const (const str)[], x: i32, y: i32, flip: bool, c: rgb) ->
+        let n = rows.len
+        for r in 0i64..n do
+            let row = rows[n - 1i64 - r]
+            let w = (i32) row.len
+            for i in 0..w do
+                if row[(i64) i] != '.' then
+                    let px = if flip then x + w - 1 - i else x + i
+                    gfx.fill(px, y + (i32) r, 1, 1, c.r, c.g, c.b, 255u8)
+
+    let width = (rows: const (const str)[]) -> (i32) rows[0].len
+    let height = (rows: const (const str)[]) -> (i32) rows.len
+
+    // ============================================================
+    // The wagon and its team, facing west (left)
+    // ============================================================
+
+    let wagon = (const str)[10] {
+        "...cccccccccccccccccc.....",
+        "..cwwwwwwwwwwwwwwwwwwc....",
+        ".cwwwwwwwwwwwwwwwwwwwwc...",
+        ".cwwwwcwwwwwwcwwwwwwcwc...",
+        ".cwwwwcwwwwwwcwwwwwwcwc...",
+        ".cwwwwcwwwwwwcwwwwwwcwc...",
+        "ddddddddddddddddddddddddd.",
+        "dbbbbbbbbbbbbbbbbbbbbbbbd.",
+        "dbbbbbbbbbbbbbbbbbbbbbbbd.",
+        "ddddddddddddddddddddddddd." }
+
+    let wheel_a = (const str)[9] {
+        "..ddddd..",
+        ".d..d..d.",
+        "d...d...d",
+        "d...d...d",
+        "ddddddddd",
+        "d...d...d",
+        "d...d...d",
+        ".d..d..d.",
+        "..ddddd.." }
+
+    let wheel_b = (const str)[9] {
+        "..ddddd..",
+        ".dd...dd.",
+        "d.d...d.d",
+        "d..d.d..d",
+        "d...d...d",
+        "d..d.d..d",
+        "d.d...d.d",
+        ".dd...dd.",
+        "..ddddd.." }
+
+    let ox_a = (const str)[9] {
+        "..w..w..........",
+        "..dddd..........",
+        ".dkdddbbbbbbbbb.",
+        "dddddbbbbbbbbbbb",
+        "..ddbbbbwwbbbbbb",
+        "...bbbbwwwbbbbbb",
+        "...bb.b.....b.bb",
+        "...b..b.....b..b",
+        "...d..d.....d..d" }
+
+    let ox_b = (const str)[9] {
+        "..w..w..........",
+        "..dddd..........",
+        ".dkdddbbbbbbbbb.",
+        "dddddbbbbbbbbbbb",
+        "..ddbbbbwwbbbbbb",
+        "...bbbbwwwbbbbbb",
+        "....b.bb....bb.b",
+        "....b..b...b...b",
+        "....d..d...d...d" }
+
+    // ============================================================
+    // The hunt: the hunter, and what he hunts (facing right)
+    // ============================================================
+
+    let hunter = (const str)[11] {
+        "..ddd..",
+        ".ddddd.",
+        "..sss..",
+        "..sss..",
+        ".rrrrr.",
+        "rrrrrrr",
+        "s.rrr.s",
+        "..uuu..",
+        "..u.u..",
+        "..u.u..",
+        "..d.d.." }
+
+    let buffalo = (const str)[12] {
+        ".......dddddd.......",
+        "....dddddddddddd....",
+        "..dddddddddddddddd..",
+        ".ddddddddddddddddddw",
+        "dddddbbbbbbbbdddddkd",
+        "ddddbbbbbbbbbbbdddd.",
+        "d.dbbbbbbbbbbbbbdd..",
+        "..bbbbbbbbbbbbbbbb..",
+        "..bb.bb......bb.bb..",
+        "..bb.bb......bb.bb..",
+        "..b...b......b...b..",
+        "..k...k......k...k.." }
+
+    let deer = (const str)[12] {
+        "...........d.d..",
+        "............dd..",
+        "...........tt...",
+        "..........ttkt..",
+        "..tttttttttttt..",
+        ".ttttttttttttt..",
+        "wtttttttttttt...",
+        ".tttttwwwtttt...",
+        "..t.t.....t.t...",
+        "..t.t.....t.t...",
+        "..t.t.....t.t...",
+        "..k.k.....k.k..." }
+
+    let elk = (const str)[14] {
+        "..........d...d...",
+        "...........d.d.d..",
+        "..........d.ddd...",
+        "............dd....",
+        "...........bbb....",
+        "..........bbbkb...",
+        "..bbbbbbbbbbbb....",
+        ".bbbbbbbbbbbbb....",
+        "tbbbbbbbbbbbbb....",
+        ".bbbbbbbbbbbb.....",
+        "..b.b......b.b....",
+        "..b.b......b.b....",
+        "..b.b......b.b....",
+        "..k.k......k.k...." }
+
+    let bear = (const str)[10] {
+        "..............dd..",
+        "...ddddddddddddddd",
+        "..ddddddddddddddkd",
+        ".dddddddddddddddd.",
+        ".ddddddddddddddd..",
+        ".ddddddddddddddd..",
+        ".dd.dd.....dd.dd..",
+        ".dd.dd.....dd.dd..",
+        ".dd.dd.....dd.dd..",
+        ".kk.kk.....kk.kk.." }
+
+    let rabbit = (const str)[6] {
+        "......gg",
+        "......g.",
+        "..gggggk",
+        "wgggggg.",
+        ".gggggg.",
+        "..g..g.." }
+
+    let squirrel = (const str)[5] {
+        "oo.....",
+        "o.oooo.",
+        "oooooko",
+        ".ooooo.",
+        "..o.o.." }
+
+    let tree = (const str)[13] {
+        "....NNN....",
+        "..NNnnnNN..",
+        ".NnnnnnnnN.",
+        "NnnnNnnnnnN",
+        "NnnnnnnNnnN",
+        ".NnnnnnnnN.",
+        "NnnNnnnnnnN",
+        ".NNnnnnnNN.",
+        "...NNNNN...",
+        ".....d.....",
+        ".....d.....",
+        "....ddd....",
+        "..........." }
+
+    let bush = (const str)[5] {
+        "..NnN..",
+        ".NnnnN.",
+        "NnnNnnN",
+        "NnnnnnN",
+        ".NNNNN." }
+
+    // ============================================================
+    // The river: the raft from above, and the rocks
+    // ============================================================
+
+    let raft = (const str)[14] {
+        "bdbdbdbdbdbdbd",
+        "bdbdbdbdbdbdbd",
+        "bdbcccccccccbd",
+        "bdcwwwwwwwwwcd",
+        "bdcwwwwwwwwwcd",
+        "bdcwcwwwwcwwcd",
+        "bdcwwwwwwwwwcd",
+        "bdcwcwwwwcwwcd",
+        "bdcwwwwwwwwwcd",
+        "bdcwwwwwwwwwcd",
+        "bdbcccccccccbd",
+        "bdbdbdbdbdbdbd",
+        "bdbdbdbdbdbdbd",
+        "bdbdbdbdbdbdbd" }
+
+    // ============================================================
+    // A marker on the trail
+    // ============================================================
+
+    let tombstone = (const str)[14] {
+        "....gggg....",
+        "..gggggggg..",
+        ".gggggggggg.",
+        ".ggggGGgggg.",
+        ".ggGGGGGGgg.",
+        ".ggggGGgggg.",
+        ".ggggGGgggg.",
+        ".ggggGGgggg.",
+        ".gggggggggg.",
+        ".gggggggggg.",
+        ".gggggggggg.",
+        "NnNgggggggNn",
+        "nNnNnNnNnNnN",
+        "NnNnNnNnNnNn" }
