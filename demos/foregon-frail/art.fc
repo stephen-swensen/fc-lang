@@ -1,0 +1,604 @@
+// Foregon Frail — the look.
+//
+// Three things on one screen, top to bottom:
+//
+//   the panorama   the whole trail at once, laid out like a map — west on
+//                  the left, so the wagon rolls right to left from
+//                  Independence to Oregon City — with the season in the sky,
+//                  the mountains where the mountains are, and whoever has
+//                  come to meet the wagon standing beside it;
+//   the ruler      the landmarks, named, under the panorama;
+//   the paper      the teletype roll (tty.fc) on the left, and the family's
+//                  ledger on the right.
+//
+// All of it is drawn on gfx's four primitives. The type is a 5x7 dot font
+// kept below *as text*, one string per character, so it can be read and
+// edited as a font; the printout, the ledger and the labels all use it.
+// Nothing here changes the game.
+
+import math from std::
+
+struct rgb =
+    r: u8
+    g: u8
+    b: u8
+
+module art =
+    let logical_w = 1280
+    let logical_h = 720
+
+    // ============================================================
+    // The type: a 5x7 dot font, ASCII 32..95
+    //
+    // Each character is seven rows of five, separated by `|`; `#` is a dot.
+    // Upper case only, like the machine it imitates — the input is folded
+    // to capitals before it gets here.
+    // ============================================================
+
+    private let font = (const str)[64] {
+        "     |     |     |     |     |     |     ",   // space
+        "  #  |  #  |  #  |  #  |  #  |     |  #  ",   // !
+        " # # | # # |     |     |     |     |     ",   // "
+        " # # | # # |#####| # # |#####| # # | # # ",   // #
+        "  #  | ####|# #  | ### |  # #|#### |  #  ",   // $
+        "##   |##  #|   # |  #  | #   |#  ##|   ##",   // %
+        " ##  |#  # |# #  | #   |# # #|#  # | ## #",   // &
+        "  #  |  #  |     |     |     |     |     ",   // '
+        "   # |  #  | #   | #   | #   |  #  |   # ",   // (
+        " #   |  #  |   # |   # |   # |  #  | #   ",   // )
+        "     |  #  |# # #| ### |# # #|  #  |     ",   // *
+        "     |  #  |  #  |#####|  #  |  #  |     ",   // +
+        "     |     |     |     |  ## |   # |  #  ",   // ,
+        "     |     |     |#####|     |     |     ",   // -
+        "     |     |     |     |     | ##  | ##  ",   // .
+        "     |    #|   # |  #  | #   |#    |     ",   // /
+        " ### |#   #|#  ##|# # #|##  #|#   #| ### ",   // 0
+        "  #  | ##  |  #  |  #  |  #  |  #  | ### ",   // 1
+        " ### |#   #|    #|   # |  #  | #   |#####",   // 2
+        "#####|   # |  #  |   # |    #|#   #| ### ",   // 3
+        "   # |  ## | # # |#  # |#####|   # |   # ",   // 4
+        "#####|#    |#### |    #|    #|#   #| ### ",   // 5
+        "  ## | #   |#    |#### |#   #|#   #| ### ",   // 6
+        "#####|    #|   # |  #  | #   | #   | #   ",   // 7
+        " ### |#   #|#   #| ### |#   #|#   #| ### ",   // 8
+        " ### |#   #|#   #| ####|    #|   # | ##  ",   // 9
+        "     | ##  | ##  |     | ##  | ##  |     ",   // :
+        "     | ##  | ##  |     | ##  |  #  | #   ",   // ;
+        "   # |  #  | #   |#    | #   |  #  |   # ",   // <
+        "     |     |#####|     |#####|     |     ",   // =
+        " #   |  #  |   # |    #|   # |  #  | #   ",   // >
+        " ### |#   #|    #|   # |  #  |     |  #  ",   // ?
+        " ### |#   #|    #| ## #|# # #|# # #| ### ",   // @
+        " ### |#   #|#   #|#####|#   #|#   #|#   #",   // A
+        "#### |#   #|#   #|#### |#   #|#   #|#### ",   // B
+        " ### |#   #|#    |#    |#    |#   #| ### ",   // C
+        "###  |#  # |#   #|#   #|#   #|#  # |###  ",   // D
+        "#####|#    |#    |#### |#    |#    |#####",   // E
+        "#####|#    |#    |#### |#    |#    |#    ",   // F
+        " ### |#   #|#    |# ###|#   #|#   #| ####",   // G
+        "#   #|#   #|#   #|#####|#   #|#   #|#   #",   // H
+        " ### |  #  |  #  |  #  |  #  |  #  | ### ",   // I
+        "  ###|   # |   # |   # |   # |#  # | ##  ",   // J
+        "#   #|#  # |# #  |##   |# #  |#  # |#   #",   // K
+        "#    |#    |#    |#    |#    |#    |#####",   // L
+        "#   #|## ##|# # #|# # #|#   #|#   #|#   #",   // M
+        "#   #|#   #|##  #|# # #|#  ##|#   #|#   #",   // N
+        " ### |#   #|#   #|#   #|#   #|#   #| ### ",   // O
+        "#### |#   #|#   #|#### |#    |#    |#    ",   // P
+        " ### |#   #|#   #|#   #|# # #|#  # | ## #",   // Q
+        "#### |#   #|#   #|#### |# #  |#  # |#   #",   // R
+        " ####|#    |#    | ### |    #|    #|#### ",   // S
+        "#####|  #  |  #  |  #  |  #  |  #  |  #  ",   // T
+        "#   #|#   #|#   #|#   #|#   #|#   #| ### ",   // U
+        "#   #|#   #|#   #|#   #|#   #| # # |  #  ",   // V
+        "#   #|#   #|#   #|# # #|# # #|# # #| # # ",   // W
+        "#   #|#   #| # # |  #  | # # |#   #|#   #",   // X
+        "#   #|#   #| # # |  #  |  #  |  #  |  #  ",   // Y
+        "#####|    #|   # |  #  | #   |#    |#####",   // Z
+        " ### | #   | #   | #   | #   | #   | ### ",   // [
+        "     |#    | #   |  #  |   # |    #|     ",   // backslash
+        " ### |   # |   # |   # |   # |   # | ### ",   // ]
+        "  #  | # # |#   #|     |     |     |     ",   // ^
+        "     |     |     |     |     |     |#####"    // _
+    }
+
+    // One character, its dots `dot` logical pixels square. Characters the
+    // font lacks (lower case never arrives; anything else is skipped) draw
+    // nothing and still take their cell.
+    let draw_char = (ch: u8, x: i32, y: i32, dot: i32, c: rgb, a: u8) ->
+        if ch <= ' ' || ch > '_' then return
+        let src = font[(i64) (ch - ' ')]
+        for row in 0..7 do
+            for col in 0..5 do
+                if src[(i64) (row * 6 + col)] == '#' then
+                    gfx.fill(x + col * dot, y + row * dot, dot, dot, c.r, c.g, c.b, a)
+
+    // A cell is six dots wide: five for the character, one for the gap.
+    let advance = (dot: i32) -> 6 * dot
+
+    let text_width = (s: const str, dot: i32) -> (i32) s.len * advance(dot) - dot
+
+    let draw_text = (s: const str, x: i32, y: i32, dot: i32, c: rgb, a: u8) ->
+        let mut cx = x
+        for ch in s do
+            draw_char(ch, cx, y, dot, c, a)
+            cx = cx + advance(dot)
+
+    let draw_centered = (s: const str, cx: i32, y: i32, dot: i32, c: rgb, a: u8) ->
+        draw_text(s, cx - text_width(s, dot) / 2, y, dot, c, a)
+
+    // ============================================================
+    // Palette
+    // ============================================================
+
+    private let ink       = rgb { r = 38u8, g = 36u8, b = 58u8 }
+    private let paper     = rgb { r = 244u8, g = 238u8, b = 219u8 }
+    private let paper_rule = rgb { r = 226u8, g = 232u8, b = 214u8 }
+    private let wood      = rgb { r = 58u8, g = 40u8, b = 30u8 }
+    private let wood_hi   = rgb { r = 92u8, g = 66u8, b = 46u8 }
+    private let parchment = rgb { r = 222u8, g = 208u8, b = 176u8 }
+    private let red_ink   = rgb { r = 150u8, g = 40u8, b = 34u8 }
+
+    private let fillc = (x: i32, y: i32, w: i32, h: i32, c: rgb, a: u8) ->
+        gfx.fill(x, y, w, h, c.r, c.g, c.b, a)
+
+    private let mix = (a: rgb, b: rgb, t: f64) ->
+        let f = (x: u8, y: u8) -> (u8) ((f64) x + ((f64) y - (f64) x) * t)
+        rgb { r = f(a.r, b.r), g = f(a.g, b.g), b = f(a.b, b.b) }
+
+    // ============================================================
+    // Layout
+    // ============================================================
+
+    private let pano_h = 214          // the panorama
+    private let ruler_y = 214         // the landmark ruler under it
+    private let ruler_h = 34
+    private let horizon = 150         // where the land meets the sky
+    private let track_y = 190         // the wagon's wheels touch here
+
+    private let paper_x = 20
+    private let paper_y = 256
+    private let paper_w = 852
+    private let paper_h = 452
+    private let line_h = 20           // dot 2: 14 of glyph, 6 of leading
+    private let margin = 18
+
+    private let ledger_x = 892
+    private let ledger_w = 368
+
+    // Miles along the trail to x on the panorama: Independence at the
+    // right edge, Oregon City at the left.
+    private let trail_x = (miles: f64) ->
+        let m = if miles < 0.0 then 0.0 else if miles > game.trail_miles then game.trail_miles else miles
+        (i32) (1236.0 - m / game.trail_miles * 1192.0)
+
+    // ============================================================
+    // The land
+    // ============================================================
+
+    // What the calendar says the sky and the grass should be. `day` is the
+    // day of 1847.
+    private let sky_for = (day: i32) ->
+        if day < 120 then rgb { r = 150u8, g = 190u8, b = 226u8 }        // spring
+        else if day < 240 then rgb { r = 104u8, g = 162u8, b = 222u8 }   // summer
+        else if day < 300 then rgb { r = 176u8, g = 186u8, b = 196u8 }   // autumn
+        else rgb { r = 150u8, g = 154u8, b = 166u8 }                     // winter
+
+    private let grass_for = (day: i32, miles: f64) ->
+        let base = if day < 150 then rgb { r = 96u8, g = 146u8, b = 70u8 }
+                   else if day < 250 then rgb { r = 158u8, g = 150u8, b = 84u8 }
+                   else if day < 305 then rgb { r = 140u8, g = 108u8, b = 66u8 }
+                   else rgb { r = 206u8, g = 208u8, b = 214u8 }
+        // The high desert past the Platte is drier whatever the month.
+        if miles > 700.0 && miles < 1650.0 && day < 305 then
+            mix(base, rgb { r = 176u8, g = 156u8, b = 112u8 }, 0.45)
+        else base
+
+    // The peaks, as (mile, height, half-width). The Rockies around South
+    // Pass, the Blue Mountains past Fort Boise, the Cascades — Mount Hood
+    // tallest of them — before the Willamette.
+    private let peaks = i32[48] {
+         820, 34, 60,    870, 58, 70,    915, 46, 55,    990, 64, 80,
+        1040, 44, 60,   1100, 70, 70,   1150, 52, 60,   1210, 40, 70,
+        1290, 30, 80,   1650, 36, 60,   1705, 50, 70,   1760, 40, 60,
+        1905, 44, 50,   1955, 92, 46,   2000, 52, 50,   2030, 38, 50 }
+
+    private let draw_peaks = (day: i32) ->
+        let far = mix(sky_for(day), rgb { r = 90u8, g = 96u8, b = 122u8 }, 0.55)
+        let snow = rgb { r = 246u8, g = 248u8, b = 252u8 }
+        for i in 0..16 do
+            let mile = peaks[i * 3]
+            let h = peaks[i * 3 + 1]
+            let w = (peaks[i * 3 + 2] * 1192) / 2040 + 8
+            let x = trail_x((f64) mile)
+            gfx.tri(x - w, horizon, x + w, horizon, x, horizon - h,
+                    far.r, far.g, far.b, 255u8)
+            // Snow on the tall ones; all of them once winter comes.
+            if h >= 50 || day >= 300 then
+                let sh = h / 3
+                let sw = (w * sh) / h
+                gfx.tri(x - sw, horizon - h + sh, x + sw, horizon - h + sh,
+                        x, horizon - h, snow.r, snow.g, snow.b, 255u8)
+
+    // Rivers along the trail, as (from mile, to mile): the Platte, the
+    // Snake, the Columbia.
+    private let rivers = i32[6] { 300, 700, 1260, 1540, 1860, 2040 }
+
+    private let draw_rivers = () ->
+        for i in 0..3 do
+            let a = trail_x((f64) rivers[i * 2])
+            let b = trail_x((f64) rivers[i * 2 + 1])
+            gfx.fill(b, track_y + 10, a - b, 5, 86u8, 132u8, 190u8, 255u8)
+            gfx.fill(b, track_y + 11, a - b, 1, 160u8, 196u8, 230u8, 255u8)
+
+    private let draw_land = (day: i32, shown_miles: f64) ->
+        let sky = sky_for(day)
+        let top = mix(sky, rgb { r = 40u8, g = 70u8, b = 130u8 }, 0.35)
+        // A sky in eight bands, darker overhead.
+        for i in 0..8 do
+            let c = mix(top, sky, (f64) i / 7.0)
+            gfx.fill(0, i * (horizon / 8), logical_w, horizon / 8 + 1, c.r, c.g, c.b, 255u8)
+        draw_peaks(day)
+        // The land, in strips keyed to the trail, so the desert is where the
+        // desert is.
+        let mut x = 0
+        loop
+            if x >= logical_w then break
+            let miles = (1236.0 - (f64) x) / 1192.0 * game.trail_miles
+            let c = grass_for(day, miles)
+            gfx.fill(x, horizon, 16, pano_h - horizon, c.r, c.g, c.b, 255u8)
+            x = x + 16
+        // Distance haze on the horizon.
+        gfx.fill(0, horizon, logical_w, 3, sky.r, sky.g, sky.b, 120u8)
+        draw_rivers()
+        // The trail: ruts behind the wagon, a faint line ahead.
+        let here = trail_x(shown_miles)
+        gfx.fill(trail_x(game.trail_miles), track_y + 1, logical_w, 2, 120u8, 96u8, 70u8, 90u8)
+        gfx.fill(here, track_y, trail_x(0.0) - here, 3, 96u8, 72u8, 50u8, 200u8)
+
+    // ============================================================
+    // Figures
+    // ============================================================
+
+    // The wagon, facing west (left), wheels on `track_y`. `turn` is the
+    // wheels' angle in radians, `step` the oxen's gait.
+    private let draw_wagon = (cx: i32, turn: f64, step: i32) ->
+        let y = track_y
+        // The team, two yoke of oxen out front.
+        for k in 0..2 do
+            let ox = cx - 58 - k * 30
+            let hide = if k == 0 then rgb { r = 120u8, g = 84u8, b = 56u8 }
+                       else rgb { r = 150u8, g = 112u8, b = 76u8 }
+            let lift = if (step + k) % 2 == 0 then 0 else 2
+            fillc(ox, y - 22, 26, 12, hide, 255u8)                 // body
+            fillc(ox - 7, y - 24, 8, 8, hide, 255u8)               // head
+            gfx.fill(ox - 8, y - 26, 3, 3, 236u8, 228u8, 208u8, 255u8)   // horns
+            gfx.fill(ox - 1, y - 26, 3, 3, 236u8, 228u8, 208u8, 255u8)
+            fillc(ox + 1, y - 10, 3, 10 - lift, hide, 255u8)       // legs
+            fillc(ox + 7, y - 10, 3, 10 - (2 - lift), hide, 255u8)
+            fillc(ox + 16, y - 10, 3, 10 - lift, hide, 255u8)
+            fillc(ox + 22, y - 10, 3, 10 - (2 - lift), hide, 255u8)
+        // The tongue and yoke.
+        gfx.fill(cx - 60, y - 17, 36, 2, 70u8, 50u8, 34u8, 255u8)
+        // The bed.
+        fillc(cx - 26, y - 26, 58, 12, wood_hi, 255u8)
+        fillc(cx - 26, y - 16, 58, 2, wood, 255u8)
+        // The bonnet: canvas over hoops, rounded at the top.
+        let canvas = rgb { r = 238u8, g = 232u8, b = 212u8 }
+        fillc(cx - 22, y - 50, 50, 25, canvas, 255u8)
+        gfx.disc(cx - 14, y - 46, 9, canvas.r, canvas.g, canvas.b, 255u8)
+        gfx.disc(cx + 3, y - 49, 9, canvas.r, canvas.g, canvas.b, 255u8)
+        gfx.disc(cx + 20, y - 46, 9, canvas.r, canvas.g, canvas.b, 255u8)
+        for h in 0..3 do
+            gfx.fill(cx - 17 + h * 17, y - 52, 2, 27, 200u8, 192u8, 170u8, 255u8)
+        // Wheels: the big pair behind, the small pair in front.
+        draw_wheel(cx + 18, y - 11, 11, turn)
+        draw_wheel(cx - 17, y - 9, 9, turn * 11.0 / 9.0)
+
+    private let draw_wheel = (cx: i32, cy: i32, r: i32, angle: f64) ->
+        gfx.disc(cx, cy, r, 62u8, 42u8, 28u8, 255u8)
+        gfx.disc(cx, cy, r - 2, 150u8, 118u8, 80u8, 255u8)
+        for s in 0..4 do
+            let a = angle + (f64) s * math.pi / 4.0
+            let dx = math.cos(a) * (f64) (r - 2)
+            let dy = math.sin(a) * (f64) (r - 2)
+            gfx.thick_line((f64) cx - dx, (f64) cy - dy, (f64) cx + dx, (f64) cy + dy,
+                           2, 62u8, 42u8, 28u8, 255u8)
+        gfx.disc(cx, cy, 2, 40u8, 28u8, 20u8, 255u8)
+
+    // A mounted figure. Visitors meet the wagon from the west — from the
+    // left — so they face right, toward it.
+    private let draw_rider = (x: i32, coat: rgb, horse: rgb, step: i32) ->
+        let y = track_y
+        let lift = if step % 2 == 0 then 0 else 2
+        fillc(x - 12, y - 24, 26, 11, horse, 255u8)                // barrel
+        fillc(x + 12, y - 32, 7, 12, horse, 255u8)                 // neck
+        fillc(x + 14, y - 34, 10, 6, horse, 255u8)                 // head
+        fillc(x - 16, y - 24, 5, 10, horse, 255u8)                 // tail
+        fillc(x - 10, y - 13, 3, 13 - lift, horse, 255u8)          // legs
+        fillc(x - 4, y - 13, 3, 13 - (2 - lift), horse, 255u8)
+        fillc(x + 6, y - 13, 3, 13 - lift, horse, 255u8)
+        fillc(x + 11, y - 13, 3, 13 - (2 - lift), horse, 255u8)
+        fillc(x - 3, y - 40, 8, 17, coat, 255u8)                   // rider
+        gfx.disc(x + 1, y - 44, 4, 176u8, 128u8, 96u8, 255u8)
+        fillc(x - 4, y - 50, 11, 4, coat, 255u8)                   // hat
+
+    private let draw_wolf = (x: i32, step: i32) ->
+        let y = track_y
+        let fur = rgb { r = 104u8, g = 104u8, b = 110u8 }
+        let lift = if step % 2 == 0 then 0 else 2
+        fillc(x - 12, y - 14, 22, 8, fur, 255u8)
+        fillc(x + 8, y - 17, 8, 7, fur, 255u8)
+        gfx.tri(x + 10, y - 17, x + 13, y - 17, x + 11, y - 21, fur.r, fur.g, fur.b, 255u8)
+        gfx.tri(x + 16, y - 14, x + 16, y - 11, x + 20, y - 12, fur.r, fur.g, fur.b, 255u8)
+        gfx.tri(x - 12, y - 13, x - 12, y - 9, x - 20, y - 8, fur.r, fur.g, fur.b, 255u8)
+        fillc(x - 10, y - 6, 2, 6 - lift, fur, 255u8)
+        fillc(x - 4, y - 6, 2, 6 - (2 - lift), fur, 255u8)
+        fillc(x + 3, y - 6, 2, 6 - lift, fur, 255u8)
+        fillc(x + 8, y - 6, 2, 6 - (2 - lift), fur, 255u8)
+
+    private let draw_walker = (x: i32, coat: rgb) ->
+        let y = track_y
+        fillc(x - 4, y - 24, 9, 16, coat, 255u8)
+        fillc(x - 3, y - 8, 3, 8, rgb { r = 70u8, g = 54u8, b = 40u8 }, 255u8)
+        fillc(x + 1, y - 8, 3, 8, rgb { r = 70u8, g = 54u8, b = 40u8 }, 255u8)
+        gfx.disc(x, y - 28, 4, 176u8, 128u8, 96u8, 255u8)
+        gfx.fill(x - 4, y - 33, 9, 3, 30u8, 24u8, 20u8, 255u8)
+
+    // A fort's stockade, ahead of the wagon.
+    private let draw_fort = (x: i32) ->
+        let y = track_y
+        for i in 0..14 do
+            let px = x - 60 + i * 9
+            let hgt = if i == 3 || i == 10 then 40 else 30
+            gfx.fill(px, y - hgt, 8, hgt, 118u8, 86u8, 58u8, 255u8)
+            gfx.tri(px, y - hgt, px + 8, y - hgt, px + 4, y - hgt - 5, 118u8, 86u8, 58u8, 255u8)
+        gfx.fill(x - 34, y - 52, 22, 14, 96u8, 68u8, 46u8, 255u8)   // blockhouse
+        gfx.fill(x - 38, y - 56, 30, 5, 70u8, 50u8, 34u8, 255u8)
+        gfx.fill(x - 8, y - 20, 16, 20, 50u8, 36u8, 26u8, 255u8)    // gate
+        gfx.fill(x + 30, y - 66, 2, 30, 90u8, 90u8, 90u8, 255u8)    // flagstaff
+        gfx.fill(x + 32, y - 66, 12, 7, 170u8, 40u8, 40u8, 255u8)
+
+    private let draw_grave = (x: i32) ->
+        let y = track_y
+        gfx.fill(x - 14, y - 3, 28, 5, 110u8, 84u8, 60u8, 255u8)
+        gfx.fill(x - 9, y - 6, 18, 3, 110u8, 84u8, 60u8, 255u8)
+        gfx.fill(x - 2, y - 30, 4, 32, 210u8, 204u8, 190u8, 255u8)
+        gfx.fill(x - 9, y - 23, 18, 4, 210u8, 204u8, 190u8, 255u8)
+
+    private let draw_cabin = (x: i32) ->
+        let y = track_y
+        gfx.fill(x - 26, y - 26, 52, 26, 132u8, 94u8, 62u8, 255u8)
+        for i in 0..5 do
+            gfx.fill(x - 26, y - 25 + i * 5, 52, 1, 96u8, 68u8, 46u8, 255u8)
+        gfx.tri(x - 32, y - 26, x + 32, y - 26, x, y - 48, 90u8, 60u8, 40u8, 255u8)
+        gfx.fill(x - 6, y - 16, 10, 16, 60u8, 42u8, 30u8, 255u8)
+        gfx.fill(x + 12, y - 20, 8, 8, 250u8, 220u8, 140u8, 255u8)
+        gfx.fill(x + 14, y - 44, 6, 12, 90u8, 70u8, 60u8, 255u8)   // chimney
+
+    // Whoever has come to the wagon, on the western side of it — where
+    // the wagon is headed.
+    private let draw_visitors = (g: const trail*, wx: i32, frame: i32) ->
+        let step = frame / 10
+        match g.visitor with
+        | nobody -> void()
+        | riders ->
+            let coat = rgb { r = 74u8, g = 60u8, b = 92u8 }
+            let horse = rgb { r = 96u8, g = 66u8, b = 44u8 }
+            draw_rider(wx - 150, coat, horse, step)
+            draw_rider(wx - 186, coat, rgb { r = 60u8, g = 44u8, b = 32u8 }, step + 1)
+            draw_rider(wx - 222, coat, horse, step)
+        | bandits ->
+            let coat = rgb { r = 34u8, g = 32u8, b = 34u8 }
+            draw_rider(wx - 140, coat, rgb { r = 40u8, g = 30u8, b = 24u8 }, step)
+            draw_rider(wx - 176, coat, rgb { r = 70u8, g = 50u8, b = 36u8 }, step + 1)
+        | wolves ->
+            draw_wolf(wx - 120, step)
+            draw_wolf(wx - 150, step + 1)
+            draw_wolf(wx - 176, step)
+        | traders ->
+            draw_walker(wx - 120, rgb { r = 150u8, g = 110u8, b = 70u8 })
+            draw_walker(wx - 138, rgb { r = 128u8, g = 92u8, b = 60u8 })
+            draw_walker(wx - 156, rgb { r = 160u8, g = 120u8, b = 80u8 })
+        | trader -> draw_fort(wx - 150)
+
+    // ============================================================
+    // The ruler of landmarks
+    // ============================================================
+
+    private let landmark_miles = i32[15] {
+        0, 102, 185, 304, 554, 640, 830, 950, 1026, 1150, 1260, 1540, 1700, 1880, 2040 }
+    private let landmark_names = (const str)[15] {
+        "INDEPENDENCE", "KANSAS R.", "BIG BLUE R.", "FT. KEARNEY", "CHIMNEY ROCK",
+        "FT. LARAMIE", "INDEPENDENCE ROCK", "SOUTH PASS", "FT. BRIDGER",
+        "SODA SPRINGS", "FT. HALL", "FT. BOISE", "BLUE MTNS.", "THE DALLES",
+        "OREGON CITY" }
+
+    private let draw_ruler = (shown_miles: f64) ->
+        fillc(0, ruler_y, logical_w, ruler_h, wood, 255u8)
+        gfx.fill(0, ruler_y, logical_w, 2, 30u8, 20u8, 14u8, 255u8)
+        let label = rgb { r = 226u8, g = 212u8, b = 180u8 }
+        let passed = rgb { r = 150u8, g = 128u8, b = 100u8 }
+        for i in 0..15 do
+            let m = landmark_miles[i]
+            let x = trail_x((f64) m)
+            let reached = (f64) m <= shown_miles
+            let c = if reached then passed else label
+            gfx.fill(x, ruler_y + 2, 1, 5, c.r, c.g, c.b, 255u8)
+            let name = landmark_names[i]
+            let w = text_width(name, 1)
+            let lx0 = x - w / 2
+            let lx = if lx0 < 4 then 4 else if lx0 + w > logical_w - 4 then logical_w - 4 - w else lx0
+            let ly = if i % 2 == 0 then ruler_y + 9 else ruler_y + 21
+            draw_text(name, lx, ly, 1, c, 255u8)
+
+    // ============================================================
+    // The paper
+    // ============================================================
+
+    private let draw_paper = (p: const printout*, frame: i32) ->
+        // The platen and the roll.
+        fillc(paper_x - 8, paper_y - 8, paper_w + 16, paper_h + 16, wood, 255u8)
+        fillc(paper_x, paper_y, paper_w, paper_h, paper, 255u8)
+        // Faint rules every other line, like the fan-fold of the day.
+        let visible = paper_h / line_h
+        for i in 0..visible do
+            if i % 2 == 1 then
+                fillc(paper_x, paper_y + i * line_h + 2, paper_w, line_h, paper_rule, 255u8)
+        // Tractor-feed holes down both edges.
+        for i in 0..(paper_h / 24) do
+            gfx.disc(paper_x + 7, paper_y + 12 + i * 24, 3, 200u8, 190u8, 170u8, 255u8)
+            gfx.disc(paper_x + paper_w - 8, paper_y + 12 + i * 24, 3, 200u8, 190u8, 170u8, 255u8)
+
+        // The last `visible` lines, the newest at the bottom. While the head
+        // is still behind, the paper scrolls only as far as the head.
+        let last = if p.head_line < p.total then p.head_line else p.total - 1i64
+        let first0 = last - (i64) visible + 1i64
+        let first = if first0 < 0i64 then 0i64 else first0
+        let oldest = p.total - (i64) tty.keep
+        let tx = paper_x + margin
+        for n in first..(last + 1i64) do
+            if n >= 0i64 && n >= oldest then
+                let row = (i32) (n - first)
+                let y = paper_y + 4 + row * line_h
+                draw_text(tty.line(p, n), tx, y, 2, ink, 255u8)
+        // The head: a small carriage where the next character will strike,
+        // or the answer being typed and a blinking cursor.
+        if p.total > 0i64 then
+            let row = (i32) (last - first)
+            let y = paper_y + 4 + row * line_h
+            if tty.ready(p) then
+                let q = tty.line(p, last)
+                let ax = tx + (i32) (q.len + 2i64) * advance(2)
+                draw_text("?", tx + (i32) q.len * advance(2), y, 2, ink, 255u8)
+                draw_text(tty.answer(p), ax, y, 2, red_ink, 255u8)
+                if (frame / 20) % 2 == 0 then
+                    let cx = ax + (i32) tty.answer(p).len * advance(2)
+                    fillc(cx, y + 15, 10, 2, red_ink, 255u8)
+            else if tty.printing(p) then
+                let cx = tx + (i32) p.head_col * advance(2)
+                gfx.fill(cx - 1, y - 3, 12, 20, 70u8, 70u8, 78u8, 110u8)
+
+    // ============================================================
+    // The ledger
+    // ============================================================
+
+    private let bar = (x: i32, y: i32, w: i32, frac: f64, c: rgb) ->
+        let f = if frac < 0.0 then 0.0 else if frac > 1.0 then 1.0 else frac
+        gfx.fill(x, y, w, 8, 0u8, 0u8, 0u8, 50u8)
+        fillc(x, y, (i32) ((f64) w * f), 8, c, 255u8)
+
+    private let ledger_row = (label: const str, value: i64, x: i32, y: i32, frac: f64, c: rgb) ->
+        draw_text(label, x, y, 2, ink, 255u8)
+        let v = "%d{value}"
+        draw_text(v, x + 330 - text_width(v, 2), y, 2, ink, 255u8)
+        bar(x, y + 18, 330, frac, c)
+
+    private let draw_ledger = (g: const trail*, day: i32, shown_miles: f64) ->
+        let x = ledger_x
+        let y = paper_y
+        fillc(x - 8, y - 8, ledger_w + 16, paper_h + 16, wood, 255u8)
+        fillc(x, y, ledger_w, paper_h, parchment, 255u8)
+        let lx = x + 18
+
+        draw_text("THE LEDGER", lx, y + 16, 3, ink, 255u8)
+        gfx.fill(lx, y + 42, 330, 2, ink.r, ink.g, ink.b, 255u8)
+
+        let { m, d } = game.calendar(day)
+        draw_text("%.9s{game.month_name(m)} %d{d}, 1847", lx, y + 56, 2, ink, 255u8)
+        let miles = (i64) math.floor(shown_miles)
+        draw_text("%d{miles} OF 2040 MILES", lx, y + 80, 2, ink, 255u8)
+        bar(lx, y + 98, 330, shown_miles / game.trail_miles,
+            rgb { r = 120u8, g = 84u8, b = 56u8 })
+
+        // Nothing on the ledger goes below zero, whatever the arithmetic
+        // of a bad fortnight says on the way to the next stock-taking.
+        let pos = (v: f64) -> if v < 0.0 then 0i64 else (i64) math.floor(v)
+        let yy = y + 128
+        ledger_row("FOOD", pos(g.food), lx, yy, g.food / 300.0,
+                   rgb { r = 126u8, g = 150u8, b = 70u8 })
+        ledger_row("BULLETS", pos(g.ammo), lx, yy + 40, g.ammo / 2500.0,
+                   rgb { r = 110u8, g = 110u8, b = 120u8 })
+        ledger_row("CLOTHING", pos(g.clothing), lx, yy + 80, g.clothing / 100.0,
+                   rgb { r = 70u8, g = 96u8, b = 150u8 })
+        ledger_row("SUPPLIES", pos(g.supplies), lx, yy + 120, g.supplies / 100.0,
+                   rgb { r = 150u8, g = 110u8, b = 60u8 })
+        ledger_row("CASH  $", pos(g.cash), lx, yy + 160, g.cash / 400.0,
+                   rgb { r = 190u8, g = 160u8, b = 70u8 })
+
+        let sy = yy + 204
+        if g.injured then draw_text("INJURED", lx, sy, 2, red_ink, 255u8)
+        if g.ill then draw_text("GRAVELY ILL", lx + 120, sy, 2, red_ink, 255u8)
+        match g.ending with
+        | on_trail -> void()
+        | arrived -> draw_text("ARRIVED", lx, sy, 2, rgb { r = 40u8, g = 110u8, b = 50u8 }, 255u8)
+        | died -> draw_text("LOST ON THE TRAIL", lx, sy, 2, red_ink, 255u8)
+
+        let hy = y + paper_h - 60
+        gfx.fill(lx, hy - 10, 330, 1, ink.r, ink.g, ink.b, 120u8)
+        draw_text("TYPE, THEN RETURN TO ANSWER", lx, hy, 1, ink, 200u8)
+        draw_text("ANY KEY HURRIES THE PRINTER", lx, hy + 14, 1, ink, 200u8)
+        draw_text("F11 FULL SCREEN", lx, hy + 28, 1, ink, 200u8)
+
+    // ============================================================
+    // The frame
+    // ============================================================
+
+    // What the panorama shows moves smoothly; the game's numbers jump. The
+    // wagon eases toward the game's mileage, and its wheels turn by the
+    // distance it actually covers on screen.
+    struct view =
+        miles: f64
+        wheel: f64
+        stride: f64
+
+    let make_view = () -> alloc(view { })!
+
+    let render = (g: const trail*, p: const printout*, v: view*, dt: f64, frame: i32) ->
+        let target = g.miles
+        let want = if target < 0.0 then 0.0 else if target > game.trail_miles then game.trail_miles else target
+        let gap = want - v.miles
+        // Fast enough that a fortnight's travel takes about two seconds.
+        let max_step = 140.0 * dt
+        let step = if gap > max_step then max_step else if gap < -max_step then -max_step else gap
+        v.miles = v.miles + step
+        let px = math.abs(step) * 1192.0 / game.trail_miles
+        v.wheel = v.wheel - px / 11.0
+        v.stride = v.stride + px
+
+        let day = game.start_day + g.turn * 14
+
+        gfx.frame_begin(30u8, 22u8, 18u8)
+        draw_land(day, v.miles)
+        // Oregon City is the left edge of the map, so an arrived wagon parks
+        // just east of it, clear of the cabin and with its team on screen.
+        let wx0 = trail_x(v.miles)
+        let wx = match g.ending with
+                 | arrived -> if wx0 < 190 then 190 else wx0
+                 | died -> wx0
+                 | on_trail -> wx0
+        match g.ending with
+        | arrived -> draw_cabin(trail_x(game.trail_miles) + 6)
+        | died -> void()
+        | on_trail -> void()
+        draw_visitors(g, wx, frame)
+        match g.ending with
+        | died ->
+            if math.abs(gap) < 1.0 then draw_grave(wx)
+            else draw_wagon(wx, v.wheel, (i32) (v.stride / 6.0))
+        | arrived -> draw_wagon(wx, v.wheel, (i32) (v.stride / 6.0))
+        | on_trail -> draw_wagon(wx, v.wheel, (i32) (v.stride / 6.0))
+
+        // The title, over the sky, until the wagon sets out.
+        if g.turn == 0 && g.miles <= 0.0 && g.ending == ending.on_trail then
+            draw_centered("FOREGON FRAIL", logical_w / 2, 18, 6, rgb { r = 40u8, g = 30u8, b = 26u8 }, 90u8)
+            draw_centered("FOREGON FRAIL", logical_w / 2, 14, 6, rgb { r = 250u8, g = 244u8, b = 226u8 }, 255u8)
+            draw_centered("INDEPENDENCE TO OREGON CITY, 1847", logical_w / 2 + 2, 66, 2,
+                          rgb { r = 40u8, g = 30u8, b = 26u8 }, 150u8)
+            draw_centered("INDEPENDENCE TO OREGON CITY, 1847", logical_w / 2, 64, 2,
+                          rgb { r = 250u8, g = 244u8, b = 226u8 }, 255u8)
+
+        draw_ruler(v.miles)
+        draw_paper(p, frame)
+        draw_ledger(g, day, v.miles)
+        gfx.frame_end()

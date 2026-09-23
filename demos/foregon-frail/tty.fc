@@ -1,0 +1,242 @@
+// Foregon Frail — the printout.
+//
+// The 1971 game was played on a teletype: every line the program printed
+// was hammered onto a paper roll at ten characters a second, and every
+// answer was typed onto the same roll, right after the question. This file
+// is that roll. game.fc prints to it and asks questions on it; art.fc draws
+// it; main.fc feeds it the keyboard and the clock.
+//
+// The paper holds the last `keep` lines in one flat buffer — a line is at
+// most `cols` characters, so a line is a fixed-size row, not an allocation.
+// Long text is word-wrapped on the way in.
+//
+// The print head runs behind the text: lines are *added* instantly but
+// *appear* a character at a time, and a question cannot be answered until
+// the head has caught up with it. That is what makes the rifle fair — its
+// clock starts when the word is on the paper, not when the game decided to
+// print it. Any key hurries the head along.
+//
+// Sound rides the paper too. A line can carry a *cue* — a number the caller
+// chooses — that fires as the head starts that line, so a gunshot, a bell
+// or a dirge lands on the words it belongs to rather than when the game
+// happened to decide it. The original listing did this with BEL characters.
+
+struct printout =
+    // The paper: `keep` rows of `cols` bytes, and each row's length. Line n
+    // (counting from the first ever printed) lives in row n % keep.
+    rows: u8[]
+    lens: i32[]
+    cues: i32[]         // fired as this line starts printing; 0 is none
+    total: i64          // lines ever printed
+
+    // The print head: the line it is on and how far along. Caught up when
+    // head_line == total.
+    head_line: i64
+    head_col: i64
+    owed: f64           // fractional characters carried between frames
+    hurry: bool         // someone pressed a key: print the backlog fast
+
+    // The open question, if any: always the last line, with the answer
+    // echoed after it as it is typed.
+    asking: bool
+    entry: u8[]         // heap, `entry_cap` bytes
+    entry_len: i32
+    next_cue: i32
+
+    // What the head did since main last looked, for the sound of it.
+    clacks: i32         // characters the head struck
+    returns: i32        // carriage returns
+    fired: i32[]        // cues reached, oldest first, `nfired` of them
+    nfired: i32
+
+module tty =
+    let cols = 68
+    let keep = 240
+    private let entry_cap = 24
+
+    // A Model 33 printed ten characters a second. That is authentic and
+    // unbearable, so the head here runs four and a half times as fast — slow
+    // enough to watch, fast enough to play — and far faster when hurried.
+    private let cps = 45.0
+    private let hurry_cps = 900.0
+
+    let make = () ->
+        let p = alloc(printout {
+            rows = alloc(u8[(i64) (keep * cols)] {})!,
+            lens = alloc(i32[(i64) keep] {})!,
+            cues = alloc(i32[(i64) keep] {})!,
+            fired = alloc(i32[8] {})!,
+            entry = alloc(u8[(i64) entry_cap] {})! })!
+        p
+
+    // Forget everything on the paper — a new journey on a fresh roll.
+    let reset = (p: printout*) ->
+        p.total = 0i64
+        p.head_line = 0i64
+        p.head_col = 0i64
+        p.owed = 0.0
+        p.hurry = false
+        p.asking = false
+        p.entry_len = 0
+        p.next_cue = 0
+        p.nfired = 0
+
+    // Line n, as printed so far (the whole line once the head is past it).
+    let line = (p: const printout*, n: i64) ->
+        let slot = n % (i64) keep
+        let base = slot * (i64) cols
+        let full = (i64) p.lens[slot]
+        let shown = if n < p.head_line then full
+                    else if n == p.head_line then math_min(p.head_col, full)
+                    else 0i64
+        (const str) p.rows[base..base + shown]
+
+    private let math_min = (a: i64, b: i64) -> if a < b then a else b
+
+    // One raw row, at most `cols` bytes, no wrapping.
+    private let push_row = (p: printout*, s: const str) ->
+        let slot = p.total % (i64) keep
+        let base = slot * (i64) cols
+        let n = math_min(s.len, (i64) cols)
+        for i in 0i64..n do
+            p.rows[base + i] = s[i]
+        p.lens[slot] = (i32) n
+        p.cues[slot] = p.next_cue
+        p.next_cue = 0
+        p.total = p.total + 1i64
+        // A line scrolled off the top before the head reached it is simply
+        // gone; the head skips to the oldest line still on the paper.
+        let oldest = p.total - (i64) keep
+        if p.head_line < oldest then
+            p.head_line = oldest
+            p.head_col = 0i64
+
+    // Print a line, word-wrapped to the paper. A word longer than a whole
+    // line is cut, which nothing this game prints ever needs.
+    let say = (p: printout*, s: const str) ->
+        let mut start = 0i64
+        loop
+            let left = s.len - start
+            if left <= (i64) cols then
+                push_row(p, s[start..s.len])
+                break
+            // The last space that keeps the row within the paper.
+            let mut cut = start + (i64) cols
+            loop
+                if cut <= start then break
+                if s[cut] == ' ' then break
+                cut = cut - 1i64
+            if cut <= start then cut = start + (i64) cols
+            push_row(p, s[start..cut])
+            start = cut
+            loop
+                if start >= s.len then break
+                if s[start] != ' ' then break
+                start = start + 1i64
+
+    let blank = (p: printout*) -> push_row(p, "")
+
+    // The next line printed fires this cue as it starts. Cue 0 is none.
+    let cue = (p: printout*, id: i32) ->
+        p.next_cue = id
+
+    // Print a question and wait for an answer to it. The answer is typed on
+    // the question's own line, after a `?`, the way BASIC's INPUT did it.
+    let ask = (p: printout*, q: const str) ->
+        say(p, q)
+        p.asking = true
+        p.entry_len = 0
+
+    // True while a question is on the paper, fully printed, and waiting.
+    let ready = (p: const printout*) ->
+        p.asking && p.head_line >= p.total
+
+    // True while the head is still behind the text.
+    let printing = (p: const printout*) -> p.head_line < p.total
+
+    // The answer typed so far.
+    let answer = (p: const printout*) ->
+        (const str) p.entry[0i64..(i64) p.entry_len]
+
+    // How many characters of the question line are left for the answer.
+    let room = (p: const printout*) ->
+        let last = (p.total - 1i64) % (i64) keep
+        let used = p.lens[last] + 2          // "? "
+        let r = cols - used
+        if r > entry_cap then entry_cap else r
+
+    let type_char = (p: printout*, ch: u8) ->
+        if !ready(p) then return
+        if p.entry_len >= room(p) then return
+        p.entry[(i64) p.entry_len] = ch
+        p.entry_len = p.entry_len + 1
+
+    let rubout = (p: printout*) ->
+        if !ready(p) then return
+        if p.entry_len > 0 then
+            p.entry_len = p.entry_len - 1
+
+    // RETURN: the answer is final. It is written onto the question's line
+    // for good (so the paper reads back as a transcript) and copied into
+    // `out`; the result is how many bytes that took.
+    let submit = (p: printout*, out: u8[]) ->
+        let slot = (p.total - 1i64) % (i64) keep
+        let base = slot * (i64) cols
+        let mut n = (i64) p.lens[slot]
+        let put = (at: i64, ch: u8) ->
+            if at < (i64) cols then p.rows[base + at] = ch
+        put(n, '?')
+        put(n + 1i64, ' ')
+        n = n + 2i64
+        for i in 0i64..(i64) p.entry_len do
+            put(n + i, p.entry[i])
+            if i < out.len then out[i] = p.entry[i]
+        n = n + (i64) p.entry_len
+        p.lens[slot] = (i32) math_min(n, (i64) cols)
+        // The head has already passed this line, so the answer shows whole.
+        let len = (i64) p.entry_len
+        p.asking = false
+        p.entry_len = 0
+        p.returns = p.returns + 1
+        if len < out.len then len else out.len
+
+    // Advance the print head by `dt` seconds.
+    let step = (p: printout*, dt: f64) ->
+        if !printing(p) then
+            p.hurry = false
+            p.owed = 0.0
+            return
+        let rate = if p.hurry then hurry_cps else cps
+        p.owed = p.owed + rate * dt
+        loop
+            if p.owed < 1.0 then break
+            if !printing(p) then break
+            let slot = p.head_line % (i64) keep
+            if p.head_col == 0i64 && p.cues[slot] != 0 then
+                if (i64) p.nfired < p.fired.len then
+                    p.fired[(i64) p.nfired] = p.cues[slot]
+                    p.nfired = p.nfired + 1
+                p.cues[slot] = 0
+            let full = (i64) p.lens[slot]
+            if p.head_col < full then
+                let base = slot * (i64) cols
+                if p.rows[base + p.head_col] != ' ' then
+                    p.clacks = p.clacks + 1
+                p.head_col = p.head_col + 1i64
+                p.owed = p.owed - 1.0
+            else
+                // End of the line: the carriage return costs a few
+                // character times, as it did on the real machine — unless
+                // this is the open question, where the head stops and waits.
+                if p.asking && p.head_line == p.total - 1i64 then
+                    p.head_line = p.total
+                    p.head_col = 0i64
+                    break
+                p.head_line = p.head_line + 1i64
+                p.head_col = 0i64
+                p.owed = p.owed - 3.0
+                p.returns = p.returns + 1
+        if !printing(p) then p.hurry = false
+
+    let hurry = (p: printout*) ->
+        if printing(p) then p.hurry = true

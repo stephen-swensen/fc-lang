@@ -1,0 +1,116 @@
+// Foregon Frail — the journey to Oregon, as it was first played: typed at a
+// teletype, one fortnight at a time, with a rifle you fire by typing BANG.
+//
+// This is a new program in FC after the 1971 classic by Bill Heinemann,
+// Paul Dillenberger and Don Rawitsch — its rules and numbers, as they were
+// published in 1978, and this game's own words, pictures and sounds. See
+// README.md for what that means in practice.
+//
+// Pure FC: no C helper files. The layers, bottom to top — fario's and
+// fuzzel-fobble's architecture, with a teletype where their pad was:
+//
+//     plat.fc     the contract: what input looks like, what `gfx` must be
+//     gfx.fc      `module gfx` on raylib — the only file that names it
+//     tty.fc      the paper roll and its print head
+//     game.fc     the rules. No pixels, no keys, no library.
+//     art.fc      the look: the panorama, the paper, the ledger, the type
+//     sound.fc    the effect instruments and scripts
+//     main.fc     this file: hand the pieces to each other and loop
+
+import opl_audio from shared::
+import opl_midi from shared::
+import opl_bank_gm from shared::
+import io from std::
+import sys from std::
+
+// The engine plays a tune under the effects; this game has none, so its
+// player is handed a song with nothing in it.
+let silent_song = () ->
+    opl_midi.song { events = alloc(opl_midi.event[0] {})!,
+                    division = 480, length = 0 }
+
+let main = (args: str[]) ->
+    io.write("=== FOREGON FRAIL ===\n", stdout)
+    io.write("The Oregon journey of 1847, at a teletype (raylib + OPL2)\n\n", stdout)
+    io.write("  Type your answers and press RETURN.\n", stdout)
+    io.write("  Any key hurries the printer along.\n", stdout)
+    io.write("  F11 toggles full screen; close the window to quit.\n\n", stdout)
+
+    gfx.open(art.logical_w, art.logical_h, c"Foregon Frail")
+
+    let g = game.make((u64) sys.time())
+    let p = tty.make()
+    let v = art.make_view()
+
+    // Audio: the engine renders on the host's audio thread; this loop only
+    // posts "play this" to it. See opl_audio.fc.
+    let music = opl_midi.init(44100, silent_song(), opl_bank_gm.make())
+    let s = snd.init(44100, music)
+    if !gfx.audio_start(s) then
+        io.write("Audio: device open failed - running silent\n", stdout)
+
+    game.begin(g, p)
+
+    let mut inp = default(input)
+    let answer = alloc(u8[32] {})!
+    let mut frame = 0
+    let mut last = gfx.now()
+
+    // When the question on the paper finished printing — the rifle's clock
+    // starts here — or negative while nothing is waiting.
+    let mut asked_at = -1.0
+
+    // The machine's own noise yields to anything sustained (see
+    // snd.hush_for), and the head's strikes are thinned when it races.
+    let mut hush_until = 0.0
+    let mut next_strike = 0.0
+
+    loop
+        gfx.pump(&inp)
+        if inp.quit || g.quit then break
+        let now = gfx.now()
+        let dt0 = now - last
+        let dt = if dt0 > 0.1 then 0.1 else dt0
+        last = now
+
+        // A key while the head is printing hurries it; the keystroke itself
+        // is spent on that, as it would have been on the real machine.
+        if tty.printing(p) && inp.any_key then tty.hurry(p)
+        tty.step(p, dt)
+
+        if tty.ready(p) then
+            if asked_at < 0.0 then asked_at = now
+            for i in 0..inp.ntyped do
+                tty.type_char(p, inp.typed[i])
+                if now >= hush_until then opl_audio.play(s, snd.sfx_key)
+            if inp.rubout then tty.rubout(p)
+            if inp.enter then
+                let n = tty.submit(p, answer)
+                let secs = now - asked_at
+                asked_at = -1.0
+                if now >= hush_until then opl_audio.play(s, snd.sfx_return)
+                game.answer(g, p, (const str) answer[0i64..(i64) n], secs)
+        else
+            asked_at = -1.0
+
+        // The cues the head reached this frame, then its own clatter.
+        for i in 0..p.nfired do
+            let sfx = p.fired[i] - 1
+            opl_audio.play(s, sfx)
+            let until = now + snd.hush_for(sfx)
+            if until > hush_until then hush_until = until
+        p.nfired = 0
+        if now >= hush_until then
+            if p.returns > 0 then
+                opl_audio.play(s, snd.sfx_return)
+            else if p.clacks > 0 && now >= next_strike then
+                opl_audio.play(s, snd.sfx_strike)
+                next_strike = now + 1.0 / 30.0
+        p.clacks = 0
+        p.returns = 0
+
+        art.render(g, p, v, dt, frame)
+        frame = frame + 1
+
+    gfx.close()
+    0

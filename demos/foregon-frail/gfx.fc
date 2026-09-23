@@ -1,0 +1,171 @@
+// Foregon Frail — the raylib backend.
+//
+// The one definition of `module gfx` (the contract is in plat.fc). The
+// window, letterbox and audio plumbing are fario's gfx.fc, which took them
+// from fuzzel-fobble's gfx_raylib.fc — see that file for the long story
+// behind each non-obvious line. What is new here is the input side: this
+// game reads *text*, so `pump` drains raylib's typed-character queue rather
+// than latching a pad.
+
+import raylib from shared::
+import opl_audio from shared::
+import opl_dev from shared::
+import math from std::
+
+module gfx =
+    // The logical-size target: the game draws at 1280x720 into this and
+    // `frame_end` scales it to the window.
+    private let mut target = default(raylib.render_texture)
+    private let mut logical_w = 0
+    private let mut logical_h = 0
+
+    // The audio engine, reachable from file scope because raylib's
+    // AudioCallback carries no userdata pointer. Written once in
+    // `audio_start` before the device opens, read only by the audio thread.
+    private let mut engine = default(any*)
+
+    // ============================================================
+    // Lifecycle
+    // ============================================================
+
+    let open = (lw: i32, lh: i32, title: const cstr) ->
+        logical_w = lw
+        logical_h = lh
+
+        raylib.set_log_level(raylib.log_warning)
+
+        // Deliberately not flag_highdpi — see fuzzel-fobble's gfx_raylib.fc.
+        raylib.set_config_flags(raylib.flag_vsync | raylib.flag_resizable)
+
+        raylib.init_window(960, 540, title)
+        raylib.maximize_window()
+        raylib.set_min_size(lw / 2, lh / 2)
+
+        // ESC is not a quit key in a game you type into: it is too close to
+        // the digits, and one slip would end the journey. The window's close
+        // button still quits.
+        raylib.set_exit_key(raylib.key_none)
+
+        target = raylib.load_render_texture(lw, lh)
+        raylib.set_texture_filter(target.texture, raylib.filter_bilinear)
+        return
+
+    // No CloseAudioDevice on purpose — see `shutdown_note` in opl_audio.fc.
+    let close = () ->
+        raylib.unload_render_texture(target)
+        raylib.close_window()
+
+    // Seconds since the window opened. The rifle is timed on this.
+    let now = () -> raylib.time()
+
+    // Runs on miniaudio's audio thread; `buffer` is mono i16 at the engine's
+    // rate, `frames` is whatever the resampler wants this call.
+    private let audio_callback = (buffer: any*, frames: u32) ->
+        let a = (opl_audio.audio*) engine
+        let out = i16[] { ptr = (i16*) buffer, len = (i64) frames }
+        opl_audio.render(a, out, (i32) frames)
+
+    let audio_start = (a: opl_audio.audio*) ->
+        engine = (any*) a
+        opl_dev.start(a, &audio_callback)
+
+    // ============================================================
+    // Input
+    // ============================================================
+
+    // The keyboard as a teletype. Typed characters come from raylib's
+    // character queue, which has already applied the keyboard layout and
+    // shift — so this reads what the person meant to type, not which keys
+    // they pressed. Anything outside printable ASCII is dropped: the type
+    // box has no glyph for it.
+    let pump = (inp: input*) ->
+        inp.quit = raylib.window_should_close()
+
+        if raylib.is_key_pressed(raylib.key_f11) then
+            raylib.toggle_borderless()
+
+        inp.ntyped = 0
+        loop
+            let cp = raylib.char_pressed()
+            if cp == 0 then break
+            if cp >= 32 && cp < 127 && inp.ntyped < 16 then
+                let mut ch = (u8) cp
+                if ch >= 'a' && ch <= 'z' then ch = ch - 32u8
+                inp.typed[inp.ntyped] = ch
+                inp.ntyped = inp.ntyped + 1
+
+        inp.enter = raylib.is_key_pressed(raylib.key_enter)
+                    || raylib.is_key_pressed(raylib.key_kp_enter)
+        inp.rubout = raylib.is_key_pressed(raylib.key_backspace)
+                     || raylib.is_key_repeat(raylib.key_backspace)
+        inp.any_key = inp.ntyped > 0 || inp.enter || inp.rubout
+                      || raylib.is_key_pressed(raylib.key_space)
+
+    // ============================================================
+    // Frame
+    // ============================================================
+
+    let frame_begin = (cr: u8, cg: u8, cb: u8) ->
+        raylib.begin_texture_mode(target)
+        raylib.clear_background(rgba(cr, cg, cb, 255u8))
+
+    // The hand-rolled letterbox, exactly as fario draws it: negative source
+    // height because GL rows run bottom-up, premultiplied blend so the
+    // target's alpha channel survives.
+    let frame_end = () ->
+        raylib.end_texture_mode()
+
+        let sw = raylib.screen_width()
+        let sh = raylib.screen_height()
+        let scale = math.min((f64) sw / (f64) logical_w,
+                             (f64) sh / (f64) logical_h)
+        let dw = (f32) (scale * (f64) logical_w)
+        let dh = (f32) (scale * (f64) logical_h)
+
+        raylib.begin_drawing()
+        raylib.clear_background(rgba(0u8, 0u8, 0u8, 255u8))
+        raylib.begin_blend_mode(raylib.blend_premultiplied)
+        raylib.draw_texture_pro(target.texture,
+            raylib.rect { x = 0.0f32, y = 0.0f32,
+                          width = (f32) logical_w, height = -(f32) logical_h },
+            raylib.rect { x = ((f32) sw - dw) * 0.5f32,
+                          y = ((f32) sh - dh) * 0.5f32,
+                          width = dw, height = dh },
+            raylib.vec2 { x = 0.0f32, y = 0.0f32 }, 0.0f32,
+            rgba(255u8, 255u8, 255u8, 255u8))
+        raylib.end_blend_mode()
+        raylib.end_drawing()
+
+    // ============================================================
+    // Primitives
+    // ============================================================
+
+    private let rgba = (cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.color { r = cr, g = cg, b = cb, a = ca }
+
+    let fill = (x: i32, y: i32, w: i32, h: i32,
+                cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.fill_rect(x, y, w, h, rgba(cr, cg, cb, ca))
+
+    let disc = (cx: i32, cy: i32, rad: i32,
+                cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.fill_circle(cx, cy, (f32) rad, rgba(cr, cg, cb, ca))
+
+    // raylib culls a triangle wound the wrong way, so the winding is fixed
+    // up here and callers may list the corners in any order.
+    let tri = (x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32,
+               cr: u8, cg: u8, cb: u8, ca: u8) ->
+        let a = raylib.vec2 { x = (f32) x1, y = (f32) y1 }
+        let b = raylib.vec2 { x = (f32) x2, y = (f32) y2 }
+        let c = raylib.vec2 { x = (f32) x3, y = (f32) y3 }
+        let cross = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1)
+        if cross < 0 then
+            raylib.fill_triangle(a, b, c, rgba(cr, cg, cb, ca))
+        else
+            raylib.fill_triangle(a, c, b, rgba(cr, cg, cb, ca))
+
+    let thick_line = (x1: f64, y1: f64, x2: f64, y2: f64, th: i32,
+                      cr: u8, cg: u8, cb: u8, ca: u8) ->
+        raylib.draw_line_ex(raylib.vec2 { x = (f32) x1, y = (f32) y1 },
+                            raylib.vec2 { x = (f32) x2, y = (f32) y2 },
+                            (f32) th, rgba(cr, cg, cb, ca))

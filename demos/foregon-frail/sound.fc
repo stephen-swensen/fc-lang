@@ -1,0 +1,166 @@
+// Foregon Frail — the sounds.
+//
+// The engine is demos/shared/opl_audio.fc (OPL2 voices, an effect bank, and
+// the audio callback); the chip it plays through is demos/shared/opl2.fc.
+// This file is only the effects: a handful of instruments (several of them
+// fario's, retuned) and the little scripts they play.
+//
+// The game makes three kinds of noise: the machine (the print head striking,
+// the carriage returning, keys under your fingers, the bell), the trail
+// (the rifle, trouble, a kindness), and two pieces of music that are older
+// than the journey or nearly so and long in the public domain — the opening
+// of Chopin's funeral march (1839) for a death, and the first line of
+// Stephen Foster's "Oh! Susanna" (1848) for an arrival.
+//
+// The game never names an effect directly: it attaches *cues* to the lines
+// it prints (tty.fc), and main.fc plays each cue's effect as the print head
+// reaches its line. A cue is the effect id plus one, so that 0 can mean
+// "no cue".
+
+import opl_audio from shared::
+import opl_midi from shared::
+
+module snd =
+
+    // ============================================================
+    // Instruments
+    // ============================================================
+
+    private let i_tick    = 0     // the type bars and keys: a dry strike
+    private let i_bell    = 1     // the teletype bell, and good fortune
+    private let i_crack   = 2     // the rifle: noise with a body
+    private let i_reed    = 3     // bad news, and the dirge
+    private let i_brass   = 4     // the arrival
+    private let i_blip    = 5     // alarms and small signals
+    private let i_thud    = 6     // the carriage slamming home
+
+    private let instruments = opl_audio.instrument[7] {
+        // Tick: fario's knock, shortened and brightened — the strike of a
+        // type bar on the platen. Quiet, because there are a lot of them.
+        opl_audio.instrument {
+            m_char = 0x02, m_scale = 0x14, m_atk = 0xFA, m_sus = 0x6A, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x16, c_atk = 0xFA, c_sus = 0x3A, c_wave = 0x00,
+            n_conn = 0x0C },
+        // Bell: 7:1 glitter with a long ring (fario's coin bell).
+        opl_audio.instrument {
+            m_char = 0x07, m_scale = 0x51, m_atk = 0xF3, m_sus = 0x25, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x03, c_atk = 0xF4, c_sus = 0x26, c_wave = 0x00,
+            n_conn = 0x00 },
+        // Crack: FB 7 drives the modulator to noise; a fast carrier decay
+        // leaves a report rather than a roar.
+        opl_audio.instrument {
+            m_char = 0x0F, m_scale = 0x00, m_atk = 0xF4, m_sus = 0x4B, m_wave = 0x03,
+            c_char = 0x02, c_scale = 0x00, c_atk = 0xF7, c_sus = 0x38, c_wave = 0x00,
+            n_conn = 0x0E },
+        // Reed: soft, sustaining, slow release (fario's).
+        opl_audio.instrument {
+            m_char = 0x21, m_scale = 0x1A, m_atk = 0x94, m_sus = 0x05, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x03, c_atk = 0x93, c_sus = 0x06, c_wave = 0x00,
+            n_conn = 0x06 },
+        // Brass: both operators sustaining, feedback for the edge (fario's).
+        opl_audio.instrument {
+            m_char = 0x21, m_scale = 0x0F, m_atk = 0xB4, m_sus = 0x06, m_wave = 0x00,
+            c_char = 0x21, c_scale = 0x05, c_atk = 0xA4, c_sus = 0x06, c_wave = 0x00,
+            n_conn = 0x0C },
+        // Blip: half-sine modulator, dry and fast (fario's).
+        opl_audio.instrument {
+            m_char = 0x02, m_scale = 0x0E, m_atk = 0xF7, m_sus = 0x68, m_wave = 0x01,
+            c_char = 0x01, c_scale = 0x02, c_atk = 0xF6, c_sus = 0x48, c_wave = 0x00,
+            n_conn = 0x02 },
+        // Thud: 1:1 with feedback, fast decay (fario's).
+        opl_audio.instrument {
+            m_char = 0x01, m_scale = 0x12, m_atk = 0xF8, m_sus = 0x78, m_wave = 0x00,
+            c_char = 0x01, c_scale = 0x08, c_atk = 0xF7, c_sus = 0x58, c_wave = 0x00,
+            n_conn = 0x08 }
+    }
+
+    // ============================================================
+    // Effects
+    // ============================================================
+
+    let sfx_key     = 0     // a key under your fingers
+    let sfx_strike  = 1     // the print head
+    let sfx_return  = 2     // the carriage
+    let sfx_bell    = 3
+    let sfx_shot    = 4
+    let sfx_misfire = 5
+    let sfx_hurt    = 6
+    let sfx_dirge   = 7
+    let sfx_fanfare = 8
+    let sfx_good    = 9
+    let sfx_alarm   = 10
+    let sfx_ready   = 11    // the rifle comes up
+
+    // The cues game.fc attaches to lines: effect id + 1.
+    let cue_bell    = 4
+    let cue_shot    = 5
+    let cue_misfire = 6
+    let cue_hurt    = 7
+    let cue_dirge   = 8
+    let cue_fanfare = 9
+    let cue_good    = 10
+    let cue_alarm   = 11
+    let cue_ready   = 12
+
+    // How long each cue's effect wants the machine noise kept out of the
+    // way, in seconds: the engine has six voices, and the print head would
+    // otherwise steal a sustained note's voice within a line.
+    let hush_for = (sfx: i32) ->
+        if sfx == sfx_dirge then 4.2
+        else if sfx == sfx_fanfare then 4.0
+        else if sfx == sfx_bell then 0.5
+        else if sfx == sfx_hurt then 0.6
+        else 0.0
+
+    // Effects tick at 140 Hz — the AdLib driver rate. Foster's quarter
+    // note is 72 ticks here (about 117 to the minute); Chopin's is 60, a
+    // brisk march for a funeral, but the paper has more to say.
+    private let tick_rate = 140
+
+    // (note, ticks) pairs, note -1 a rest, 48 middle C. One effect a line,
+    // in id order, so the counts in `sounds` can be checked by eye.
+    private let script = i32[102] {
+        79,1,                                                    // key        1
+        67,1,                                                    // strike     1
+        43,2, 36,3,                                              // return     2
+        88,3, -1,2, 88,14,                                       // bell       3
+        40,2, 31,8,                                              // shot       2
+        52,1, -1,2, 50,1,                                        // misfire    3
+        62,4, 55,10,                                             // hurt       2
+        45,60, 45,44, 45,16, 45,84, 48,60, 47,44, 47,16, 45,44,  // dirge     11
+        45,16, 44,44, 45,120,
+        60,18, 62,18, 64,36, 67,36, 67,54, 69,18, 67,36, 64,36,  // fanfare   16
+        60,54, 62,18, 64,36, 64,36, 62,36, 60,36, 62,36, -1,1,
+        76,3, 83,10,                                             // good       2
+        84,3, -1,3, 84,3, -1,3, 84,4,                            // alarm      5
+        55,1, -1,2, 67,2                                         // ready      3
+    }
+
+    private let sounds = opl_audio.sound[12] {
+        opl_audio.sound { instr = i_tick,  first = 0,  steps = 1 },
+        opl_audio.sound { instr = i_tick,  first = 1,  steps = 1 },
+        opl_audio.sound { instr = i_thud,  first = 2,  steps = 2 },
+        opl_audio.sound { instr = i_bell,  first = 4,  steps = 3 },
+        opl_audio.sound { instr = i_crack, first = 7,  steps = 2 },
+        opl_audio.sound { instr = i_tick,  first = 9,  steps = 3 },
+        opl_audio.sound { instr = i_reed,  first = 12, steps = 2 },
+        opl_audio.sound { instr = i_reed,  first = 14, steps = 11 },
+        opl_audio.sound { instr = i_brass, first = 25, steps = 16 },
+        opl_audio.sound { instr = i_bell,  first = 41, steps = 2 },
+        opl_audio.sound { instr = i_blip,  first = 43, steps = 5 },
+        opl_audio.sound { instr = i_tick,  first = 48, steps = 3 }
+    }
+
+    // No background music: the machine is the soundtrack. The engine still
+    // wants a player, so it gets one with nothing to play.
+    private let music_gain = 0.0
+    private let sfx_gain   = 2.00
+
+    let init = (sample_rate: i32, music: opl_midi.player*) ->
+        opl_audio.init(sample_rate,
+            opl_audio.bank {
+                instruments = instruments,
+                sounds = sounds,
+                script = script,
+                tick_rate = tick_rate },
+            music, music_gain, sfx_gain)

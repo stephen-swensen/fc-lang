@@ -1,0 +1,42 @@
+// Foregon Frail — the platform contract.
+//
+// The line between the game and the library, the same shape as fario's and
+// fuzzel-fobble's: one `struct input` per frame in the game's own
+// vocabulary, and a `module gfx` that gfx.fc defines on raylib. Nothing
+// below gfx.fc ever learns a key code or a library name.
+//
+// Unlike a platformer, this game is typed at. The input is not a pad but a
+// keyboard in the teletype sense: the characters that arrived this frame,
+// plus the three keys that edit a line — RETURN, RUBOUT (backspace), and
+// the "stop printing, I've read it" key, which is any key at all.
+
+struct input =
+    quit: bool
+
+    // Printable characters typed this frame, in order, already folded to
+    // upper case: a Model 33 teletype had no lower case, and the game's
+    // answers are compared in capitals.
+    typed: u8[16]
+    ntyped: i32
+
+    enter: bool         // RETURN
+    rubout: bool        // backspace, repeating while held
+    any_key: bool       // anything at all went down this frame
+
+// ============================================================
+// What the backend must define
+//
+// module gfx =
+//   Lifecycle:  open(lw, lh, title), close(),
+//               audio_start(a: opl_audio.audio*) -> bool
+//   Frame:      pump(inp: input*), frame_begin(r, g, b), frame_end(),
+//               now() -> f64  (seconds, monotonic)
+//   Primitives (logical coordinates, alpha blended, loose u8 channels):
+//     fill(x, y, w, h, r, g, b, a)                  filled rect
+//     disc(cx, cy, rad, r, g, b, a)                 filled circle
+//     tri(x1, y1, x2, y2, x3, y3, r, g, b, a)       filled triangle
+//     thick_line(x1, y1, x2, y2, th, r, g, b, a)    f64 endpoints
+//
+// The type is art.fc's own: a 5x7 dot font built out of `fill`, so the
+// printout looks like a printout on every platform, with no font file.
+// ============================================================

@@ -1,0 +1,948 @@
+// Foregon Frail — the rules.
+//
+// A journey of 2040 miles by ox-drawn wagon, Independence to Oregon City,
+// in two-week turns, beginning Monday, March 29, 1847.
+//
+// The *mechanics* are the 1971 classic's, as published in its 1978 BASIC
+// listing: the $700 outfit, the alternating forts, the eating choices, the
+// riders and their tactics, the table of fifteen misfortunes, the passes,
+// the illness roll, the typed gunshot timed against how good a shot you
+// claimed to be — the same numbers throughout, down to which roll picks
+// which branch. Where the listing had a slip of the pen (a calendar date one
+// day off), the calendar here is computed instead. The *words* are all this
+// game's own: every line the paper prints was written for it.
+//
+// The listing is one long GOTO program that stops at each INPUT. Here that
+// becomes a state machine: every function below prints what happens next
+// and either keeps going or asks a question and returns, leaving `phase` to
+// say which question is waiting. `answer` is the other half — the typed
+// reply arrives there and the story carries on from the matching point.
+// Nothing in this file draws, plays a sound, or reads a key; it prints to
+// the paper (tty.fc), and sound cues ride the lines it prints.
+
+import pcg_random from std::random
+import text from std::
+import math from std::
+
+// ============================================================
+// Types
+// ============================================================
+
+// Which question is on the paper.
+enum phase =
+    | instructions      // do you need them?
+    | marksman          // how good a shot are you?
+    | buy_oxen
+    | buy_food
+    | buy_ammo
+    | buy_clothing
+    | buy_supplies
+    | action            // (fort,) hunt or press on
+    | fort_food
+    | fort_ammo
+    | fort_clothing
+    | fort_supplies
+    | meal              // how well to eat
+    | tactics           // what to do about riders
+    | shot              // type the word — fast
+    | rite_words        // the three questions after a death
+    | rite_stone
+    | rite_letter
+    | over              // another journey?
+
+// What the rifle is being fired at.
+enum target =
+    | game_animal       // hunting
+    | riders_fight      // riders: attack
+    | riders_circle     // riders: circle the wagons
+    | bandits
+    | wolves
+
+enum ending =
+    | on_trail
+    | arrived
+    | died
+
+// Who is at the wagon right now, for the panorama to show.
+enum visitor =
+    | nobody
+    | riders
+    | bandits
+    | wolves
+    | traders
+    | trader            // the fort's
+
+struct trail =
+    phase: phase
+    ending: ending
+    visitor: visitor
+
+    // The shot in progress.
+    target: target
+    word: i32
+
+    // How good a shot you claimed to be: 1 (best) to 5. An answer above 5
+    // becomes 0, and one below 1 stands as typed — both, as in the
+    // listing, *worse* than claiming to be a deadeye.
+    aim: f64
+
+    // The outfit. Oxen, food, clothing and supplies are in dollars' worth;
+    // ammunition is counted in rounds; cash is dollars. All f64, because
+    // the trail takes fractions of everything.
+    oxen: f64
+    food: f64
+    ammo: f64
+    clothing: f64
+    supplies: f64
+    cash: f64
+
+    miles: f64
+    miles_before: f64   // at the start of this turn: the last leg's length
+    turn: i32           // two-week turns since March 29; 0 is setting out
+
+    fort_today: bool    // forts come every other turn
+    fort_next: bool
+    injured: bool
+    ill: bool           // a serious illness: a doctor at the next turn
+    south_pass: bool    // reached, and its snow rolled for
+    blue_mtns: bool
+    show_950: bool      // mileage display pinned at the pass (see stock_take)
+    blizzard: bool      // this turn's pass blizzard, for the illness roll
+    meal: i32           // 1 sparingly, 2 adequately, 3 heartily
+    friendly: bool      // the riders' true intent
+
+    quit: bool          // the person answered NO to another journey
+
+    rng: pcg_random
+
+module game =
+    let trail_miles = 2040.0
+    let start_day = 87          // March 29, counting January 1 as day 0
+    let last_turn = 19          // December 20; a twentieth turn is winter
+
+    // The four words the rifle answers to. The better a shot you claimed
+    // to be, the sooner after the word appears you must have typed it.
+    private let words = (const str)[4] { "BANG", "BOOM", "CRACK", "POW" }
+
+    private let months = (const str)[12] {
+        "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY",
+        "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER" }
+    private let month_days = i32[12] { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+    private let weekdays = (const str)[7] {
+        "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY" }
+
+    // ============================================================
+    // Small helpers
+    // ============================================================
+
+    private let rnd = (g: trail*) -> pcg_random.next_f64(&g.rng)
+
+    // BASIC's INT: the floor, for display and for the whole-number resets.
+    private let whole = (x: f64) -> math.floor(x)
+    private let shown = (x: f64) -> (i64) math.floor(x)
+
+    // A typed number. A leading $ is forgiven even though the instructions
+    // ask for none; anything else that is not a number is not an answer.
+    private let number = (s: const str) ->
+        let t = text.trim(s)
+        let u = if t.len > 0 && t[0] == '$' then t[1..t.len] else t
+        match text.parse_f64(u) with
+        | ok(v) -> if math.is_finite(v) then some(v) else none(f64)
+        | err(e) -> none(f64)
+
+    private let is_yes = (s: const str) ->
+        let t = text.trim(s)
+        t == "YES" || t == "Y"
+
+    private let is_no = (s: const str) ->
+        let t = text.trim(s)
+        t == "NO" || t == "N"
+
+    // Day `n` of 1847 (0 = January 1) as a month index and day of month.
+    let calendar = (n: i32) ->
+        let mut d = n
+        let mut m = 0
+        loop
+            if m >= 11 || d < month_days[m] then break
+            d = d - month_days[m]
+            m = m + 1
+        { m, d + 1 }
+
+    let month_name = (m: i32) -> months[m]
+
+    // The date of a turn's start: every turn begins on a Monday.
+    private let say_date = (p: printout*, weekday: i32, day: i32) ->
+        let { m, d } = calendar(day)
+        tty.say(p, "%.9s{weekdays[weekday]}, %.9s{months[m]} %d{d}, 1847")
+
+    private let say_stock = (g: trail*, p: printout*) ->
+        tty.say(p, "     FOOD   BULLETS  CLOTHING  SUPPLIES      CASH")
+        tty.say(p, "%9d{shown(g.food)}%10d{shown(g.ammo)}%10d{shown(g.clothing)}%10d{shown(g.supplies)}%10d{shown(g.cash)}")
+
+    // ============================================================
+    // Setting out
+    // ============================================================
+
+    let make = (seed: u64) ->
+        let g = alloc(trail { rng = pcg_random.make(seed) })!
+        g
+
+    // A fresh journey on a fresh roll of paper.
+    let begin = (g: trail*, p: printout*) ->
+        let rng = g.rng
+        *g = trail { rng = rng }
+        tty.reset(p)
+        tty.blank(p)
+        tty.cue(p, snd.cue_bell)
+        tty.say(p, "                       F O R E G O N   F R A I L")
+        tty.say(p, "              A JOURNEY BY WAGON, AFTER THE 1971 CLASSIC")
+        tty.blank(p)
+        tty.ask(p, "DO YOU NEED INSTRUCTIONS (YES/NO)")
+        g.phase = phase.instructions
+
+    private let instructions = (p: printout*) ->
+        tty.blank(p)
+        tty.say(p, "THE YEAR IS 1847. YOUR FAMILY OF FIVE IS BOUND FOR OREGON CITY BY COVERED WAGON: 2040 MILES FROM INDEPENDENCE, MISSOURI, ACROSS PRAIRIE, DESERT, RIVER AND TWO RANGES OF MOUNTAINS. WITH LUCK IT TAKES FIVE OR SIX MONTHS. WINTER WILL NOT WAIT FOR YOU.")
+        tty.blank(p)
+        tty.say(p, "YOU SAVED $900 FOR THE TRIP, AND THE WAGON COST $200 OF IT. THE REMAINING $700 OUTFITS YOU:")
+        tty.blank(p)
+        tty.say(p, "  OXEN        $200 TO $300. A BETTER TEAM MAKES BETTER TIME.")
+        tty.say(p, "  FOOD        A FULL LARDER KEEPS THE FAMILY HEALTHY.")
+        tty.say(p, "  AMMUNITION  EACH DOLLAR BUYS 50 ROUNDS: FOR HUNTING, AND FOR")
+        tty.say(p, "              ANY TROUBLE THAT FINDS YOU.")
+        tty.say(p, "  CLOTHING    THE MOUNTAINS ARE COLD, EVEN IN SUMMER.")
+        tty.say(p, "  SUPPLIES    MEDICINE, TOOLS AND SPARE PARTS: FOR SICKNESS AND")
+        tty.say(p, "              FOR REPAIRS.")
+        tty.blank(p)
+        tty.say(p, "CASH YOU HOLD BACK CAN BE SPENT AT FORTS ON THE WAY, THOUGH THE TRADERS THERE KNOW HOW FAR YOU ARE FROM ANYWHERE ELSE AND PRICE ACCORDINGLY. YOU CAN ALSO HUNT FOR FOOD.")
+        tty.blank(p)
+        tty.say(p, "WHEN YOU MUST SHOOT, A WORD WILL BE PRINTED. TYPE IT AND PRESS RETURN. THE QUICKER YOU ARE, THE BETTER YOU SHOOT.")
+        tty.blank(p)
+        tty.say(p, "SUPPLIES ARE LISTED IN DOLLARS' WORTH, EXCEPT BULLETS, WHICH ARE COUNTED. ENTER AMOUNTS AS PLAIN NUMBERS.")
+        tty.blank(p)
+        tty.say(p, "GODSPEED.")
+
+    private let ask_marksman = (g: trail*, p: printout*) ->
+        tty.blank(p)
+        tty.say(p, "HOW STEADY IS YOUR AIM?")
+        tty.say(p, "  (1) DEADEYE   (2) SURE SHOT   (3) PASSABLE")
+        tty.say(p, "  (4) RUSTY     (5) ALL THUMBS")
+        tty.say(p, "CLAIM MORE SKILL AND YOU'LL NEED A QUICKER HAND TO BACK IT UP.")
+        tty.ask(p, "WHICH")
+        g.phase = phase.marksman
+
+    private let ask_oxen = (g: trail*, p: printout*) ->
+        tty.blank(p)
+        tty.ask(p, "HOW MUCH WILL YOU SPEND ON YOUR TEAM OF OXEN")
+        g.phase = phase.buy_oxen
+
+    // After the outfit is bought: the ledger, the date, and the first turn
+    // — which, like the listing's, starts with the stock count and not a
+    // new date.
+    private let set_out = (g: trail*, p: printout*) ->
+        let left = 700.0 - g.oxen - g.food - g.ammo - g.clothing - g.supplies
+        if left < 0.0 then
+            tty.say(p, "THAT COMES TO MORE THAN $700. LET'S START THE BUYING OVER.")
+            ask_oxen(g, p)
+            return
+        g.ammo = 50.0 * g.ammo
+        g.cash = left
+        tty.say(p, "OUTFITTED, WITH $%d{shown(g.cash)} STILL IN YOUR POCKET.")
+        tty.blank(p)
+        say_date(p, 0, start_day)
+        tty.blank(p)
+        stock_take(g, p)
+
+    // ============================================================
+    // Each turn
+    // ============================================================
+
+    // A new turn begins (or the journey ends).
+    private let next_turn = (g: trail*, p: printout*) ->
+        g.visitor = visitor.nobody
+        if g.miles >= trail_miles then
+            arrive(g, p)
+            return
+        g.turn = g.turn + 1
+        tty.blank(p)
+        if g.turn > last_turn then
+            tty.say(p, "IT IS WINTER, AND YOU ARE STILL ON THE TRAIL. THE FIRST BLIZZARD OF THE SEASON CLOSES OVER THE WAGON AND DOES NOT LIFT.")
+            die(g, p)
+            return
+        say_date(p, 0, start_day + g.turn * 14)
+        tty.blank(p)
+        stock_take(g, p)
+
+    // The top of each turn: what is left, what it costs to be mended, and
+    // what to do about it.
+    private let stock_take = (g: trail*, p: printout*) ->
+        if g.food < 0.0 then g.food = 0.0
+        if g.ammo < 0.0 then g.ammo = 0.0
+        if g.clothing < 0.0 then g.clothing = 0.0
+        if g.supplies < 0.0 then g.supplies = 0.0
+        if g.food < 13.0 then
+            tty.say(p, "FOOD IS RUNNING LOW. HUNT OR BUY, AND SOON.")
+        g.food = whole(g.food)
+        g.ammo = whole(g.ammo)
+        g.clothing = whole(g.clothing)
+        g.supplies = whole(g.supplies)
+        g.cash = whole(g.cash)
+        g.miles = whole(g.miles)
+        g.miles_before = g.miles
+        if g.ill || g.injured then
+            g.cash = g.cash - 20.0
+            if g.cash < 0.0 then
+                g.cash = 0.0
+                tty.say(p, "YOU CANNOT PAY A DOCTOR.")
+                die_of_wounds(g, p)
+                return
+            tty.say(p, "THE DOCTOR'S FEE IS $20.")
+            g.ill = false
+            g.injured = false
+        // A quirk kept from the listing: a wagon knocked back below the
+        // pass by a mountain mishap reports exactly 950 for one turn.
+        if g.show_950 then
+            tty.say(p, "MILES TRAVELED: 950")
+            g.show_950 = false
+        else
+            tty.say(p, "MILES TRAVELED: %d{shown(g.miles)}")
+        say_stock(g, p)
+        g.fort_today = g.fort_next
+        g.fort_next = !g.fort_next
+        ask_action(g, p)
+
+    private let ask_action = (g: trail*, p: printout*) ->
+        if g.fort_today then
+            tty.say(p, "(1) STOP AT THE FORT AHEAD  (2) HUNT  (3) PRESS ON")
+        else
+            tty.say(p, "(1) HUNT  (2) PRESS ON")
+        tty.ask(p, "WHAT WILL YOU DO")
+        g.phase = phase.action
+
+    private let go_hunting = (g: trail*, p: printout*) ->
+        g.miles = g.miles - 45.0
+        aim_at(g, p, target.game_animal)
+
+    private let hunted = (g: trail*, p: printout*, b1: f64) ->
+        if b1 <= 1.0 then
+            tty.cue(p, snd.cue_bell)
+            tty.say(p, "ONE CLEAN SHOT, AND A FINE BIG ANIMAL DOWN.")
+            tty.say(p, "EVERYONE EATS WELL TONIGHT.")
+            g.food = g.food + 52.0 + rnd(g) * 6.0
+            g.ammo = g.ammo - 10.0 - rnd(g) * 4.0
+        else if 100.0 * rnd(g) < 13.0 * b1 then
+            tty.say(p, "MISSED. SUPPER BOLTS INTO THE BRUSH.")
+        else
+            tty.say(p, "GOOD SHOOTING. THERE IS MEAT FOR SUPPER.")
+            g.food = g.food + 48.0 - 2.0 * b1
+            g.ammo = g.ammo - 10.0 - 3.0 * b1
+        supper(g, p)
+
+    private let fort_ask = (g: trail*, p: printout*, what: const str, next: phase) ->
+        tty.ask(p, "%.10s{what}")
+        g.phase = next
+
+    // One purchase at the fort. The traders' markup is a third: two
+    // dollars in three buy goods.
+    private let fort_spend = (g: trail*, p: printout*, v: f64) ->
+        let spend = if v < 0.0 then 0.0 else v
+        if spend > g.cash then
+            tty.say(p, "YOU CAN'T COVER THAT, AND THE TRADER HAS MOVED ON TO THE NEXT CUSTOMER.")
+            return 0.0
+        g.cash = g.cash - spend
+        spend * 2.0 / 3.0
+
+    // How well the family eats this fortnight, and then the road.
+    private let supper = (g: trail*, p: printout*) ->
+        if g.food < 13.0 then
+            tty.say(p, "THE FOOD IS GONE. YOUR FAMILY STARVES ON THE TRAIL.")
+            die(g, p)
+            return
+        tty.say(p, "HOW SHALL THE FAMILY EAT?")
+        tty.say(p, "(1) SPARINGLY  (2) ADEQUATELY  (3) HEARTILY")
+        tty.ask(p, "WHICH")
+        g.phase = phase.meal
+
+    // The fortnight's travel. A better team covers more ground.
+    private let travel = (g: trail*, p: printout*) ->
+        g.miles = g.miles + 200.0 + (g.oxen - 220.0) / 5.0 + 10.0 * rnd(g)
+        g.blizzard = false
+        riders_check(g, p)
+
+    // ============================================================
+    // Riders
+    // ============================================================
+
+    // Riders are rarest around mile 400 — one fortnight in sixty — and
+    // grow likelier with distance either side of it, toward one in ten.
+    // (The listing's odds: a curve that is 6 at mile 400 and falls toward 1.)
+    private let riders_check = (g: trail*, p: printout*) ->
+        let x = g.miles / 100.0 - 4.0
+        if rnd(g) * 10.0 * ((x * x + 72.0) / (x * x + 12.0)) > 1.0 then
+            misfortune(g, p)
+            return
+        g.visitor = visitor.riders
+        let looks_hostile = rnd(g) < 0.8
+        tty.blank(p)
+        if looks_hostile then
+            tty.say(p, "RIDERS ON THE RIDGE. THEY LOOK HOSTILE.")
+        else
+            tty.say(p, "RIDERS ON THE RIDGE. THEY LOOK PEACEFUL.")
+        // Looks deceive one time in five.
+        g.friendly = if rnd(g) > 0.2 then !looks_hostile else looks_hostile
+        tty.say(p, "(1) RUN  (2) ATTACK  (3) KEEP GOING  (4) CIRCLE THE WAGONS")
+        tty.ask(p, "YOUR TACTICS")
+        g.phase = phase.tactics
+
+    private let riders_fought = (g: trail*, p: printout*, b1: f64) ->
+        if b1 <= 1.0 then
+            tty.say(p, "SHARP SHOOTING. THEY SCATTER.")
+        else if b1 <= 4.0 then
+            tty.say(p, "TOO SLOW ON THE TRIGGER.")
+        else
+            tty.cue(p, snd.cue_hurt)
+            tty.say(p, "A POOR SHOT, AND ONE OF THEM GOT IN CLOSE WITH A KNIFE. YOU'LL NEED A DOCTOR.")
+            g.injured = true
+        riders_after(g, p)
+
+    private let riders_after = (g: trail*, p: printout*) ->
+        if g.friendly then
+            tty.say(p, "THE RIDERS MEANT NO HARM. COUNT WHAT THE SCARE COST YOU ANYWAY.")
+        else
+            tty.say(p, "THE RIDERS WERE HOSTILE. COUNT YOUR LOSSES.")
+            if g.ammo < 0.0 then
+                tty.cue(p, snd.cue_hurt)
+                tty.say(p, "WITH NO AMMUNITION LEFT, YOU COULD NOT HOLD THEM OFF.")
+                die(g, p)
+                return
+        misfortune(g, p)
+
+    // ============================================================
+    // The fortnight's misfortune (or, rarely, a kindness)
+    // ============================================================
+
+    // Cumulative odds out of 100 for the first fifteen events; past the
+    // last is the sixteenth.
+    private let odds = f64[15] { 6.0, 11.0, 13.0, 15.0, 17.0, 22.0, 32.0, 35.0,
+                                 37.0, 42.0, 44.0, 54.0, 64.0, 69.0, 95.0 }
+
+    private let misfortune = (g: trail*, p: printout*) ->
+        let r = 100.0 * rnd(g)
+        let mut k = 0
+        loop
+            if k >= 15 || r <= odds[k] then break
+            k = k + 1
+        tty.blank(p)
+        match k with
+        | 0 ->
+            tty.say(p, "A WHEEL SPLITS. MENDING IT COSTS TIME AND SUPPLIES.")
+            g.miles = g.miles - 15.0 - 5.0 * rnd(g)
+            g.supplies = g.supplies - 8.0
+            mountains(g, p)
+        | 1 ->
+            tty.say(p, "AN OX GOES LAME. THE TEAM WILL BE SLOWER FROM HERE ON.")
+            g.miles = g.miles - 25.0
+            g.oxen = g.oxen - 20.0
+            mountains(g, p)
+        | 2 ->
+            tty.say(p, "YOUR DAUGHTER FALLS AND BREAKS HER ARM. YOU STOP TO SET IT AND SPLINT IT.")
+            g.miles = g.miles - 5.0 - 4.0 * rnd(g)
+            g.supplies = g.supplies - 2.0 - 3.0 * rnd(g)
+            mountains(g, p)
+        | 3 ->
+            tty.say(p, "AN OX STRAYS IN THE NIGHT, AND FINDING IT TAKES THE MORNING.")
+            g.miles = g.miles - 17.0
+            mountains(g, p)
+        | 4 ->
+            tty.say(p, "YOUR SON WANDERS OFF. HALF A DAY GOES TO THE SEARCH.")
+            g.miles = g.miles - 10.0
+            mountains(g, p)
+        | 5 ->
+            tty.say(p, "THE WATER HERE IS FOUL. YOU LOSE TIME FINDING A CLEAN SPRING.")
+            g.miles = g.miles - 10.0 * rnd(g) - 2.0
+            mountains(g, p)
+        | 6 ->
+            if g.miles > 950.0 then
+                cold_snap(g, p)
+            else
+                tty.say(p, "DAYS OF DRIVING RAIN: MUD TO THE AXLES, AND SPOILED STORES.")
+                g.food = g.food - 10.0
+                g.ammo = g.ammo - 500.0
+                g.supplies = g.supplies - 15.0
+                g.miles = g.miles - 10.0 * rnd(g) - 5.0
+                mountains(g, p)
+        | 7 ->
+            g.visitor = visitor.bandits
+            tty.cue(p, snd.cue_alarm)
+            tty.say(p, "BANDITS!")
+            aim_at(g, p, target.bandits)
+        | 8 ->
+            tty.cue(p, snd.cue_hurt)
+            tty.say(p, "FIRE IN THE WAGON! FOOD AND SUPPLIES BURN BEFORE YOU PUT IT OUT.")
+            g.food = g.food - 40.0
+            g.ammo = g.ammo - 400.0
+            g.supplies = g.supplies - rnd(g) * 8.0 - 3.0
+            g.miles = g.miles - 15.0
+            mountains(g, p)
+        | 9 ->
+            tty.say(p, "A FOG SO THICK YOU LOSE THE TRAIL, AND TIME FINDING IT.")
+            g.miles = g.miles - 10.0 - 5.0 * rnd(g)
+            mountains(g, p)
+        | 10 ->
+            tty.cue(p, snd.cue_hurt)
+            tty.say(p, "A RATTLESNAKE BITES YOU BEFORE YOU KILL IT.")
+            g.ammo = g.ammo - 10.0
+            g.supplies = g.supplies - 5.0
+            if g.supplies < 0.0 then
+                tty.say(p, "WITH NO MEDICINE, THE BITE IS FATAL.")
+                die(g, p)
+            else
+                mountains(g, p)
+        | 11 ->
+            tty.say(p, "THE WAGON SWAMPS AT A RIVER CROSSING. FOOD AND CLOTHING WASH AWAY.")
+            g.food = g.food - 30.0
+            g.clothing = g.clothing - 20.0
+            g.miles = g.miles - 20.0 - 20.0 * rnd(g)
+            mountains(g, p)
+        | 12 ->
+            g.visitor = visitor.wolves
+            tty.cue(p, snd.cue_alarm)
+            tty.say(p, "WOLVES!")
+            aim_at(g, p, target.wolves)
+        | 13 ->
+            tty.say(p, "HAIL HAMMERS THE WAGON. SUPPLIES ARE DAMAGED.")
+            g.miles = g.miles - 5.0 - rnd(g) * 10.0
+            g.ammo = g.ammo - 200.0
+            g.supplies = g.supplies - 4.0 - rnd(g) * 3.0
+            mountains(g, p)
+        | 14 ->
+            // Sickness, weighted by how the family has been eating: certain
+            // on short rations, three times in four on adequate ones, an
+            // even chance when eating heartily.
+            let sick = if g.meal == 1 then true
+                       else if g.meal == 3 then rnd(g) < 0.5
+                       else rnd(g) > 0.25
+            if sick then illness(g, p) else mountains(g, p)
+        | _ ->
+            g.visitor = visitor.traders
+            tty.cue(p, snd.cue_good)
+            tty.say(p, "A PARTY OF SHOSHONE TRADERS SHOWS YOU WHERE GAME AND ROOTS CAN BE FOUND.")
+            g.food = g.food + 14.0
+            mountains(g, p)
+
+    private let bandits_fought = (g: trail*, p: printout*, b1: f64) ->
+        g.ammo = g.ammo - 20.0 * b1
+        if g.ammo < 0.0 then
+            tty.say(p, "YOUR AMMUNITION RUNS OUT, AND THEY HELP THEMSELVES TO MOST OF YOUR CASH.")
+            g.cash = g.cash / 3.0
+            leg_wound(g, p)
+        else if b1 <= 1.0 then
+            tty.cue(p, snd.cue_good)
+            tty.say(p, "THE QUICKEST DRAW WEST OF THE MISSOURI. THEY SCATTER.")
+            mountains(g, p)
+        else
+            leg_wound(g, p)
+
+    private let leg_wound = (g: trail*, p: printout*) ->
+        tty.cue(p, snd.cue_hurt)
+        tty.say(p, "A BULLET IN THE LEG, AND THEY RUN OFF WITH ONE OF YOUR OXEN. A DOCTOR SHOULD SEE TO THAT WOUND.")
+        g.injured = true
+        g.supplies = g.supplies - 5.0
+        g.oxen = g.oxen - 20.0
+        mountains(g, p)
+
+    private let wolves_fought = (g: trail*, p: printout*, b1: f64) ->
+        if g.ammo <= 39.0 then
+            tty.cue(p, snd.cue_hurt)
+            tty.say(p, "TOO FEW BULLETS, TOO MANY WOLVES.")
+            g.injured = true
+            die_of_wounds(g, p)
+            return
+        if b1 <= 2.0 then
+            tty.say(p, "STEADY SHOOTING. THEY DIDN'T GET MUCH.")
+        else
+            tty.say(p, "SLOW SHOOTING. THEY GOT INTO THE FOOD AND THE CLOTHES.")
+        g.ammo = g.ammo - 20.0 * b1
+        g.clothing = g.clothing - b1 * 4.0
+        g.food = g.food - b1 * 8.0
+        mountains(g, p)
+
+    private let cold_snap = (g: trail*, p: printout*) ->
+        tty.say(p, "BITTER COLD.")
+        if g.clothing > 22.0 + 4.0 * rnd(g) then
+            tty.say(p, "YOU HAVE ENOUGH WARM CLOTHING TO GET THROUGH IT.")
+            mountains(g, p)
+        else
+            tty.say(p, "YOU DON'T HAVE ENOUGH WARM CLOTHING.")
+            illness(g, p)
+
+    // The illness roll. The better the family eats, the likelier a sickness
+    // is mild.
+    private let illness = (g: trail*, p: printout*) ->
+        let e = (f64) (g.meal - 1)
+        if 100.0 * rnd(g) < 10.0 + 35.0 * e then
+            tty.say(p, "A MILD FEVER. MEDICINE HELPS.")
+            g.miles = g.miles - 5.0
+            g.supplies = g.supplies - 2.0
+        else if 100.0 * rnd(g) < 100.0 - 40.0 / math.pow(4.0, e) then
+            tty.say(p, "A BAD FEVER. IT TAKES A GOOD DEAL OF MEDICINE.")
+            g.miles = g.miles - 5.0
+            g.supplies = g.supplies - 5.0
+        else
+            tty.cue(p, snd.cue_hurt)
+            tty.say(p, "SERIOUS ILLNESS. YOU MUST STOP FOR A DOCTOR.")
+            g.supplies = g.supplies - 10.0
+            g.ill = true
+        if g.supplies < 0.0 then
+            tty.say(p, "THE MEDICINE HAS RUN OUT.")
+            die_of_wounds(g, p)
+        else if g.blizzard then
+            passes_done(g, p)
+        else
+            mountains(g, p)
+
+    // ============================================================
+    // The mountains
+    // ============================================================
+
+    // Past mile 950 the country climbs. Rough going is least likely around
+    // mile 1500 (three fortnights in ten) and likelier toward either end of
+    // the mountains — two in three at South Pass.
+    private let mountains = (g: trail*, p: printout*) ->
+        if g.miles <= 950.0 then
+            next_turn(g, p)
+            return
+        let x = g.miles / 100.0 - 15.0
+        if rnd(g) * 10.0 <= 9.0 - (x * x + 72.0) / (x * x + 12.0) then
+            tty.say(p, "RUGGED MOUNTAINS.")
+            if rnd(g) <= 0.1 then
+                tty.say(p, "YOU LOSE THE TRAIL AND SPEND DAYS FINDING IT AGAIN.")
+                g.miles = g.miles - 60.0
+            else if rnd(g) <= 0.11 then
+                tty.say(p, "A HARD JOLT ON THE ROCKS DAMAGES THE WAGON.")
+                g.supplies = g.supplies - 5.0
+                g.ammo = g.ammo - 200.0
+                g.miles = g.miles - 20.0 - 30.0 * rnd(g)
+            else
+                tty.say(p, "SLOW, STEEP GOING.")
+                g.miles = g.miles - 45.0 - rnd(g) / 0.02
+        passes(g, p)
+
+    // South Pass the first time past 950; the Blue Mountains the first
+    // time past 1700. Each may be snowed in.
+    private let passes = (g: trail*, p: printout*) ->
+        if !g.south_pass then
+            g.south_pass = true
+            if rnd(g) < 0.8 then
+                blizzard(g, p)
+                return
+            tty.say(p, "SOUTH PASS IS CLEAR OF SNOW.")
+        if g.miles >= 1700.0 && !g.blue_mtns then
+            g.blue_mtns = true
+            if rnd(g) < 0.7 then
+                blizzard(g, p)
+                return
+        passes_done(g, p)
+
+    private let passes_done = (g: trail*, p: printout*) ->
+        if g.miles <= 950.0 then g.show_950 = true
+        next_turn(g, p)
+
+    private let blizzard = (g: trail*, p: printout*) ->
+        tty.cue(p, snd.cue_hurt)
+        tty.say(p, "BLIZZARD IN THE PASS. TIME AND SUPPLIES ARE LOST.")
+        g.blizzard = true
+        g.food = g.food - 25.0
+        g.supplies = g.supplies - 10.0
+        g.ammo = g.ammo - 300.0
+        g.miles = g.miles - 30.0 - 40.0 * rnd(g)
+        if g.clothing < 18.0 + 2.0 * rnd(g) then
+            illness(g, p)
+        else
+            passes_done(g, p)
+
+    // ============================================================
+    // The rifle
+    // ============================================================
+
+    private let aim_at = (g: trail*, p: printout*, t: target) ->
+        g.target = t
+        g.word = (i32) pcg_random.next_bounded_u32(&g.rng, 4u32)
+        tty.cue(p, snd.cue_ready)
+        tty.ask(p, "TYPE %.5s{words[g.word]}")
+        g.phase = phase.shot
+
+    // How the shot went, as the listing scores it: the seconds taken, less
+    // a head start for having admitted you're no deadeye. Lower is better;
+    // the wrong word is as bad as it gets.
+    private let score_shot = (g: const trail*, typed: const str, secs: f64) ->
+        let t = text.trim(typed)
+        if t != words[g.word] then 9.0
+        else
+            let b = secs - (g.aim - 1.0)
+            if b < 0.0 then 0.0 else b
+
+    // ============================================================
+    // Endings
+    // ============================================================
+
+    private let die_of_wounds = (g: trail*, p: printout*) ->
+        if g.injured then
+            tty.say(p, "YOU DIE OF YOUR INJURIES.")
+        else
+            tty.say(p, "YOU DIE OF PNEUMONIA.")
+        die(g, p)
+
+    private let die = (g: trail*, p: printout*) ->
+        g.ending = ending.died
+        g.visitor = visitor.nobody
+        tty.blank(p)
+        tty.cue(p, snd.cue_dirge)
+        tty.say(p, "WE ARE SORRY FOR YOUR LOSS. THERE ARE A FEW ARRANGEMENTS TO SEE TO.")
+        tty.blank(p)
+        tty.ask(p, "SHALL A PSALM BE READ AT THE GRAVESIDE")
+        g.phase = phase.rite_words
+
+    private let arrive = (g: trail*, p: printout*) ->
+        // Only part of the last fortnight was needed. The food that part
+        // didn't eat comes back, and the day of arrival is counted from it.
+        let frac = (trail_miles - g.miles_before) / (g.miles - g.miles_before)
+        g.food = g.food + (1.0 - frac) * (8.0 + 5.0 * (f64) g.meal)
+        let days = (i32) whole(frac * 14.0)
+        g.ending = ending.arrived
+        g.miles = trail_miles
+        tty.blank(p)
+        tty.cue(p, snd.cue_fanfare)
+        tty.say(p, "OREGON CITY AT LAST: 2040 MILES BEHIND YOU!")
+        tty.say(p, "YOUR WAGON ROLLS INTO THE WILLAMETTE VALLEY ON")
+        say_date(p, days % 7, start_day + g.turn * 14 + days)
+        tty.blank(p)
+        if g.cash < 0.0 then g.cash = 0.0
+        if g.food < 0.0 then g.food = 0.0
+        if g.ammo < 0.0 then g.ammo = 0.0
+        if g.clothing < 0.0 then g.clothing = 0.0
+        if g.supplies < 0.0 then g.supplies = 0.0
+        say_stock(g, p)
+        tty.blank(p)
+        tty.say(p, "          GOVERNOR GEORGE ABERNETHY OF THE PROVISIONAL")
+        tty.say(p, "          GOVERNMENT OF OREGON WELCOMES YOUR FAMILY, AND")
+        tty.say(p, "          WISHES YOU GOOD LAND AND A GOOD HARVEST.")
+        another(g, p)
+
+    private let another = (g: trail*, p: printout*) ->
+        tty.blank(p)
+        tty.ask(p, "ANOTHER JOURNEY (YES/NO)")
+        g.phase = phase.over
+
+    // ============================================================
+    // Answers
+    // ============================================================
+
+    // The reply to whatever question is on the paper. `secs` is how long
+    // the question had been waiting — which only the rifle cares about.
+    let answer = (g: trail*, p: printout*, ans: const str, secs: f64) ->
+        match g.phase with
+        | instructions ->
+            if !is_no(ans) then instructions(p)
+            ask_marksman(g, p)
+        | marksman ->
+            match number(ans) with
+            | some(v) ->
+                g.aim = if v > 5.0 then 0.0 else v
+                ask_oxen(g, p)
+            | none -> ask_marksman(g, p)
+        | buy_oxen ->
+            match number(ans) with
+            | some(v) ->
+                if v < 200.0 then
+                    tty.say(p, "THAT WON'T BUY A TEAM THAT CAN PULL A WAGON.")
+                    ask_oxen(g, p)
+                else if v > 300.0 then
+                    tty.say(p, "NO TEAM IN INDEPENDENCE IS WORTH MORE THAN $300.")
+                    ask_oxen(g, p)
+                else
+                    g.oxen = v
+                    tty.ask(p, "HOW MUCH ON FOOD")
+                    g.phase = phase.buy_food
+            | none -> ask_oxen(g, p)
+        | buy_food ->
+            match buy_amount(p, ans, "HOW MUCH ON FOOD") with
+            | some(v) ->
+                g.food = v
+                tty.ask(p, "HOW MUCH ON AMMUNITION")
+                g.phase = phase.buy_ammo
+            | none -> void()
+        | buy_ammo ->
+            match buy_amount(p, ans, "HOW MUCH ON AMMUNITION") with
+            | some(v) ->
+                g.ammo = v
+                tty.ask(p, "HOW MUCH ON CLOTHING")
+                g.phase = phase.buy_clothing
+            | none -> void()
+        | buy_clothing ->
+            match buy_amount(p, ans, "HOW MUCH ON CLOTHING") with
+            | some(v) ->
+                g.clothing = v
+                tty.ask(p, "HOW MUCH ON SUPPLIES")
+                g.phase = phase.buy_supplies
+            | none -> void()
+        | buy_supplies ->
+            match buy_amount(p, ans, "HOW MUCH ON SUPPLIES") with
+            | some(v) ->
+                g.supplies = v
+                set_out(g, p)
+            | none -> void()
+        | action ->
+            match number(ans) with
+            | some(v) ->
+                // With a fort ahead, anything but 1 or 2 means press on; on
+                // other turns, anything but 1 does.
+                let choice = if g.fort_today then (if v < 1.0 || v > 2.0 then 3 else (i32) whole(v))
+                             else if v == 1.0 then 2 else 3
+                if choice == 1 then
+                    g.visitor = visitor.trader
+                    tty.say(p, "THE TRADER'S PRICES ARE STEEP. WHAT WILL YOU SPEND ON")
+                    fort_ask(g, p, "FOOD", phase.fort_food)
+                else if choice == 2 then
+                    if g.ammo > 39.0 then go_hunting(g, p)
+                    else
+                        tty.say(p, "NOT ENOUGH AMMUNITION TO GO HUNTING.")
+                        ask_action(g, p)
+                else supper(g, p)
+            | none -> ask_action(g, p)
+        | fort_food ->
+            match number(ans) with
+            | some(v) ->
+                g.food = g.food + fort_spend(g, p, v)
+                fort_ask(g, p, "AMMUNITION", phase.fort_ammo)
+            | none -> fort_ask(g, p, "FOOD", phase.fort_food)
+        | fort_ammo ->
+            match number(ans) with
+            | some(v) ->
+                g.ammo = whole(g.ammo + fort_spend(g, p, v) * 50.0)
+                fort_ask(g, p, "CLOTHING", phase.fort_clothing)
+            | none -> fort_ask(g, p, "AMMUNITION", phase.fort_ammo)
+        | fort_clothing ->
+            match number(ans) with
+            | some(v) ->
+                g.clothing = g.clothing + fort_spend(g, p, v)
+                fort_ask(g, p, "SUPPLIES", phase.fort_supplies)
+            | none -> fort_ask(g, p, "CLOTHING", phase.fort_clothing)
+        | fort_supplies ->
+            match number(ans) with
+            | some(v) ->
+                g.supplies = g.supplies + fort_spend(g, p, v)
+                // The stop itself costs a few days' travel.
+                g.miles = g.miles - 45.0
+                g.visitor = visitor.nobody
+                supper(g, p)
+            | none -> fort_ask(g, p, "SUPPLIES", phase.fort_supplies)
+        | meal ->
+            match number(ans) with
+            | some(v) ->
+                if v < 1.0 || v > 3.0 then supper(g, p)
+                else
+                    let e = (i32) whole(v)
+                    let cost = 8.0 + 5.0 * (f64) e
+                    if g.food - cost < 0.0 then
+                        tty.say(p, "THERE ISN'T FOOD ENOUGH FOR THAT.")
+                        supper(g, p)
+                    else
+                        g.meal = e
+                        g.food = g.food - cost
+                        travel(g, p)
+            | none -> supper(g, p)
+        | tactics ->
+            match number(ans) with
+            | some(v) ->
+                if v < 1.0 || v > 4.0 then
+                    tty.ask(p, "YOUR TACTICS")
+                else
+                    tactic(g, p, (i32) whole(v))
+            | none -> tty.ask(p, "YOUR TACTICS")
+        | shot ->
+            let b1 = score_shot(g, ans, secs)
+            tty.cue(p, if b1 >= 9.0 then snd.cue_misfire else snd.cue_shot)
+            if b1 >= 9.0 then
+                tty.say(p, "THE WRONG WORD. THE SHOT GOES WILD.")
+            else
+                tty.say(p, "(%.1f{secs} SECONDS)")
+            match g.target with
+            | game_animal -> hunted(g, p, b1)
+            | riders_fight ->
+                g.ammo = g.ammo - b1 * 40.0 - 80.0
+                riders_fought(g, p, b1)
+            | riders_circle ->
+                g.ammo = g.ammo - b1 * 30.0 - 80.0
+                g.miles = g.miles - 25.0
+                riders_fought(g, p, b1)
+            | bandits -> bandits_fought(g, p, b1)
+            | wolves -> wolves_fought(g, p, b1)
+        | rite_words ->
+            tty.ask(p, "SHALL WE CARVE A HEADSTONE")
+            g.phase = phase.rite_stone
+        | rite_stone ->
+            tty.ask(p, "SHALL WE WRITE TO YOUR FAMILY BACK EAST")
+            g.phase = phase.rite_letter
+        | rite_letter ->
+            if is_yes(ans) then
+                tty.say(p, "THE OVERLAND MAIL CHARGES 25 CENTS FOR THE LETTER.")
+            else
+                tty.say(p, "THEN YOUR UNCLE AMOS IN ST. JOSEPH WILL GO ON WATCHING THE ROAD FOR YOU.")
+            tty.blank(p)
+            tty.say(p, "WE REGRET THAT YOU DID NOT REACH THE OREGON COUNTRY.")
+            tty.say(p, "MAY THE NEXT PARTY FARE BETTER.")
+            tty.blank(p)
+            tty.say(p, "                        RESPECTFULLY,")
+            tty.say(p, "                    THE OREGON CITY EMIGRANT AID SOCIETY")
+            another(g, p)
+        | over ->
+            if is_yes(ans) then begin(g, p)
+            else if is_no(ans) then g.quit = true
+            else tty.ask(p, "ANOTHER JOURNEY (YES/NO)")
+
+    // A purchase amount, or none after re-asking the question.
+    private let buy_amount = (p: printout*, ans: const str, q: const str) ->
+        match number(ans) with
+        | some(v) ->
+            if v < 0.0 then
+                tty.say(p, "YOU CAN'T SPEND LESS THAN NOTHING.")
+                tty.ask(p, q)
+                none(f64)
+            else some(v)
+        | none ->
+            tty.ask(p, q)
+            none(f64)
+
+    private let tactic = (g: trail*, p: printout*, t: i32) ->
+        if g.friendly then
+            // Whatever you do, peaceful riders cost only the fuss.
+            if t == 1 then
+                g.miles = g.miles + 15.0
+                g.oxen = g.oxen - 10.0
+            else if t == 2 then
+                g.miles = g.miles - 5.0
+                g.ammo = g.ammo - 100.0
+            else if t == 4 then
+                g.miles = g.miles - 20.0
+            riders_after(g, p)
+        else if t == 1 then
+            // Outrunning them wears out the team and scatters the load.
+            g.miles = g.miles + 20.0
+            g.supplies = g.supplies - 15.0
+            g.ammo = g.ammo - 150.0
+            g.oxen = g.oxen - 40.0
+            riders_after(g, p)
+        else if t == 2 then
+            aim_at(g, p, target.riders_fight)
+        else if t == 3 then
+            if rnd(g) > 0.8 then
+                tty.say(p, "THEY RIDE ON BY.")
+                g.visitor = visitor.nobody
+                misfortune(g, p)
+            else
+                g.ammo = g.ammo - 150.0
+                g.supplies = g.supplies - 15.0
+                riders_after(g, p)
+        else
+            aim_at(g, p, target.riders_circle)

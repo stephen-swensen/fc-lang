@@ -106,6 +106,8 @@ module raylib from "raylib.h" =
     extern KEY_SPACE as key_space: i32
     extern KEY_ENTER as key_enter: i32
     extern KEY_TAB as key_tab: i32
+    extern KEY_BACKSPACE as key_backspace: i32
+    extern KEY_KP_ENTER as key_kp_enter: i32
     extern KEY_LEFT_SHIFT as key_lshift: i32
     extern KEY_LEFT_CONTROL as key_lctrl: i32
     extern KEY_LEFT_ALT as key_lalt: i32
@@ -215,6 +217,11 @@ module raylib from "raylib.h" =
     extern IsKeyDown as is_key_down: (i32) -> bool
     extern IsKeyPressed as is_key_pressed: (i32) -> bool
     extern IsKeyReleased as is_key_released: (i32) -> bool
+    // Fires again on the OS key-repeat while held — a text field's backspace.
+    extern IsKeyPressedRepeat as is_key_repeat: (i32) -> bool
+    // Typed text, as opposed to keys: the next Unicode codepoint from this
+    // frame's queue, 0 when it is empty. Call it in a loop to drain it.
+    extern GetCharPressed as char_pressed: () -> i32
     extern SetExitKey as set_exit_key: (i32) -> void
 
     // --- Audio ---
