@@ -123,7 +123,7 @@ module point =
 
     // A module-level `let` is a module *constant*: frozen contents, everywhere,
     // and placed in read-only memory.  `zero.x = 3` and `steps[0] = 9` are
-    // compile errors from any module, as is `geom.zero = other`.  Reads that
+    // compile errors from any module, as is `point.zero = other`.  Reads that
     // yield a reference carry the freeze — `steps` has type `const i32[]` — so
     // it only passes to a `const i32[]` parameter.  A writable global says
     // `let mut`; the freeze stops at an address the constant merely holds, so
@@ -834,7 +834,7 @@ let main = (args: str[]) ->
     assert(*cptr == 7)
     // *cptr = 0                // would be a compile error — write through const
 
-    // Pointer to struct — field access with ->
+    // Pointer to struct — field access with . (auto-derefs)
     let mut pt = point { x = 1, y = 2 }
     let pp = &pt
     assert(pp.x == 1)
