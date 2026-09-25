@@ -1,0 +1,22 @@
+// An inline array field's view points into the struct's own storage: static
+// for a global, the pointee's for a path through a pointer. Only a local's
+// (or a by-value parameter's) is stack (fixed_array_escape_err).
+struct holder =
+    data: i32[4]
+
+let mut g = holder { data = i32[4] { 1, 2, 3, 4 } }
+
+let global_view = () -> g.data
+let param_view = (h: holder*) -> h.data
+let deref_view = (h: holder*) -> (*h).data
+let elem_ref = (h: holder*) -> &h.data[2]
+
+let main = (args: str[]) ->
+    assert(global_view()[3] == 4)
+    let h = alloc(holder { })!
+    defer free(h)
+    param_view(h)[0] = 8
+    deref_view(h)[1] = 7
+    *elem_ref(h) = 9
+    assert(h.data[0] == 8 && h.data[1] == 7 && h.data[2] == 9)
+    0

@@ -1,0 +1,20 @@
+// The address of a field reached through a pointer parameter points into the
+// parameter's pointee — unknown provenance — so it may be returned, just as
+// the pointer itself may (return_param_ptr).
+struct pt =
+    x: i32
+    y: i32
+
+let x_of = (p: pt*) -> &p.x
+let pick = (p: pt*, k: i32) -> if k == 1 then &p.x else &p.y
+
+let main = (args: str[]) ->
+    let h = alloc(pt { x = 1, y = 2 })!
+    defer free(h)
+    *x_of(h) = 10
+    *pick(h, 2) = 20
+    assert(h.x == 10 && h.y == 20)
+    let mut local = pt { x = 3, y = 4 }
+    *x_of(&local) = 30
+    assert(local.x == 30)
+    0

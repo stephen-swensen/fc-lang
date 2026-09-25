@@ -1,0 +1,13 @@
+// A field of a global lives in static storage: its address may be returned.
+struct pt =
+    x: i32
+    y: i32
+
+let mut origin = pt { x = 5, y = 6 }
+
+let y_ref = () -> &origin.y
+
+let main = (args: str[]) ->
+    *y_ref() = 9
+    assert(origin.y == 9)
+    0

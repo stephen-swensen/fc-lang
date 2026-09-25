@@ -1,0 +1,11 @@
+// Error: an element of a global tuple is static storage — a stack address
+// stored there dangles once the frame is gone.
+let mut slots = { default(i32*), default(i32*) }
+
+let stash = () ->
+    let mut x = 5
+    slots[0] = &x
+
+let main = (args: str[]) ->
+    stash()
+    0

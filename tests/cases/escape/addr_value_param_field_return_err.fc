@@ -1,0 +1,11 @@
+// Error: a struct passed by value is a copy in the callee's frame, so the
+// address of its field dangles once the callee returns.
+struct pt =
+    x: i32
+    y: i32
+
+let bad = (p: pt) -> &p.x
+
+let main = (args: str[]) ->
+    let _q = bad(pt { x = 1, y = 2 })
+    0

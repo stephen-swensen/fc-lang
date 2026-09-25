@@ -1,0 +1,20 @@
+// An inline array reached through an explicit dereference lives in the
+// pointee, which has storage of its own: `(*p).data` is not a temporary
+// (contrast fixed_array_rvalue_err).
+struct holder =
+    data: i32[4]
+
+let fill = (p: holder*) ->
+    (*p).data[1] = 5
+    (*p).data
+
+let main = (args: str[]) ->
+    let h = alloc(holder { })!
+    defer free(h)
+    let v = fill(h)
+    assert(v[1] == 5 && h.data[1] == 5)
+    let mut local = holder { }
+    let lp = &local
+    (*lp).data[3] = 6
+    assert(local.data[3] == 6)
+    0

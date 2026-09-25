@@ -1,0 +1,19 @@
+// Through an explicit dereference and nested value fields, the address still
+// points into the pointee.
+struct inner =
+    v: i32
+
+struct outer =
+    a: inner
+    b: inner
+
+let bv = (p: outer*) -> &(*p).b.v
+let av = (p: outer*) -> &p.a.v
+
+let main = (args: str[]) ->
+    let h = alloc(outer { })!
+    defer free(h)
+    *bv(h) = 12
+    *av(h) = 11
+    assert(h.b.v == 12 && h.a.v == 11)
+    0

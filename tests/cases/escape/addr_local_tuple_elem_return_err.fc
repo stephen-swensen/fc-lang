@@ -1,0 +1,8 @@
+// Error: an element of a local tuple lives in the frame.
+let bad = () ->
+    let t = { 1, 2 }
+    &t[1]
+
+let main = (args: str[]) ->
+    let _q = bad()
+    0

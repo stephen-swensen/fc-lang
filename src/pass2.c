@@ -3410,20 +3410,22 @@ static bool is_write_through_const(Expr *target) {
            is_write_through_const_type(target);
 }
 
-/* Provenance of the storage that a write to this lvalue lands in. Walks the
- * lvalue path (field / index / deref / deref-field) down to the root so the
- * escape check can ask one question of any target shape — "does this store
- * reach memory that outlives the stack frame?" — instead of pattern-matching a
- * single shape. Reads the propagated `prov` already computed on each sub-expr:
- *   *p          -> where p points       (p's prov)
+/* Provenance of the storage an lvalue names: where a write to it lands, and
+ * equally where its address points (`&lv`). Walks the lvalue path (field /
+ * index / deref / deref-field) down to the root so the escape check can ask
+ * one question of any target shape — "does this storage outlive the stack
+ * frame?" — instead of pattern-matching a single shape. Reads the propagated
+ * `prov` already computed on each sub-expr:
+ *   *p          -> where p points        (p's prov)
  *   p->field    -> the struct p points at (p's prov)
- *   obj.field   -> obj's own storage     (recurse)
- *   obj[i]      -> the buffer obj views  (obj's prov: slice/pointer pointee)
+ *   obj.field   -> obj's own storage      (recurse)
+ *   obj[i]      -> for a slice or pointer, the buffer it views (obj's prov);
+ *                  for a tuple held by value, obj's own storage (recurse)
  *   ident       -> stack for a local, static for a global
  * A loaded-through-unknown pointer (e.g. **pp, or *param) yields PROV_UNKNOWN,
- * which the caller treats leniently — the same out-param latitude the analysis
- * already grants writes through unknown-provenance pointers. */
-static Provenance assign_dest_prov(Expr *target) {
+ * which the callers treat leniently — the intraprocedural latitude the
+ * analysis grants every unknown-provenance pointer. */
+static Provenance lvalue_storage_prov(Expr *target) {
     if (!target) return PROV_UNKNOWN;
     switch (target->kind) {
     case EXPR_IDENT:
@@ -3435,9 +3437,19 @@ static Provenance assign_dest_prov(Expr *target) {
     case EXPR_DEREF_FIELD:
         return target->field.object->prov;
     case EXPR_FIELD:
-        return assign_dest_prov(target->field.object);
-    case EXPR_INDEX:
+        return lvalue_storage_prov(target->field.object);
+    case EXPR_INDEX: {
+        /* Indexing a slice or pointer reaches the buffer it views. A tuple is
+         * indexed like a struct is fielded: the element lives inside the
+         * tuple's own storage, whose provenance its value does not carry (a
+         * local tuple's `prov` is UNKNOWN, not STACK). */
+        Type *ot = target->index.object->type;
+        if (ot && ot->kind == TYPE_STRUCT)
+            return lvalue_storage_prov(target->index.object);
         return target->index.object->prov;
+    }
+    case EXPR_GUARD:
+        return lvalue_storage_prov(target->guard.body);
     default:
         return PROV_UNKNOWN;
     }
@@ -4116,6 +4128,8 @@ static bool is_lvalue_expr(Expr *e) {
     case EXPR_IDENT:       return true;   /* named binding */
     case EXPR_FIELD:       return is_lvalue_expr(e->field.object);   /* chain: s.inner.data */
     case EXPR_DEREF_FIELD: return true;   /* p->field: pointee has own lifetime */
+    case EXPR_UNARY_PREFIX:               /* *p: likewise, the pointee */
+        return e->unary_prefix.op == TOK_STAR;
     case EXPR_INDEX:       return true;   /* arr[i] is an lvalue */
     case EXPR_GUARD:       return is_lvalue_expr(e->guard.body);  /* unguarded s[i] = v */
     default:               return false;  /* function calls, literals, etc. */
@@ -5484,8 +5498,13 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
              *   - content address through a const path (cp.field)   -> const F*
              *   - function binding (&f): its own C-fn-pointer rule (below)
              *
-             * Globals and module members live in static storage (PROV_STATIC);
-             * locals and content addresses are PROV_STACK. */
+             * A whole binding's address is PROV_STATIC for a global or module
+             * member and PROV_STACK for a local. A content address (&p.field,
+             * &s[i], &(*p).f) points into whatever storage its lvalue path is
+             * rooted in — the pointee of a pointer, the buffer of a slice, or
+             * the binding itself — so it takes that storage's provenance
+             * (lvalue_storage_prov): returnable through a pointer parameter
+             * or into heap/static memory, rejected when rooted on the stack. */
             Expr *operand = e->unary_prefix.operand;
             /* Cannot take address of inline array field — use .ptr instead */
             if ((operand->kind == EXPR_FIELD || operand->kind == EXPR_DEREF_FIELD) &&
@@ -5573,7 +5592,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 Type *pt = type_pointer(ctx->arena, ot);
                 if (make_const) pt = type_make_const(ctx->arena, pt);
                 e->type = pt;
-                e->prov = (is_binding && binding_static) ? PROV_STATIC : PROV_STACK;
+                if (is_binding)
+                    e->prov = binding_static ? PROV_STATIC : PROV_STACK;
+                else if (is_lvalue_expr(operand))
+                    e->prov = lvalue_storage_prov(operand);
+                else
+                    e->prov = PROV_STACK;   /* a temporary's address */
             }
         } else if (op == TOK_STAR) {
             /* Dereference: operand must be pointer */
@@ -6899,13 +6923,15 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                  * destination storage outlives the frame (heap or static). A
                  * direct local ident is exempt — its own storage is the frame,
                  * and the taint below tracks the binding instead. */
-                Provenance dest = assign_dest_prov(target);
+                Provenance dest = lvalue_storage_prov(target);
                 if (dest == PROV_HEAP || dest == PROV_STATIC) {
                     bool is_field = (target->kind == EXPR_DEREF_FIELD ||
                                      target->kind == EXPR_FIELD);
                     diag_error(e->loc,
-                        "cannot store stack-allocated %s in heap-allocated %s",
-                        type_name(vt), is_field ? "struct field" : "memory");
+                        "cannot store stack-allocated %s in %s %s",
+                        type_name(vt),
+                        dest == PROV_HEAP ? "heap-allocated" : "static",
+                        is_field ? "struct field" : "memory");
                 }
             }
         }
@@ -7914,10 +7940,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     }
                     e->field.fixed_array_type = ft;
                     e->type = type_slice(ctx->arena, ft->fixed_array.elem);
-                    /* Slice view of fixed-array on stack struct → PROV_STACK */
-                    e->prov = e->field.object->prov;
-                    if (e->prov == PROV_UNKNOWN)
-                        e->prov = PROV_STACK;
+                    /* The view points into the struct's own storage: stack
+                     * for a local (or by-value parameter), static for a
+                     * global, the pointee's for a path through a pointer. */
+                    e->prov = lvalue_storage_prov(e->field.object);
                     e->elem_prov = e->field.object->elem_prov;
                 } else {
                     e->type = ft;

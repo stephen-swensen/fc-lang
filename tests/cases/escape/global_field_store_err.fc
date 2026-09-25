@@ -1,0 +1,13 @@
+// Error: a field of a global struct is static storage, not a frame-local one.
+struct link =
+    target: i32*
+
+let mut g = link { target = default(i32*) }
+
+let stash = () ->
+    let mut x = 5
+    g.target = &x
+
+let main = (args: str[]) ->
+    stash()
+    0

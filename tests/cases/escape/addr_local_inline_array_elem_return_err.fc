@@ -1,0 +1,11 @@
+// Error: an element of a local struct's inline array lives in the frame.
+struct holder =
+    data: i32[4]
+
+let bad = () ->
+    let h = holder { }
+    &h.data[1]
+
+let main = (args: str[]) ->
+    let _q = bad()
+    0

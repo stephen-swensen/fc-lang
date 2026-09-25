@@ -1,0 +1,22 @@
+// Storing a field address reached through a pointer parameter into heap
+// memory is not rejected: the parameter's pointee has unknown provenance
+// (the intraprocedural limitation, as for the pointer itself).
+struct pt =
+    x: i32
+    y: i32
+
+struct link =
+    target: i32*
+
+let aim = (l: link*, p: pt*) ->
+    l.target = &p.y
+
+let main = (args: str[]) ->
+    let h = alloc(pt { x = 1, y = 2 })!
+    defer free(h)
+    let l = alloc(link { target = default(i32*) })!
+    defer free(l)
+    aim(l, h)
+    *l.target = 40
+    assert(h.y == 40)
+    0

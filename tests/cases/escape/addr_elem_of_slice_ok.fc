@@ -1,0 +1,16 @@
+// An element's address points into the buffer its slice views: a slice
+// parameter's buffer (unknown) or a heap buffer may be returned.
+let second = (s: i32[]) -> &s[1]
+
+let heap_second = () ->
+    let s = alloc(i32[3] { 1, 2, 3 })!
+    &s[1]
+
+let main = (args: str[]) ->
+    let s = alloc(i32[3] { 1, 2, 3 })!
+    defer free(s)
+    *second(s) = 7
+    assert(s[1] == 7)
+    let p = heap_second()
+    assert(*p == 2)
+    0

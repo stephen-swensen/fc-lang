@@ -3547,7 +3547,7 @@ Because `.len` is stored narrower than its `i64` type under a narrow representat
 
 Where the generated C must narrow an `i64` length or size to a platform-width type (`size_t` for `malloc`/`memcpy`/etc., `int` for `printf` widths), the emitter routes the cast through `fc_to_size` / `fc_to_int` helpers rather than a plain C cast. The helpers assert that the value fits in the target type before narrowing. On 64-bit hosts the assert is trivially true and compiles to a no-op; on 32-bit and smaller hosts it catches the case where user-derived length math exceeds `SIZE_MAX` or `INT_MAX` before silent truncation corrupts memory. Under `-DNDEBUG` the assertions are elided and the helpers reduce to plain casts. The construction-site capacity guards above are different: they are semantics-bearing (like bounds checks) and are never elided.
 
-Sub-slices share memory with the original — no allocation occurs. A sub-slice's `.ptr` is an interior pointer into the same backing allocation — freeing a sub-slice is undefined behavior. All range forms are bounds-checked. `s[..j]` is sugar for `s[0..j]` and `s[i..]` is sugar for `s[i..s.len]`.
+Sub-slices share memory with the original — no allocation occurs. A sub-slice's `.ptr` is an interior pointer into the same backing allocation — freeing a sub-slice is undefined behavior, as is freeing the address of an element or field (`free(&s[1])`, `free(&h.y)`). All range forms are bounds-checked. `s[..j]` is sugar for `s[0..j]` and `s[i..]` is sugar for `s[i..s.len]`.
 
 ### Strings are byte strings
 
@@ -5141,6 +5141,8 @@ ptrs[0]                             // compile error: this element is stack memo
 ```
 
 Element provenance rides through subslices, struct and tuple fields, `alloc`'s deep copy, and the element binding of a `for` loop. It is merged monotonically like every other tag, so a container that has held a stack value at any point holds one for every read of it — seeding a container with stack data and later overwriting it with heap data leaves the container tainted.
+
+An **address** takes the provenance of the storage it names. `&x` of a whole binding is stack for a local and static for a global or module member. A content address — `&p.field`, `&s[i]`, `&t[0]`, `&(*p).a.b` — points into whatever storage its path is rooted in, judged the same way as a store's destination: through a pointer it is the pointee's provenance, through a slice the provenance of the buffer the slice views, and through a struct or tuple held by value the provenance of that value's own storage. So `&p.x` for a pointer parameter `p` has unknown provenance and may be returned, exactly as `p` may; `&h.x` for a heap `h` is heap; `&g.x` for a global `g` is static; and `&local.x`, `&t[1]` of a local tuple, or `&v.x` of a struct parameter passed by value (a copy in the callee's frame) is stack, and is rejected wherever a stack address is. An inline array field's view (`s.data`) follows the same rule. A content address is an interior pointer: freeing one is undefined behavior, as it is for a sub-slice.
 
 Provenance propagates through let bindings, if/match/loop results, blocks, option wrapping (`some`/unwrap), pointer arithmetic, pointer casts, subslices, `.ptr` on slices, and implicit widening conversions. It also propagates into every name a **binding construct** introduces from the value that construct takes apart — a match-arm binding from its subject, a `let` destructure from the value destructured, a `for`-loop element from the collection iterated. A binding form never launders a stack tag:
 

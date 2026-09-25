@@ -1,0 +1,12 @@
+// Error: a field of a local struct lives in the frame; its address can't be returned.
+struct pt =
+    x: i32
+    y: i32
+
+let bad = () ->
+    let p = pt { x = 1, y = 2 }
+    &p.x
+
+let main = (args: str[]) ->
+    let _q = bad()
+    0

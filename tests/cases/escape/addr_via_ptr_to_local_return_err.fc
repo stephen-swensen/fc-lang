@@ -1,0 +1,14 @@
+// Error: reaching a local's field through a pointer to it doesn't launder
+// the stack: the pointer's own provenance is stack.
+struct pt =
+    x: i32
+    y: i32
+
+let bad = () ->
+    let mut p = pt { x = 1, y = 2 }
+    let pp = &p
+    &pp.y
+
+let main = (args: str[]) ->
+    let _q = bad()
+    0

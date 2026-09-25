@@ -1,0 +1,14 @@
+// Error: a local's field address stored into heap memory outlives the frame.
+struct pt =
+    x: i32
+    y: i32
+
+struct link =
+    target: i32*
+
+let main = (args: str[]) ->
+    let l = alloc(link { target = default(i32*) })!
+    let mut p = pt { x = 1, y = 2 }
+    l.target = &p.y
+    free(l)
+    0

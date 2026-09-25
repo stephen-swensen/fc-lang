@@ -460,26 +460,25 @@ module game =
 
     private let part_names = (const str)[4] { "", "wheel", "axle", "tongue" }
 
-    // The spares on hand for a part (1 wheel, 2 axle, 3 tongue).
-    private let spares_of = (w: const world*, part: i32) ->
-        if part == 1 then w.wheels else if part == 2 then w.axles else w.tongues
-
-    private let use_spare = (w: world*, part: i32) ->
-        if part == 1 then w.wheels = w.wheels - 1
-        else if part == 2 then w.axles = w.axles - 1
-        else w.tongues = w.tongues - 1
+    // The spares on hand for a part (1 wheel, 2 axle, 3 tongue): the
+    // wagon's own counter, to read or spend.
+    private let spares_of = (w: world*, part: i32) ->
+        if part == 1 then &w.wheels else if part == 2 then &w.axles else &w.tongues
 
     // A limping wagon is mended the moment a spare of the right kind is on
     // hand, whether bought, traded for, or found.
     private let mend_if_spare = (w: world*) ->
-        if w.broken != 0 && spares_of(w, w.broken) > 0 then
-            use_spare(w, w.broken)
+        if w.broken == 0 then return
+        let spare = spares_of(w, w.broken)
+        if *spare > 0 then
+            *spare = *spare - 1
             w.broken = 0
             say(w, "You fit the new part. The wagon is whole again.")
 
     private let breakdown = (w: world*, part: i32) ->
-        if spares_of(w, part) > 0 then
-            use_spare(w, part)
+        let spare = spares_of(w, part)
+        if *spare > 0 then
+            *spare = *spare - 1
             say(w, "A wagon %.6s{part_names[part]} breaks. You replace it with a spare.")
         else
             let skill = if w.profession == 1 then 0.7 else 0.35

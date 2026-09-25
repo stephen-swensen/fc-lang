@@ -1,0 +1,14 @@
+// A field of a heap struct lives on the heap: its address outlives the frame
+// and may be returned.
+struct pt =
+    x: i32
+    y: i32
+
+let make = () ->
+    let h = alloc(pt { x = 3, y = 4 })!
+    &h.y
+
+let main = (args: str[]) ->
+    let py = make()
+    assert(*py == 4)
+    0
