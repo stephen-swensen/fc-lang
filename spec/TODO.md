@@ -705,6 +705,39 @@ pair under Const.
 
 ---
 
+## Direct hardware access — `volatile`, inline asm, packed layouts
+
+FC's model of the machine is otherwise explicit (exact-width ints, defined two's-complement
+wrap, `sizeof`/`alignof`, `bitcast`, unchecked pointer arithmetic, acquire/release atomics),
+but the three tools for touching hardware *directly* are reachable only through C interop
+today. For the retro/embedded niche (`spec/niche.md`) — MMIO registers, framebuffers,
+interrupt handlers, port I/O — these are the first gaps a driver-level program hits. All
+three are open design questions; lay out the C/Rust/Zig precedents before deciding.
+
+- **`volatile`** — no FC spelling exists. Today MMIO goes through an `extern` C helper or a
+  C-side `volatile` declaration, and a plain FC load/store through a held address may be
+  merged, hoisted, or elided by the C optimizer. Questions: type qualifier (C/Zig
+  `volatile T*`, composing with the existing `const` pointer machinery and its
+  `type_ident_eq` typedef-naming rules) vs. access intrinsics (Rust
+  `read_volatile`/`write_volatile` — no new type axis, every access spelled at the use site);
+  interaction with the module-constant freeze (which already stops at a held address) and
+  with escape analysis/provenance.
+- **Inline assembly** — none. Needed for port I/O (`in`/`out`), `cli`/`sti`, CPU-specific
+  instructions, and ISR prologues. Questions: GCC extended-asm passthrough (operands,
+  clobbers — ties FC to the gcc/clang dialect, which djgpp shares) vs. a narrower intrinsic
+  set; how operands name FC bindings given `_l_<name>_<id>` local mangling; whether it can
+  appear in `unguarded`-style lexical form only; portability across the C toolchains FC
+  targets (`spec/niche.md` dialect audit).
+- **Packed layouts / bit fields** — FC has no native `packed struct` and no bit fields; both
+  work only by declaring the type in a C header and mirroring it as an `extern struct`
+  (spec §Packed extern structs). Questions: a native `packed` modifier (the `&field`
+  restriction would move from the C compiler's `-Waddress-of-packed-member` to FC), native
+  bit-field declarations vs. leaving register fields to shift/mask code (the enum notes
+  above already route bit-precise register fields here, not to enums), and whether FC should
+  state struct field order/padding normatively rather than inheriting it from C.
+
+---
+
 ## Editor / LSP server (`fcc --lsp`)
 
 Architecture lives in `CLAUDE.md` → "Editor integration"; this section is the
