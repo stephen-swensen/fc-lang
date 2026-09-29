@@ -952,14 +952,7 @@ static Symbol *import_scope_lookup_until(ImportScope *scope, const char *name,
         if (s->table) {
             for (int i = s->table->count - 1; i >= 0; i--) {
                 ImportRef *ref = &s->table->entries[i];
-                if (ref->local_name == name) {
-                    /* Module imports need namespace-aware lookup to avoid
-                     * finding the wrong module when two namespaces define
-                     * modules with the same source name. */
-                    if (ref->kind == DECL_MODULE)
-                        return symtab_lookup_module(ref->source_members, ref->source_name, ref->ns_prefix);
-                    return symtab_lookup(ref->source_members, ref->source_name);
-                }
+                if (ref->local_name == name) return ref->sym;
             }
         }
     }
@@ -972,15 +965,7 @@ static Symbol *import_scope_lookup_kind_until(ImportScope *scope, const char *na
         if (s->table) {
             for (int i = s->table->count - 1; i >= 0; i--) {
                 ImportRef *ref = &s->table->entries[i];
-                if (ref->local_name == name && ref->kind == kind) {
-                    if (kind == DECL_MODULE)
-                        return symtab_lookup_module(ref->source_members, ref->source_name, ref->ns_prefix);
-                    /* Namespace-aware: a struct/union imported by alias must
-                     * resolve to the type in its source namespace, not the
-                     * first same-named type in compilation order. ref->ns_prefix
-                     * is the imported symbol's namespace. */
-                    return symtab_lookup_kind_ns(ref->source_members, ref->source_name, kind, ref->ns_prefix);
-                }
+                if (ref->local_name == name && ref->kind == kind) return ref->sym;
             }
         }
     }

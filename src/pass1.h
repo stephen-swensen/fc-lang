@@ -33,18 +33,14 @@ struct SymbolTable {
 };
 
 /* Import reference: transparent alias pointing to a source module's member */
+/* One name an import brings into scope: the name as written there (an `as`
+ * alias, or the source name) and the symbol it resolved to. The symbol is held
+ * directly, resolved once where the import is processed; every symbol exists
+ * by then, so the pointer stays valid. */
 typedef struct ImportRef {
     const char *local_name;        /* interned; name visible in importing scope */
-    const char *source_name;       /* interned; name in source module's members */
     DeclKind kind;
-    SymbolTable *source_members;   /* source module's member table (stable pointer) */
-    SymbolTable *module_members;   /* for DECL_MODULE imports: the imported module's members */
-    const char *ns_prefix;         /* for DECL_MODULE imports: source module's namespace */
-    bool is_generic;
-    const char **type_params;
-    int type_param_count;
-    int explicit_type_param_count;
-    uint8_t *param_kinds;          /* the source Symbol's param_kinds array (shared) */
+    Symbol *sym;                   /* the imported symbol */
 } ImportRef;
 
 typedef struct ImportTable {

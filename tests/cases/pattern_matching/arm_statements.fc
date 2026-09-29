@@ -1,0 +1,32 @@
+// A multi-statement arm of a value-producing match is an ordinary block whose
+// last statement is the arm's value: a discarded value mid-arm (a match, an
+// if), a `let`, a defer that runs after the value is computed, and a `return`
+// through a defer all behave as they do in any other block. Regression: arms
+// were emitted by a separate loop, and a discarded value mid-arm produced C
+// that failed -Werror ("statement with no effect").
+let mut trace = 0
+
+let pick = (n: i32) ->
+    match n with
+    | 0 ->
+        match n + 1 with
+        | 1 -> 10
+        | _ -> 20
+        let k = n * 2
+        k + 1
+    | 1 ->
+        if n > 5 then 7 else 8
+        defer trace = trace + 1
+        n * 10
+    | 2 ->
+        defer trace = trace + 100
+        if trace > 1000 then return -1
+        return 42
+    | _ -> n
+
+let main = (args: str[]) ->
+    assert(pick(0) == 1)
+    assert(pick(1) == 10 && trace == 1)
+    assert(pick(2) == 42 && trace == 101)
+    assert(pick(7) == 7)
+    0

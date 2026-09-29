@@ -1873,10 +1873,8 @@ static bool type_valueless(Type *t) {
 }
 
 /* `let { a, b } = expr` in statement position: bind the RHS to a temp, then let
- * the pattern emitter declare each name off it. Shared by every statement
- * context: a block body and a match arm's body both call it, because the arm
- * loop emits its statements itself rather than delegating to emit_block_stmts.
- * The caller has already emitted the leading indent. */
+ * the pattern emitter declare each name off it. The caller has already emitted
+ * the leading indent. */
 static void emit_let_destruct_stmt(Expr *s, FILE *out) {
     emit_type(s->let_destruct.init_type, out);
     fprintf(out, " %s = ", s->let_destruct.tmp_name);
@@ -1901,7 +1899,21 @@ static void emit_return_through_defers(Expr *value, FILE *out) {
     fprintf(out, "return _ret%d;\n", tid);
 }
 
-static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return, bool discard_value) {
+/* What a block does with the value of its last statement. */
+typedef enum {
+    TAIL_VALUE,     /* it is the value of the enclosing statement expression */
+    TAIL_DISCARD,   /* nothing uses it (a loop body, a void block or arm) */
+    TAIL_RETURN,    /* the function returns it (a function or lambda body) */
+    TAIL_ASSIGN,    /* it is stored in a named temporary (a match arm) */
+} TailMode;
+
+/* Emit a block's statements. `tail` says what becomes of the last
+ * statement's value; TAIL_ASSIGN stores it in `target`. Defers recorded in
+ * the block run at its end, after the value is computed. */
+static void emit_block_stmts(Expr **stmts, int count, FILE *out, TailMode tail,
+                             const char *target) {
+    bool as_return = tail == TAIL_RETURN;
+    bool discard_value = tail != TAIL_VALUE;
     /* Find last non-defer statement index (needed for block-value handling) */
     int last_real_idx = -1;
     for (int i = count - 1; i >= 0; i--) {
@@ -1922,14 +1934,7 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return,
 
         if (s->kind == EXPR_LET) {
             const char *vname = s->let_expr.codegen_name ? s->let_expr.codegen_name : s->let_expr.let_name;
-            if (is_hoisted(vname)) {
-                /* Hoisted: declaration already at function top, just assign */
-                fprintf(out, "%s = ", vname);
-            } else {
-                emit_type(s->let_expr.let_type, out);
-                fprintf(out, " %s = ", vname);
-            }
-            emit_expr(s->let_expr.let_init, out);
+            emit_expr(s, out);
             fprintf(out, ";\n");
             emit_indent(out);
             fprintf(out, "(void)%s;\n", vname);
@@ -1989,6 +1994,24 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return,
         } else if (s->kind == EXPR_LOOP && type_valueless(s->type)) {
             emit_expr(s, out);
             fprintf(out, "\n");
+        } else if (is_final_stmt && tail == TAIL_ASSIGN && s->type &&
+                   !type_valueless(s->type)) {
+            /* The value goes to `target`; the block's own defers run after
+             * it is computed and before it is stored. */
+            if (g_defer_scope && g_defer_scope->count > 0) {
+                emit_type(s->type, out);
+                int tid = g_temp_counter++;
+                fprintf(out, " _mret%d = ", tid);
+                emit_expr(s, out);
+                fprintf(out, ";\n");
+                emit_scope_defers(g_defer_scope, out);
+                emit_indent(out);
+                fprintf(out, "%s = _mret%d;\n", target, tid);
+            } else {
+                fprintf(out, "%s = ", target);
+                emit_expr(s, out);
+                fprintf(out, ";\n");
+            }
         } else if (is_final_stmt && as_return && s->type && !type_valueless(s->type)) {
             /* Implicit return: emit defers before returning */
             if (has_pending_defers()) {
@@ -2035,7 +2058,7 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, bool as_return,
      * emitted with the return), or non-void block value (handled above). */
     if (g_defer_scope && g_defer_scope->count > 0) {
         bool already_handled = false;
-        if (as_return && last_real_idx >= 0) {
+        if ((as_return || tail == TAIL_ASSIGN) && last_real_idx >= 0) {
             Expr *last_real = stmts[last_real_idx];
             already_handled = last_real->type &&
                 last_real->type->kind != TYPE_VOID &&
@@ -2070,7 +2093,7 @@ static void emit_if_stmt(Expr *e, FILE *out) {
     if (e->if_expr.then_body->kind == EXPR_BLOCK) {
         defer_scope_push(false);
         emit_block_stmts(e->if_expr.then_body->block.stmts,
-            e->if_expr.then_body->block.count, out, false, true);
+            e->if_expr.then_body->block.count, out, TAIL_DISCARD, NULL);
         defer_scope_pop();
     } else {
         emit_indent(out);
@@ -2091,7 +2114,7 @@ static void emit_if_stmt(Expr *e, FILE *out) {
             if (e->if_expr.else_body->kind == EXPR_BLOCK) {
                 defer_scope_push(false);
                 emit_block_stmts(e->if_expr.else_body->block.stmts,
-                    e->if_expr.else_body->block.count, out, false, true);
+                    e->if_expr.else_body->block.count, out, TAIL_DISCARD, NULL);
                 defer_scope_pop();
             } else {
                 emit_indent(out);
@@ -2114,7 +2137,7 @@ static void emit_branch_into(Expr *branch, const char *res_var, FILE *out) {
     if (type_is_never(branch->type)) {
         if (branch->kind == EXPR_BLOCK) {
             defer_scope_push(false);
-            emit_block_stmts(branch->block.stmts, branch->block.count, out, false, true);
+            emit_block_stmts(branch->block.stmts, branch->block.count, out, TAIL_DISCARD, NULL);
             defer_scope_pop();
         } else {
             emit_indent(out);
@@ -3251,11 +3274,13 @@ static void emit_match(Expr *e, FILE *out) {
 
     /* Emit result variable (skip for void matches) */
     int res_id = -1;
+    char match_target[32] = "";
     if (!match_is_void) {
         res_id = g_temp_counter++;
+        snprintf(match_target, sizeof match_target, "_match%d", res_id);
         emit_indent(out);
         emit_type(e->type, out);
-        fprintf(out, " _match%d;\n", res_id);
+        fprintf(out, " %s;\n", match_target);
     }
 
     int done_id = -1;
@@ -3329,67 +3354,13 @@ static void emit_match(Expr *e, FILE *out) {
         /* Emit arm body */
         if (match_is_void) {
             defer_scope_push(false);
-            emit_block_stmts(arm->body, arm->body_count, out, false, true);
+            emit_block_stmts(arm->body, arm->body_count, out, TAIL_DISCARD, NULL);
             defer_scope_pop();
-        } else if (arm->body_count == 1) {
-            emit_indent(out);
-            if (type_is_never(arm->body[0]->type)) {
-                /* Diverging arm (return/break/continue): emit as a statement,
-                   no assignment; its exit fires before the temp is read. */
-                emit_expr(arm->body[0], out);
-            } else {
-                fprintf(out, "_match%d = ", res_id);
-                emit_expr(arm->body[0], out);
-            }
-            fprintf(out, ";\n");
         } else {
-            /* Multiple statements: emit all; the last is the value */
             defer_scope_push(false);
-            for (int s = 0; s < arm->body_count; s++) {
-                if (arm->body[s]->kind == EXPR_DEFER) {
-                    defer_scope_add(arm->body[s]->defer_expr.value);
-                    continue;
-                }
-                emit_indent(out);
-                if (s == arm->body_count - 1) {
-                    if (type_is_never(arm->body[s]->type)) {
-                        /* Diverging tail: emit as a statement, no assignment.
-                           emit_expr handles its own defers (return/break). */
-                        emit_expr(arm->body[s], out);
-                        fprintf(out, ";\n");
-                    } else if (has_pending_defers()) {
-                        emit_type(arm->body[s]->type, out);
-                        int tid = g_temp_counter++;
-                        fprintf(out, " _mret%d = ", tid);
-                        emit_expr(arm->body[s], out);
-                        fprintf(out, ";\n");
-                        emit_scope_defers(g_defer_scope, out);
-                        emit_indent(out);
-                        fprintf(out, "_match%d = _mret%d;\n", res_id, tid);
-                    } else {
-                        fprintf(out, "_match%d = ", res_id);
-                        emit_expr(arm->body[s], out);
-                        fprintf(out, ";\n");
-                    }
-                } else if (arm->body[s]->kind == EXPR_LET_DESTRUCT) {
-                    emit_let_destruct_stmt(arm->body[s], out);
-                } else {
-                    emit_expr(arm->body[s], out);
-                    fprintf(out, ";\n");
-                    if (arm->body[s]->kind == EXPR_LET) {
-                        /* Same -Wunused-variable silencer emit_block_stmts
-                         * uses; this path emits arm statements directly. */
-                        const char *vn = arm->body[s]->let_expr.codegen_name
-                            ? arm->body[s]->let_expr.codegen_name
-                            : arm->body[s]->let_expr.let_name;
-                        emit_indent(out);
-                        fprintf(out, "(void)%s;\n", vn);
-                    }
-                }
-            }
+            emit_block_stmts(arm->body, arm->body_count, out, TAIL_ASSIGN, match_target);
             defer_scope_pop();
         }
-
         if (has_any_guard) {
             emit_indent(out);
             fprintf(out, "_matchdone%d = 1;\n", done_id);
@@ -3424,7 +3395,7 @@ static void emit_match(Expr *e, FILE *out) {
 
     if (!match_is_void) {
         emit_indent(out);
-        fprintf(out, "_match%d;\n", res_id);
+        fprintf(out, "%s;\n", match_target);
     }
 
     g_indent_level--;
@@ -4146,7 +4117,7 @@ static void emit_for(Expr *e, FILE *out) {
 
         /* Body (already indented by g_indent_level++) */
         defer_scope_push(true);
-        emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, false, true);
+        emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, TAIL_DISCARD, NULL);
         defer_scope_pop();
         g_indent_level--;
         emit_indent(out);
@@ -4157,7 +4128,7 @@ static void emit_for(Expr *e, FILE *out) {
     /* Body for range iteration */
     g_indent_level++;
     defer_scope_push(true);
-    emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, false, true);
+    emit_block_stmts(e->for_expr.body, e->for_expr.body_count, out, TAIL_DISCARD, NULL);
     defer_scope_pop();
     g_indent_level--;
     emit_indent(out);
@@ -4579,7 +4550,7 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, "({\n");
         g_indent_level++;
         defer_scope_push(false);
-        emit_block_stmts(e->block.stmts, e->block.count, out, false, false);
+        emit_block_stmts(e->block.stmts, e->block.count, out, TAIL_VALUE, NULL);
         defer_scope_pop();
         g_indent_level--;
         emit_indent(out);
@@ -4971,7 +4942,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "while (1) {\n");
             g_indent_level++;
             defer_scope_push(true);
-            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, false, true);
+            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, TAIL_DISCARD, NULL);
             defer_scope_pop();
             g_indent_level--;
             emit_indent(out);
@@ -4986,7 +4957,7 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "while (1) {\n");
             g_indent_level++;
             defer_scope_push(true);
-            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, false, true);
+            emit_block_stmts(e->loop_expr.body, e->loop_expr.body_count, out, TAIL_DISCARD, NULL);
             defer_scope_pop();
             g_indent_level--;
             emit_indent(out);
@@ -5393,7 +5364,7 @@ static void emit_func_decl(Decl *d, FILE *out) {
     g_overflow_checked = false;    /* unchecked at a function boundary too */
     begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
     defer_scope_push(false);
-    emit_block_stmts(fn->func.body, fn->func.body_count, out, true, true);
+    emit_block_stmts(fn->func.body, fn->func.body_count, out, TAIL_RETURN, NULL);
     defer_scope_pop();
     end_hoisted_scope();
     g_indent_level = 0;
@@ -6859,7 +6830,7 @@ static void emit_lambda_defs(LambdaSet *ls, FILE *out) {
         g_overflow_checked = false;    /* lambda body: unchecked (function boundary) */
         begin_hoisted_scope(lam->func.body, lam->func.body_count, out);
         defer_scope_push(false);
-        emit_block_stmts(lam->func.body, lam->func.body_count, out, true, true);
+        emit_block_stmts(lam->func.body, lam->func.body_count, out, TAIL_RETURN, NULL);
         defer_scope_pop();
         end_hoisted_scope();
         g_indent_level = 0;
@@ -7734,7 +7705,7 @@ static void emit_functions(FILE *out, Decl **all_decls, int all_count,
         g_overflow_checked = false;    /* generic-instance body: unchecked (function boundary) */
         begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
         defer_scope_push(false);
-        emit_block_stmts(fn->func.body, fn->func.body_count, out, true, true);
+        emit_block_stmts(fn->func.body, fn->func.body_count, out, TAIL_RETURN, NULL);
         defer_scope_pop();
         end_hoisted_scope();
         g_indent_level = 0;

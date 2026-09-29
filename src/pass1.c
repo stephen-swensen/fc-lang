@@ -400,53 +400,20 @@ void file_scopes_free(FileImportScopes *s) {
 
 /* Add or replace (shadow) an import ref in an import table */
 static void import_table_add(ImportTable *tbl, const char *local_name,
-                              const char *source_name, DeclKind kind,
-                              SymbolTable *source_members, Symbol *msym) {
+                              DeclKind kind, Symbol *msym) {
     /* An existing entry with the same local_name and kind is shadowed: replace
      * it. Different kinds coexist; a struct and its companion module both live
      * in the table under the same name, found by kind-specific lookup. */
     for (int i = 0; i < tbl->count; i++) {
         if (tbl->entries[i].local_name == local_name && tbl->entries[i].kind == kind) {
-            tbl->entries[i].source_name = source_name;
-            tbl->entries[i].source_members = source_members;
-            tbl->entries[i].ns_prefix = msym->ns_prefix;
-            tbl->entries[i].module_members = msym->members;
-            tbl->entries[i].is_generic = msym->is_generic;
-            tbl->entries[i].type_params = msym->type_params;
-            tbl->entries[i].type_param_count = msym->type_param_count;
-            tbl->entries[i].explicit_type_param_count = msym->explicit_type_param_count;
-            tbl->entries[i].param_kinds = msym->param_kinds;
+            tbl->entries[i].sym = msym;
             return;
         }
     }
-    ImportRef ref = {
-        .local_name = local_name,
-        .source_name = source_name,
-        .kind = kind,
-        .source_members = source_members,
-        .ns_prefix = msym->ns_prefix,
-        .module_members = msym->members,
-        .is_generic = msym->is_generic,
-        .type_params = msym->type_params,
-        .type_param_count = msym->type_param_count,
-        .explicit_type_param_count = msym->explicit_type_param_count,
-        .param_kinds = msym->param_kinds,
-    };
+    ImportRef ref = { .local_name = local_name, .kind = kind, .sym = msym };
     DA_APPEND(tbl->entries, tbl->count, tbl->capacity, ref);
 }
 
-/* Add a whole-module import to an import table.
- *
- * A top-level module lives in the global symtab, so this is import_table_add
- * with source_members = the global symtab, source_name = the module's name, and
- * kind = DECL_MODULE (a module carries no generic metadata, so passing mod_sym
- * through leaves those fields empty). The (local_name, kind) dedup rule applies:
- * a later module import shadows an earlier one, but a same-named struct/union
- * import coexists (the companion pattern). */
-static void import_table_add_module(ImportTable *tbl, const char *local_name,
-                                     Symbol *mod_sym, SymbolTable *global_symtab) {
-    import_table_add(tbl, local_name, mod_sym->name, DECL_MODULE, global_symtab, mod_sym);
-}
 
 ImportTable *file_imports_find(FileImportScopes *scopes, const char *filename) {
     if (!scopes || !filename) return NULL;
@@ -508,11 +475,8 @@ static void process_member_import(Decl *d, ImportTable *target,
         /* Check the target import table for a whole-module import */
         for (int k = 0; k < target->count; k++) {
             ImportRef *ref = &target->entries[k];
-            if (ref->local_name == mod_name && ref->kind == DECL_MODULE && ref->module_members) {
-                /* Found via import: resolve using namespace-aware lookup */
-                mod_sym = ref->ns_prefix
-                    ? symtab_lookup_module(ref->source_members, ref->source_name, ref->ns_prefix)
-                    : symtab_lookup(ref->source_members, ref->source_name);
+            if (ref->local_name == mod_name && ref->kind == DECL_MODULE) {
+                mod_sym = ref->sym;
                 break;
             }
         }
@@ -559,8 +523,7 @@ static void process_member_import(Decl *d, ImportTable *target,
         for (int j = 0; j < members->count; j++) {
             Symbol *msym = &members->symbols[j];
             if (msym->is_private) continue;
-            import_table_add(target, msym->name, msym->name, msym->kind,
-                             members, msym);
+            import_table_add(target, msym->name, msym->kind, msym);
         }
     } else {
         /* import NAME [as ALIAS] from MODULE */
@@ -588,8 +551,7 @@ static void process_member_import(Decl *d, ImportTable *target,
                 "import alias '%s' is a built-in type name and cannot name a type or module",
                 import_name);
         }
-        import_table_add(target, import_name, d->import.name, msym->kind,
-                         mod_sym->members, msym);
+        import_table_add(target, import_name, msym->kind, msym);
         d->import.resolved_sym = msym;
         /* Type-associated module: if importing a type, also import its
          * associated module under the same name. */
@@ -598,8 +560,7 @@ static void process_member_import(Decl *d, ImportTable *target,
             Symbol *assoc_mod = symtab_lookup_kind(mod_sym->members,
                 d->import.name, DECL_MODULE);
             if (assoc_mod && !assoc_mod->is_private) {
-                import_table_add(target, import_name, d->import.name,
-                                 DECL_MODULE, mod_sym->members, assoc_mod);
+                import_table_add(target, import_name, DECL_MODULE, assoc_mod);
                 d->import.resolved_companion = assoc_mod;
             }
         }
@@ -1375,7 +1336,7 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab)
                     "import alias '%s' is a built-in type name and cannot name a module",
                     import_name);
             }
-            import_table_add_module(imports, import_name, src, global_symtab);
+            import_table_add(imports, import_name, DECL_MODULE, src);
             d->import.resolved_sym = src;
         } else {
             /* import MODULE [as ALIAS]: bare whole-module imports are not supported.
@@ -2062,11 +2023,8 @@ static void resolve_file_imports(Program *prog, SymbolTable *symtab,
                     "import alias '%s' is a built-in type name and cannot name a type or module",
                     import_name);
             }
-            if (mod) import_table_add_module(file_tbl, import_name, mod, symtab);
-            if (type_sym) {
-                import_table_add(file_tbl, import_name, name, type_sym->kind,
-                                 symtab, type_sym);
-            }
+            if (mod) import_table_add(file_tbl, import_name, DECL_MODULE, mod);
+            if (type_sym) import_table_add(file_tbl, import_name, type_sym->kind, type_sym);
             /* A companion pair imports both halves under one name; the type is
              * what the name primarily denotes, the module its companion. */
             d->import.resolved_sym = type_sym ? type_sym : mod;

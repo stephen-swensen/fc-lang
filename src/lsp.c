@@ -2738,13 +2738,9 @@ static Symbol *resolve_from_text(AnalysisResult *r, ImportTable *scope_imports,
     if (!mod && scope_imports) {
         for (int i = 0; i < scope_imports->count; i++) {
             ImportRef *ref = &scope_imports->entries[i];
-            if (ref->kind != DECL_MODULE || !ref->module_members) continue;
+            if (ref->kind != DECL_MODULE || !ref->sym->members) continue;
             if (!tr_eq_str(f->head, ref->local_name)) continue;
-            mod = ref->ns_prefix
-                ? symtab_lookup_module(ref->source_members, ref->source_name,
-                                       ref->ns_prefix)
-                : symtab_lookup(ref->source_members, ref->source_name);
-            if (mod && mod->kind != DECL_MODULE) mod = NULL;
+            mod = ref->sym;
             break;
         }
     }
@@ -2850,7 +2846,7 @@ static void emit_import_modules(Arena *a, JsonValue *items, TextSet *seen,
     if (!imp) return;
     for (int i = 0; i < imp->count; i++) {
         ImportRef *ref = &imp->entries[i];
-        if (ref->kind != DECL_MODULE || !ref->module_members) continue;
+        if (ref->kind != DECL_MODULE || !ref->sym->members) continue;
         if (!tset_add(seen, tr_of(ref->local_name))) continue;
         add_item(a, items, ref->local_name, CIK_MODULE, NULL);
     }

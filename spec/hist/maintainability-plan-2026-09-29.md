@@ -1,5 +1,10 @@
 # Maintainability plan
 
+*Finished 2026-09-29 on branch `human-friendly`: all seven phases done and every
+bug found along the way (B1-B44) fixed and tested. Kept as a record; the
+working documents it produced are `docs/ARCHITECTURE.md` and
+`CONTRIBUTING.md`.*
+
 ## Goal
 
 If every AI tool disappeared tomorrow, a skilled engineer should be able to
@@ -83,9 +88,8 @@ CLAUDE.md.
   deliberate differences are the bug fixes listed under "Found while doing
   phase 4" (B21, B31, B33-B36), one diagnostic wording fix, one unified
   negative-literal message, and dropping the duplicate generic-instance
-  prototypes. Left undone, both optional: routing match arms through
-  `emit_block_stmts` with a tail-mode enum, and having `ImportRef` hold a
-  `Symbol *`. The pass2 `resolved_member` item waits for phase 5's
+  prototypes. Two items were first deferred as optional and done at the end
+  (see the last Status entry). The pass2 `resolved_member` item waits for phase 5's
   `EXPR_FIELD` split. The seven pass2 instance sites share
   `register_aggregate_instance` but still resolve their type arguments in
   their own ways. New files: `src/facts.c/h`, the facts pass2 judges by and
@@ -119,10 +123,24 @@ CLAUDE.md.
   `test-all` recipe shared with `test-all-O2`, `fcc --help`, README and editor
   docs fixed. The 33 `bugsearch` test headers were rewritten too. Left undone,
   optional: restructuring `tests/lsp/lsp_test.py`.
-- No bugs remain open. Left undone, all optional: restructuring
-  `tests/lsp/lsp_test.py`, routing match arms through `emit_block_stmts`, and
-  having `ImportRef` hold a `Symbol *`. Per the working rules, this plan can
-  now move to `spec/hist/`.
+- **The two deferred phase-4 items: done (2026-09-29).** Both were copies that
+  could drift, so "optional" undersold them.
+  - Match arms now go through `emit_block_stmts`, whose two bools became a
+    `TailMode` (value / discard / return / assign). The separate arm loop had
+    drifted: B44 below. Every difference in the emitted C was explained: an
+    unneeded `_mret` temp dropped, a stray `;` after a statement-form tail
+    dropped, `(void)(...)` on discarded mid-arm values, return-through-defers
+    emitted as statements rather than a statement expression, and
+    indentation.
+  - `ImportRef` holds the imported `Symbol *` instead of five copies of its
+    generic metadata (which nothing read) and the fields readers used to look
+    the symbol up again by name. Emitted C unchanged.
+- B44 (fixed by the merge above). A discarded non-void value in the middle of
+  a multi-statement arm of a value-producing match (a nested `match`, a
+  value `if`) emitted C that failed `-Werror` ("statement with no effect")
+  while fcc exited 0. (`pattern_matching/arm_statements`)
+- Declined: restructuring `tests/lsp/lsp_test.py` (low value).
+- No bugs remain open.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
 - **Module cycles: complete rule (decided 2026-09-28).** Every reference

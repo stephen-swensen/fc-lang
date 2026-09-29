@@ -581,7 +581,7 @@ pair under Const.
 
 ## Editor / LSP server — residual parser `diag_fatal` sites (resolved)
 
-*Status when archived (2026-09-29): resolved by the maintainability plan's phase 3
+*Status when archived (2026-09-29): resolved by the maintainability plan's phase 3 (spec/hist/maintainability-plan-2026-09-29.md)
 (item B14), which turned the parser's remaining `diag_fatal` calls into `diag_error`
 plus an error node; `src/parser.c` has none left. The backlog entry as it stood:*
 
