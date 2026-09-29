@@ -90,65 +90,74 @@ static void skip_block_comment(Lexer *l) {
     }
 }
 
+/* Every keyword, and the token kind it lexes as. */
+#define KW(s, kind) { s, (int)sizeof(s) - 1, kind }
+static const struct { const char *kw; int klen; TokenKind kind; } KEYWORDS[] = {
+    KW("let", TOK_LET),
+    KW("mut", TOK_MUT),
+    KW("struct", TOK_STRUCT),
+    KW("union", TOK_UNION),
+    KW("enum", TOK_ENUM),
+    KW("module", TOK_MODULE),
+    KW("namespace", TOK_NAMESPACE),
+    KW("import", TOK_IMPORT),
+    KW("from", TOK_FROM),
+    KW("as", TOK_AS),
+    KW("extern", TOK_EXTERN),
+    KW("private", TOK_PRIVATE),
+    KW("match", TOK_MATCH),
+    KW("with", TOK_WITH),
+    KW("when", TOK_WHEN),
+    KW("if", TOK_IF),
+    KW("then", TOK_THEN),
+    KW("else", TOK_ELSE),
+    KW("for", TOK_FOR),
+    KW("in", TOK_IN),
+    KW("loop", TOK_LOOP),
+    KW("do", TOK_DO),
+    KW("break", TOK_BREAK),
+    KW("continue", TOK_CONTINUE),
+    KW("return", TOK_RETURN),
+    KW("defer", TOK_DEFER),
+    KW("ignore", TOK_IGNORE),
+    KW("some", TOK_SOME),
+    KW("true", TOK_TRUE),
+    KW("false", TOK_FALSE),
+    KW("none", TOK_NONE),
+    KW("ok", TOK_OK),
+    KW("err", TOK_ERR),
+    KW("error", TOK_ERROR_KW),
+    KW("void", TOK_VOID),
+    KW("guarded", TOK_GUARDED),
+    KW("unguarded", TOK_UNGUARDED),
+    KW("checked", TOK_CHECKED),
+    KW("unchecked", TOK_UNCHECKED),
+    KW("alloc", TOK_ALLOC),
+    KW("alloca", TOK_ALLOCA),
+    KW("free", TOK_FREE),
+    KW("sizeof", TOK_SIZEOF),
+    KW("alignof", TOK_ALIGNOF),
+    KW("bitcast", TOK_BITCAST),
+    KW("enum_of", TOK_ENUM_OF),
+    KW("default", TOK_DEFAULT),
+    KW("const", TOK_CONST),
+    KW("assert", TOK_ASSERT),
+    KW("static_assert", TOK_STATIC_ASSERT),
+    KW("error_name", TOK_ERROR_NAME),
+    KW("atomic_load_acquire", TOK_ATOMIC_LOAD),
+    KW("atomic_store_release", TOK_ATOMIC_STORE),
+};
+#undef KW
+#define KEYWORD_COUNT ((int)(sizeof KEYWORDS / sizeof KEYWORDS[0]))
+
+int lexer_keyword_count(void) { return KEYWORD_COUNT; }
+
+const char *lexer_keyword(int i) { return KEYWORDS[i].kw; }
+
 static TokenKind check_keyword(const char *start, int len) {
-    struct { const char *kw; int klen; TokenKind kind; } keywords[] = {
-        {"let",       3,  TOK_LET},
-        {"mut",       3,  TOK_MUT},
-        {"struct",    6,  TOK_STRUCT},
-        {"union",     5,  TOK_UNION},
-        {"enum",      4,  TOK_ENUM},
-        {"module",    6,  TOK_MODULE},
-        {"namespace", 9,  TOK_NAMESPACE},
-        {"import",    6,  TOK_IMPORT},
-        {"from",      4,  TOK_FROM},
-        {"as",        2,  TOK_AS},
-        {"extern",    6,  TOK_EXTERN},
-        {"private",   7,  TOK_PRIVATE},
-        {"match",     5,  TOK_MATCH},
-        {"with",      4,  TOK_WITH},
-        {"when",      4,  TOK_WHEN},
-        {"if",        2,  TOK_IF},
-        {"then",      4,  TOK_THEN},
-        {"else",      4,  TOK_ELSE},
-        {"for",       3,  TOK_FOR},
-        {"in",        2,  TOK_IN},
-        {"loop",      4,  TOK_LOOP},
-        {"do",        2,  TOK_DO},
-        {"break",     5,  TOK_BREAK},
-        {"continue",  8,  TOK_CONTINUE},
-        {"return",    6,  TOK_RETURN},
-        {"defer",     5,  TOK_DEFER},
-        {"ignore",    6,  TOK_IGNORE},
-        {"some",      4,  TOK_SOME},
-        {"true",      4,  TOK_TRUE},
-        {"false",     5,  TOK_FALSE},
-        {"none",      4,  TOK_NONE},
-        {"ok",        2,  TOK_OK},
-        {"err",       3,  TOK_ERR},
-        {"error",     5,  TOK_ERROR_KW},
-        {"void",      4,  TOK_VOID},
-        {"guarded",   7,  TOK_GUARDED},
-        {"unguarded", 9,  TOK_UNGUARDED},
-        {"checked",   7,  TOK_CHECKED},
-        {"unchecked", 9,  TOK_UNCHECKED},
-        {"alloc",     5,  TOK_ALLOC},
-        {"alloca",    6,  TOK_ALLOCA},
-        {"free",      4,  TOK_FREE},
-        {"sizeof",    6,  TOK_SIZEOF},
-        {"alignof",   7,  TOK_ALIGNOF},
-        {"bitcast",   7,  TOK_BITCAST},
-        {"enum_of",   7,  TOK_ENUM_OF},
-        {"default",   7,  TOK_DEFAULT},
-        {"const",     5,  TOK_CONST},
-        {"assert",    6,  TOK_ASSERT},
-        {"static_assert", 13, TOK_STATIC_ASSERT},
-        {"error_name", 10, TOK_ERROR_NAME},
-        {"atomic_load_acquire",  19, TOK_ATOMIC_LOAD},
-        {"atomic_store_release", 20, TOK_ATOMIC_STORE},
-    };
-    for (int i = 0; i < (int)(sizeof(keywords)/sizeof(keywords[0])); i++) {
-        if (keywords[i].klen == len && memcmp(start, keywords[i].kw, (size_t)len) == 0)
-            return keywords[i].kind;
+    for (int i = 0; i < KEYWORD_COUNT; i++) {
+        if (KEYWORDS[i].klen == len && memcmp(start, KEYWORDS[i].kw, (size_t)len) == 0)
+            return KEYWORDS[i].kind;
     }
     return TOK_IDENT;
 }

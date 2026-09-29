@@ -1,0 +1,14 @@
+// A misplaced comma-list import is one statement, so it gets one placement
+// error, not one per name. (The error count is the assertion.)
+module m =
+    let a = 1
+    let b = 2
+    let c = 3
+
+module other =
+    let x = 0
+
+import a, b, c from m
+
+let main = (args: str[]) ->
+    0

@@ -1066,6 +1066,15 @@ static bool module_name_taken(SymbolTable *members, const char *name) {
     return false;
 }
 
+/* The names of a comma-list import (`import a, b from m`) are separate
+ * DECL_IMPORTs sharing the statement's location, so a placement error is
+ * reported once for the statement, not once per name. */
+static bool same_import_statement(const Decl *a, const Decl *b) {
+    return a && b && a->kind == DECL_IMPORT && b->kind == DECL_IMPORT &&
+           a->loc.filename == b->loc.filename &&
+           a->loc.line == b->loc.line && a->loc.col == b->loc.col;
+}
+
 /* The rules on what a module body may hold: a module `from` a C library holds
  * only extern declarations and every other module none, and imports come
  * before all other declarations. */
@@ -1098,7 +1107,8 @@ static void validate_module_body(Decl *d) {
         for (int j = 0; j < d->module.decl_count; j++) {
             Decl *child = d->module.decls[j];
             if (child->kind == DECL_IMPORT) {
-                if (seen_non_import) {
+                if (seen_non_import &&
+                    !(j > 0 && same_import_statement(d->module.decls[j - 1], child))) {
                     diag_error(child->loc,
                         "imports must appear at the top of module '%s', before other declarations",
                         mod_name);
@@ -1792,6 +1802,7 @@ static void check_c_name_collisions(Program *prog) {
 static void check_imports_first(Program *prog) {
     const char *cur_file = NULL;
     bool seen_non_import = false;
+    const Decl *prev = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
         if (d->loc.filename != cur_file) {
@@ -1800,13 +1811,14 @@ static void check_imports_first(Program *prog) {
         }
         if (d->kind == DECL_NAMESPACE) continue;
         if (d->kind == DECL_IMPORT) {
-            if (seen_non_import) {
+            if (seen_non_import && !same_import_statement(prev, d)) {
                 diag_error(d->loc,
                     "imports must appear at the top of the file, before other declarations");
             }
         } else {
             seen_non_import = true;
         }
+        prev = d;
     }
 }
 

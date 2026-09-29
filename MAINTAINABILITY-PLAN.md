@@ -119,8 +119,10 @@ CLAUDE.md.
   `test-all` recipe shared with `test-all-O2`, `fcc --help`, README and editor
   docs fixed. The 33 `bugsearch` test headers were rewritten too. Left undone,
   optional: restructuring `tests/lsp/lsp_test.py`.
-- Still open: B30 (phase 4), B39 and B40 (phase 6). When they are
-  settled, move this plan to `spec/hist/`.
+- No bugs remain open. Left undone, all optional: restructuring
+  `tests/lsp/lsp_test.py`, routing match arms through `emit_block_stmts`, and
+  having `ImportRef` hold a `Symbol *`. Per the working rules, this plan can
+  now move to `spec/hist/`.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
 - **Module cycles: complete rule (decided 2026-09-28).** Every reference
@@ -388,12 +390,12 @@ covers.
 
 ### Found while doing phase 4
 
-- B30 (open, not fixed). A misplaced comma-list import reports "imports must
-  appear at the top" once per name: `import a, b, c from m` after another
-  declaration gives three identical errors. Each name is its own `DECL_IMPORT`
-  and both placement checks in pass1 run per declaration. A fix would report
-  once per statement (consecutive imports sharing a location are one
-  statement).
+- B30 (fixed). A misplaced comma-list import reported "imports must appear at
+  the top" once per name. Each name is its own `DECL_IMPORT`, sharing the
+  statement's location; both placement checks now skip an import that
+  continues the statement before it (`same_import_statement`).
+  (`modules/import_comma_misplaced_once_err`,
+  `modules/import_comma_misplaced_module_once_err`)
 - B31 (fixed). A slice literal whose element type has a parenthesized const
   argument (`wide<(256 >> 1)>[2] {}`, the form a shift needs) did not parse:
   `scan_type_head` carried its own copy of the type-argument scan, without
@@ -439,7 +441,7 @@ covers.
 ### Found while doing phase 6
 
 The comment rewrite checked every comment against the code, which turned up
-these. B37, B38, B41 and B42 are fixed; B39 and B40 are open.
+these. All are fixed.
 
 - B37 (fixed). `~` was rejected in a top-level initializer where `-` and `!`
   are accepted: `module m = let a = ~5isize` reported "must be a constant
@@ -455,13 +457,16 @@ these. B37, B38, B41 and B42 are fixed; B39 and B40 are open.
   abort at run time. Spec: Fixed-Size Inline Arrays, Struct Literals.
   (`structs/fixed_array_module_const*`, `structs/fixed_array_module_mut_overflow_err`,
   `structs/fixed_array_file_level_overflow`, `extern/extern_struct_fixed_array_const*`)
-- B39. Completion never offers `static_assert`: lsp.c keeps its own copy of
-  the keyword list, which has drifted from the lexer's. The fix is to have
-  the lexer export its keyword table and completion read it, not to add the
-  one name.
-- B40 (minor). Go-to-definition into another file uses the byte column as the
-  UTF-16 column, so the range is off on lines with non-ASCII text before the
-  name. Same-file definitions convert correctly.
+- B39 (fixed). Completion never offered `static_assert`: lsp.c kept its own
+  copy of the keyword list, which had drifted from the lexer's. The lexer's
+  keyword table and types.c's primitive type names now live at file scope
+  (with lengths computed by `sizeof`, not written by hand) and are exported
+  (`lexer_keyword`, `type_primitive_name`); completion reads them. The LSP
+  test checks every keyword in lexer.c is offered.
+- B40 (fixed). Go-to-definition into another file used the byte column as the
+  UTF-16 column. It now maps the location through that file's text (open
+  buffer or disk, `doc_file_text`), as same-file definitions did. (LSP test:
+  definition in another file uses that file's UTF-16 column.)
 - B41 (fixed, found while testing B38). A body type-checked before a top-level
   generic struct's or union's field types were canonicalized (any module
   member, or a top-level function above the declaration) instantiated it from

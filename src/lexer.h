@@ -59,3 +59,8 @@ void lexer_init(Lexer *l, const char *source, InternTable *intern,
 
 /* Tokenize entire source into an array. Caller must free the array. */
 Token *lexer_tokenize(Lexer *l, int *out_count);
+
+/* The keywords the lexer recognizes, for tools that list them (editor
+ * completion). */
+int lexer_keyword_count(void);
+const char *lexer_keyword(int i);

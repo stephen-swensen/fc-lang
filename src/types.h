@@ -245,6 +245,10 @@ Type *type_from_int_suffix(const char *suffix, int len);
 
 /* Map a type name string (e.g., "int32", "bool", "str") to a type, or NULL */
 Type *type_from_name(const char *s, int len);
+/* The built-in type names type_from_name recognizes, for tools that list
+ * them (editor completion). */
+int type_primitive_count(void);
+const char *type_primitive_name(int i);
 
 /* Type variable constructor */
 Type *type_type_var(Arena *a, const char *name);

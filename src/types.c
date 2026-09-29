@@ -787,22 +787,38 @@ Type *type_from_int_suffix(const char *suffix, int len) {
     return NULL;
 }
 
+/* The built-in type names and the types they denote. */
+#define PRIM(s, fn) { s, (int)sizeof(s) - 1, fn }
+static const struct { const char *n; int l; Type *(*fn)(void); } PRIMITIVE_TYPES[] = {
+    PRIM("i8", type_int8),
+    PRIM("i16", type_int16),
+    PRIM("i32", type_int32),
+    PRIM("i64", type_int64),
+    PRIM("u8", type_uint8),
+    PRIM("u16", type_uint16),
+    PRIM("u32", type_uint32),
+    PRIM("u64", type_uint64),
+    PRIM("f32", type_float32),
+    PRIM("f64", type_float64),
+    PRIM("bool", type_bool),
+    PRIM("char", type_char),
+    PRIM("str", type_str),
+    PRIM("cstr", type_cstr),
+    PRIM("any", type_any_ptr),
+    PRIM("isize", type_isize),
+    PRIM("usize", type_usize),
+};
+#undef PRIM
+#define PRIMITIVE_COUNT ((int)(sizeof PRIMITIVE_TYPES / sizeof PRIMITIVE_TYPES[0]))
+
+int type_primitive_count(void) { return PRIMITIVE_COUNT; }
+
+const char *type_primitive_name(int i) { return PRIMITIVE_TYPES[i].n; }
+
 Type *type_from_name(const char *s, int len) {
-    struct { const char *n; int l; Type *(*fn)(void); } map[] = {
-        {"i8",2, type_int8},     {"i16",3, type_int16},
-        {"i32",3, type_int32},   {"i64",3, type_int64},
-        {"u8",2, type_uint8},    {"u16",3, type_uint16},
-        {"u32",3, type_uint32},  {"u64",3, type_uint64},
-        {"f32",3, type_float32}, {"f64",3, type_float64},
-        {"bool",4, type_bool},     {"char",4, type_char},
-        {"str",3, type_str},       {"cstr",4, type_cstr},
-        {"any",3, type_any_ptr},
-        {"isize",5, type_isize},   {"usize",5, type_usize},
-    };
-    for (int i = 0; i < (int)(sizeof(map)/sizeof(map[0])); i++) {
-        if (map[i].l == len && memcmp(s, map[i].n, (size_t)len) == 0) {
-            return map[i].fn ? map[i].fn() : NULL;
-        }
+    for (int i = 0; i < PRIMITIVE_COUNT; i++) {
+        if (PRIMITIVE_TYPES[i].l == len && memcmp(s, PRIMITIVE_TYPES[i].n, (size_t)len) == 0)
+            return PRIMITIVE_TYPES[i].fn();
     }
     return NULL;
 }

@@ -170,6 +170,19 @@ comp = responses.get(6, {}).get("result") or {}
 labels = [it.get("label") for it in (comp.get("items") if isinstance(comp, dict) else comp) or []]
 check("completion includes keywords", "let" in labels and "match" in labels,
       str(labels[:10]))
+# Completion reads the lexer's own keyword table, so every keyword is offered,
+# including ones a hand-kept list had missed (static_assert).
+import os as _os, re as _re
+_lexer_src = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                "..", "..", "src", "lexer.c")).read()
+_lexer_kws = _re.findall(r'KW\("([a-z_]+)"', _lexer_src)
+check("completion offers every lexer keyword (incl. static_assert)",
+      len(_lexer_kws) > 40 and "static_assert" in labels and
+      all(k in labels for k in _lexer_kws),
+      str([k for k in _lexer_kws if k not in labels]))
+check("completion offers the primitive type names",
+      all(t in labels for t in ("i32", "u8", "usize", "f64", "str", "cstr", "any")),
+      str([t for t in ("i32", "u8", "usize", "f64", "str", "cstr", "any") if t not in labels]))
 
 ih = responses.get(10, {}).get("result") or []
 check("inlayHint returns inline type hints (kind=Type)",
@@ -242,6 +255,33 @@ check("multi-file: main.fc resolves sibling 'prelude' module (no errors)",
       by_file.get("main.fc", [["?"]])[-1] == [], str(by_file.get("main.fc")))
 check("multi-file: prelude.fc OK (let main provided by sibling)",
       by_file.get("prelude.fc", [["?"]])[-1] == [], str(by_file.get("prelude.fc")))
+
+# --- go-to-definition into another file maps the column through that file's
+# text: `let` below sits at byte column 17 but UTF-16 character 14, because
+# each "é" before it is two bytes and one UTF-16 unit. lib.fc is not open, so
+# its text comes from disk. ---
+xdir = tempfile.mkdtemp(prefix="fc_lsp_xdef_")
+with open(os.path.join(xdir, "lib.fc"), "w", encoding="utf-8") as f:
+    f.write("module lib =\n    /* \u00e9t\u00e9 */ let helper = (n: i32) -> n + 1\n")
+with open(os.path.join(xdir, "main.fc"), "w") as f:
+    f.write("let main = (args: str[]) ->\n    lib.helper(1)\n")
+xuri = "file://" + os.path.join(xdir, "main.fc")
+xresp, _, _, _, _ = run_session([
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": xuri, "languageId": "fc",
+         "version": 1, "text": open(os.path.join(xdir, "main.fc")).read()}}),
+    req(2, "textDocument/definition",
+        {"textDocument": {"uri": xuri}, "position": {"line": 1, "character": 9}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+])
+xdef = xresp.get(2, {}).get("result") or {}
+xstart = xdef.get("range", {}).get("start", {}) if isinstance(xdef, dict) else {}
+check("definition in another file uses that file's UTF-16 column",
+      str(xdef.get("uri", "")).endswith("lib.fc") and
+      xstart.get("line") == 1 and xstart.get("character") == 14,
+      json.dumps(xdef))
 
 # --- cross-file diagnostic propagation: editing prelude.fc must refresh the
 # diagnostics of the *other* open file (main.fc) that depends on it, WITHOUT

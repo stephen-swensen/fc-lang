@@ -2042,16 +2042,21 @@ static void handle_definition(LspServer *S, JsonValue *id, JsonValue *params) {
     int dline = dl.line > 0 ? dl.line : 1;
     int dcol  = dl.col  > 0 ? dl.col  : 1;
 
-    /* Map the definition location through the right file's text: the open file
-     * uses its live text; another file (a sibling, the stdlib) takes the byte
-     * column as the UTF-16 column, which is correct for ASCII lines. */
-    int dl0, dc0;
-    if (strcmp(def_path, doc->path) == 0) {
+    /* Map the definition location through its own file's text (the open
+     * buffer, another open buffer, or the file on disk), so a line with
+     * non-ASCII text before the name gets the right UTF-16 column. The name
+     * itself is ASCII, so its byte length is its UTF-16 length. */
+    int dl0 = dline - 1, dc0 = dcol - 1;
+    int def_len = 0;
+    bool def_owned = false;
+    const char *def_text = doc_file_text(S, doc, def_path, &def_len, &def_owned);
+    if (def_text == doc->text) {
         loc_to_lsp(&idx, doc->text, dline, dcol, &dl0, &dc0);
-    } else {
-        dl0 = dline - 1;
-        dc0 = dcol - 1;
+    } else if (def_text) {
+        LineIndex def_idx = line_index_build(a, def_text, def_len);
+        loc_to_lsp(&def_idx, def_text, dline, dcol, &dl0, &dc0);
     }
+    if (def_owned) free((char *)def_text);
 
     char *def_uri = uri_for_path(&S->store, def_path);
     JsonValue *loc = json_object(a);
@@ -2207,21 +2212,6 @@ static void handle_inlayhint(LspServer *S, JsonValue *id, JsonValue *params) {
 /* ======================================================================== */
 /* Handler: completion                                                       */
 /* ======================================================================== */
-
-static const char *KEYWORDS[] = {
-    /* The lexer's keywords (check_keyword in lexer.c) and the primitive type
-     * names. Not derived from the lexer: a new keyword must be added here too. */
-    "let", "mut", "struct", "union", "enum", "module", "namespace", "import", "from",
-    "as", "extern", "private", "match", "with", "when", "if", "then", "else",
-    "for", "in", "loop", "do", "break", "continue", "return", "defer", "ignore", "some",
-    "true", "false", "none", "void", "guarded", "unguarded", "checked",
-    "unchecked", "alloc", "alloca", "free", "sizeof", "alignof", "bitcast",
-    "default", "const", "assert", "atomic_load_acquire", "atomic_store_release",
-    "ok", "err", "error", "error_name", "enum_of",
-    "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
-    "isize", "usize", "f32", "f64", "bool", "char", "str", "cstr", "any",
-};
-static const int KEYWORD_COUNT = (int)(sizeof KEYWORDS / sizeof KEYWORDS[0]);
 
 /* LSP CompletionItemKind values */
 enum { CIK_TEXT = 1, CIK_METHOD = 2, CIK_FUNCTION = 3, CIK_FIELD = 5,
@@ -3117,8 +3107,10 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
      * enclosing-module members + imports and the enclosing function's locals
      * (complete_scope), file-level imports, and top-level symbols. A NameSet
      * dedups across all of these so a name in scope two ways is offered once. */
-    for (int i = 0; i < KEYWORD_COUNT; i++)
-        add_item(a, items, KEYWORDS[i], CIK_KEYWORD, NULL);
+    for (int i = 0; i < lexer_keyword_count(); i++)
+        add_item(a, items, lexer_keyword(i), CIK_KEYWORD, NULL);
+    for (int i = 0; i < type_primitive_count(); i++)
+        add_item(a, items, type_primitive_name(i), CIK_KEYWORD, NULL);
 
     AnalysisResult *r = query_result(S, doc);
     if (r) {
