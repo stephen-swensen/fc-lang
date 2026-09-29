@@ -1,0 +1,8 @@
+module c from "stdlib.h" =
+    extern abs as c_abs: (i32) -> i32
+
+let f = (x: 'a) -> c.c_abs(x)
+
+let main = (args: str[]) ->
+    let r = f(5i64)
+    0

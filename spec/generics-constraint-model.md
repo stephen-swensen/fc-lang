@@ -33,6 +33,10 @@ type (the error names the instantiation, e.g. `in add(bool, bool) …`):
 | `< > <= >=` (ordering)   | numeric **or pointer** |
 | `& \| ^ << >>` (bitwise/shift) | integer |
 
+In the body the result of any of these (other than a comparison) has the type variable's type, so
+an instantiation is also rejected when the same operation on the concrete types would have a
+different one: `x + 300` at `'a = u8` widens to `i32` rather than computing a wrapped `u8`.
+
 ```fc
 let greater = (x: 'a, y: 'a) -> x > y    // body OK; checked per instantiation
 // greater(10, 5)      → 'a = i32   → OK

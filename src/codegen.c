@@ -635,6 +635,33 @@ static Type *subst_resolve(Type *t) {
     return t;
 }
 
+/* pass2 widens a narrower numeric operand into a wider slot by wrapping it
+ * in a cast, but it checks a generic body once, with type variables, so an
+ * instance reaches the emitter without the casts its concrete types call
+ * for. This supplies one for the instance being emitted, so that it compiles
+ * exactly as the same code written with those types would: when the operand
+ * in `*slot` resolves to a different numeric type than `target`, the slot is
+ * pointed at a cast to `target`. Returns the operand it replaced, which the
+ * caller puts back after emitting (every instance shares the AST), or NULL
+ * when nothing changed. */
+static Expr *widen_for_instance(Expr **slot, Type *target) {
+    if (!g_subst || !target) return NULL;
+    Expr *operand = *slot;
+    Type *from = subst_resolve(operand->type);
+    target = subst_resolve(target);
+    if (!from || type_eq(from, target) || !type_is_numeric(from) || !type_is_numeric(target))
+        return NULL;
+    Expr *cast = arena_alloc(g_arena, sizeof(Expr));
+    cast->kind = EXPR_CAST;
+    cast->loc = operand->loc;
+    cast->type = target;
+    cast->prov = operand->prov;
+    cast->cast.target = target;
+    cast->cast.operand = operand;
+    *slot = cast;
+    return operand;
+}
+
 /* True when `t` is a u8[] slice — the `str` alias — accounting for the active
  * monomorphization substitution. A generic field/local typed `'a[]` where `'a`
  * is bound to u8 is `str` and must share fc_str's C spelling (and its always-
@@ -3131,6 +3158,15 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
 
     case EXPR_BINARY: {
+        /* Mixed numeric operands meet at their common type, as pass2 arranges
+         * for concrete code; a shift keeps its operands as they are. */
+        Expr *unwidened[2] = { NULL, NULL };
+        if (g_subst && e->binary.op != TOK_LTLT && e->binary.op != TOK_GTGT) {
+            Type *common = type_common_numeric(subst_resolve(e->binary.left->type),
+                                               subst_resolve(e->binary.right->type));
+            unwidened[0] = widen_for_instance(&e->binary.left, common);
+            unwidened[1] = widen_for_instance(&e->binary.right, common);
+        }
         /* Force left-to-right operand evaluation when an operand has side
          * effects (C leaves binary-operand order unspecified).  /, %, &&, ||
          * are excluded: division self-sequences its temps below, and &&/|| are
@@ -3403,6 +3439,8 @@ static void emit_expr(Expr *e, FILE *out) {
         fprintf(out, ")");
     _binary_done:
         if (_bseq) { fprintf(out, "; })"); seq_restore(_bslots, 2, _bsaved); }
+        if (unwidened[0]) e->binary.left = unwidened[0];
+        if (unwidened[1]) e->binary.right = unwidened[1];
         break;
     }
 
@@ -3631,6 +3669,15 @@ static void emit_expr(Expr *e, FILE *out) {
         /* Get callee function type for coercion */
         Type *call_ft = e->call.func->type;
 
+        /* Arguments widen to their parameters' types, as pass2 arranges for
+         * concrete code. */
+        Expr **unwidened = NULL;
+        if (g_subst && call_ft && call_ft->kind == TYPE_FUNC && e->call.arg_count > 0) {
+            unwidened = arena_alloc(g_arena, sizeof(Expr*) * (size_t)e->call.arg_count);
+            for (int i = 0; i < e->call.arg_count && i < call_ft->func.param_count; i++)
+                unwidened[i] = widen_for_instance(&e->call.args[i], call_ft->func.param_types[i]);
+        }
+
         /* Force left-to-right argument evaluation when any argument has side
          * effects: evaluate the earlier arguments into temps in source order
          * (the callee is evaluated first, the final argument last). */
@@ -3748,6 +3795,8 @@ static void emit_expr(Expr *e, FILE *out) {
                 seq_restore(aslots, e->call.arg_count, asaved);
             }
         }
+        for (int i = 0; unwidened && i < e->call.arg_count; i++)
+            if (unwidened[i]) e->call.args[i] = unwidened[i];
         break;
     }
 

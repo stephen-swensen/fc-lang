@@ -1,0 +1,20 @@
+// Operations whose concrete type is the type variable itself are accepted:
+// both operands of the type variable's type, a concrete operand that widens
+// into it, comparisons (always bool), and a shift whose left operand is 'a.
+let add = (a: 'a, b: 'a) -> a + b
+let inc = (x: 'a, one: 'a) -> x + one
+let big = (x: 'a) -> x + 300
+let above = (x: 'a) -> x > 300
+let mask = (x: 'a, m: 'a) -> x & m
+let shl = (x: 'a) -> x << 2
+
+let main = (args: str[]) ->
+    assert(add(250u8, 10u8) == 4u8)
+    assert(inc(255u8, 1u8) == 0u8)
+    assert(big(5) == 305)
+    assert(big(5i64) == 305i64)
+    assert(above(301u16))
+    assert(!above(7u8))
+    assert(mask(0xF0u8, 0x3Cu8) == 0x30u8)
+    assert(shl(3u8) == 12u8)
+    0

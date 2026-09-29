@@ -1,0 +1,22 @@
+// A generic instance compiles to what the same code with concrete types
+// compiles to: operands and arguments of a narrower numeric type are widened
+// as they would be there, so the C compilers see the same code (a bare
+// `x > 300` on a u8 is an always-false comparison clang rejects).
+let g = (v: i64) -> v
+let above = (x: 'a) -> x > 300
+let is_300 = (x: 'a) -> x == 300
+let at_most = (x: 'a, y: i64) -> x <= y
+let to_i64 = (x: 'a) -> g(x)
+let apply = (f: (i64) -> i64, x: 'a) -> f(x)
+let add_i64 = (x: 'a) -> x + 1
+
+let main = (args: str[]) ->
+    assert(!above(7u8))
+    assert(above(301i16))
+    assert(!is_300(44u8))
+    assert(at_most(200u8, 200i64))
+    assert(to_i64(-5i8) == -5i64)
+    assert(to_i64(4000000000u32) == 4000000000i64)
+    assert(apply(g, 7u16) == 7i64)
+    assert(add_i64(9i64) == 10i64)
+    0

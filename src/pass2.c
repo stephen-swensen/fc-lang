@@ -3565,21 +3565,52 @@ static char *binary_operand_error(TokenKind op, Type *lt, Type *rt) {
 }
 
 /* A binary operation deferred at template time because an operand's type
- * involves type variables: apply the operator's rule to the concrete types. */
+ * involves type variables: apply the operator's rule to the concrete types.
+ * The generic body has already given the operation a type (bool for a
+ * comparison, the type variable otherwise), so an instance is also rejected
+ * when the rule would give it a different one: `x + 300` is i32 when x is a
+ * u8, and computing it as a u8 would silently narrow the result. */
 static void check_generic_binary(Expr *e, GenericCheck *gc) {
     Type *lt_raw = e->binary.left->type;
     Type *rt_raw = e->binary.right->type;
     if (!lt_raw || !rt_raw) return;
     if (!type_contains_type_var(lt_raw) && !type_contains_type_var(rt_raw)) return;
 
+    TokenKind op = e->binary.op;
     Type *lt = type_substitute(gc->arena, lt_raw, gc->type_params, gc->bindings, gc->ntp);
     Type *rt = type_substitute(gc->arena, rt_raw, gc->type_params, gc->bindings, gc->ntp);
-    char *err = binary_operand_error(e->binary.op, lt, rt);
+    char *err = binary_operand_error(op, lt, rt);
     if (err) {
         gen_inst_diag(gc->frame, e->loc, "%s", err);
         free(err);
         gc->ok = false;
+        return;
     }
+
+    bool shift = op == TOK_LTLT || op == TOK_GTGT;
+    bool widens = op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR || op == TOK_SLASH ||
+                  op == TOK_PERCENT || op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET;
+    if (!shift && !widens) return;   /* comparisons and logic yield bool either way */
+    Type *actual = shift || type_eq(lt, rt) ? lt : type_common_numeric(lt, rt);
+    Type *promised = type_substitute(gc->arena, e->type, gc->type_params, gc->bindings, gc->ntp);
+    if (type_eq(actual, promised)) return;
+
+    /* Exactly one operand has a concrete type: the other is the type variable
+     * the body typed the operation by. */
+    Type *fixed = type_contains_type_var(lt_raw) ? rt_raw : lt_raw;
+    const char *tv = type_name(e->type);
+    if (shift)
+        gen_inst_diag(gc->frame, e->loc,
+            "a shift has the type of its left operand, %s, but the generic body "
+            "gives it type %s (%s here); pass the %s operand in with type %s",
+            type_name(actual), tv, type_name(promised), type_name(fixed), tv);
+    else
+        gen_inst_diag(gc->frame, e->loc,
+            "%s and %s widen to %s when %s is %s, but the generic body gives the "
+            "result type %s; pass the %s operand in with type %s",
+            type_name(lt_raw), type_name(rt_raw), type_name(actual), tv,
+            type_name(promised), tv, type_name(fixed), tv);
+    gc->ok = false;
 }
 
 /* A unary minus or bitwise not on a type-variable operand. */
@@ -3783,6 +3814,31 @@ static void validate_generic_callee(Expr *e, GenericCheck *gc) {
     if (!sub.ok) gc->ok = false;
 }
 
+/* A call to a function that is not itself generic (a declared function, a
+ * function value or an extern): the body skipped the argument check wherever
+ * a type variable was involved, so make it for the instance, by the rule the
+ * same call with concrete types gets. Generic callees are matched in
+ * validate_generic_callee. */
+static void check_generic_call_args(Expr *e, GenericCheck *gc) {
+    Symbol *callee = e->call.resolved_callee;
+    if (callee && callee->is_generic) return;
+    if (e->call.func->kind == EXPR_FIELD && e->call.func->field.is_variant_constructor) return;
+    Type *ft = e->call.func->type;
+    if (!ft || ft->kind != TYPE_FUNC) return;
+    for (int i = 0; i < e->call.arg_count && i < ft->func.param_count; i++) {
+        Type *at_raw = e->call.args[i]->type;
+        Type *pt_raw = ft->func.param_types[i];
+        if (!at_raw || !pt_raw) continue;
+        if (!type_contains_type_var(at_raw) && !type_contains_type_var(pt_raw)) continue;
+        Type *at = type_substitute(gc->arena, at_raw, gc->type_params, gc->bindings, gc->ntp);
+        Type *pt = type_substitute(gc->arena, pt_raw, gc->type_params, gc->bindings, gc->ntp);
+        if (type_eq(at, pt) || type_can_widen(at, pt)) continue;
+        gen_inst_diag(gc->frame, e->call.args[i]->loc, "argument %d: expected %s, got %s",
+                      i + 1, type_name(pt), type_name(at));
+        gc->ok = false;
+    }
+}
+
 static void check_generic_type_operand(Expr *e, Type *t, GenericCheck *gc) {
     if (!check_inst_type_operand(gc->frame, gc->arena, t, gc->type_params,
                                  gc->bindings, gc->ntp, e->loc))
@@ -3815,7 +3871,10 @@ static void validate_generic_expr(Expr *e, void *check) {
     case EXPR_FIELD:
     case EXPR_DEREF_FIELD:  check_generic_type_property(e, gc); break;
     case EXPR_TYPE_VAR_REF: check_generic_const_param(e, gc); break;
-    case EXPR_CALL:         validate_generic_callee(e, gc); break;
+    case EXPR_CALL:
+        check_generic_call_args(e, gc);
+        validate_generic_callee(e, gc);
+        break;
     case EXPR_ALLOC:        check_generic_type_operand(e, e->alloc_expr.alloc_type, gc); break;
     case EXPR_DEFAULT:      check_generic_type_operand(e, e->default_expr.target, gc); break;
     case EXPR_SIZEOF:       check_generic_type_operand(e, e->sizeof_expr.target, gc); break;
@@ -5848,8 +5907,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             if (type_is_error(at)) { arg_err = true; continue; }
             /* Variadic args beyond fixed params: type-check the expr but skip param matching */
             if (i >= ft->func.param_count) continue;
-            /* Skip strict type check if either side contains type vars
-             * (inside a generic template — checked at monomorphization) */
+            /* Inside a generic body a type variable on either side defers the
+             * check to each instance (check_generic_call_args). */
             if (type_contains_type_var(at) || type_contains_type_var(ft->func.param_types[i]))
                 continue;
             if (!type_eq(at, ft->func.param_types[i])) {

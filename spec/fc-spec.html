@@ -4267,6 +4267,8 @@ Two uses of the same generic at the same concrete types share a single instantia
 
 FC has no constraint system in this version. Type variables are unconstrained — any concrete type may be substituted. If a generic function uses an operation that the concrete type does not support, the compiler reports an error at the **call site** where the unsupported instantiation was requested, identifying the type variable substitution that caused the problem. Errors are not reported inside the generic definition itself.
 
+**An instantiation means what its concrete code means.** Each instantiation behaves exactly as the same code written with the concrete types would. The checks a generic body cannot make until the types are known (an operator on a type variable, an argument whose type involves a type variable passed to a parameter of another type) are made for each instantiation by the rule the concrete code gets; an instantiation the concrete code would reject is a compile error at the call site that requests it; and an operand the concrete code would widen is widened in the instantiation too.
+
 This means generic functions work naturally across numeric types without any annotation:
 
 ```fc
@@ -4288,6 +4290,18 @@ The following operations are valid on type variables within a generic body, with
 - **Operators**: arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`)
 - **Built-in type operators**: `default('a)`, `sizeof('a)`
 - **Built-in static type properties**: `'a.min`, `'a.max`, `'a.bits`, `'a.nan`, `'a.inf`, `'a.neg_inf`, `'a.epsilon`
+
+**Result types.** A generic body gives each operation its type before any instantiation: a comparison is `bool`, and any other operator on a type variable has the type variable's type. An instantiation is accepted only if the same operation on the concrete types has that type too (§Errors at monomorphization). Mixing a type-variable operand with an operand of another type therefore works only where no widening happens:
+
+```fc
+let big = (x: 'a) -> x + 300
+
+big(5)        // ok — i32 + i32 is i32
+big(5i64)     // ok — i64 + i32 widens to i64, which is 'a
+big(5u8)      // compile error — u8 + i32 widens to i32 (§Implicit Widening), not 'a
+```
+
+The literal `300` stays an `i32`; it does not become a `u8` because of what it is added to. A shift has the type of its left operand, so `1 << n` with `n: 'a` is rejected the same way unless `'a` is `i32`. To compute at the type variable's width, pass the operand in with that type: `let inc = (x: 'a, one: 'a) -> x + one`.
 
 The following are **not** supported on type variables:
 

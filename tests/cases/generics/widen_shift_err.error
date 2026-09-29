@@ -1,0 +1,1 @@
+a shift has the type of its left operand, i32, but the generic body gives it type 'a (u8 here)

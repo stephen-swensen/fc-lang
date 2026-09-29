@@ -55,12 +55,27 @@ CLAUDE.md.
   Two more things came out of it:
   - The token name table missed `'...'` as well as `'const'`. It is now a
     switch, so `-Wswitch` catches a token kind with no name.
-  - **B27, open (language question):** arithmetic on a type variable is typed
-    as the type variable, but the same expression with concrete types widens.
-    With `'a = u8`, a generic `x + 300` gives 49 (u8 wraparound) where
-    `x + 300` on a concrete `u8` gives the i32 305. A generic
-    `a + 3000000000i64` with `'a = i32` truncates. Comparisons are unaffected:
-    they yield bool, and mixed signedness is rejected in both paths.
+  - **B27, fixed (option A):** arithmetic on a type variable is typed as the
+    type variable, but the same expression with concrete types widened, so
+    `x + 300` at `'a = u8` wrapped to 49 where concrete code gives the i32
+    305. An instantiation is now rejected when the concrete rule would give an
+    operation a different type than the generic body did (spec: Scope of
+    operations on type variables, "Result types"). No existing code was
+    affected.
+  - **B28, fixed:** a generic comparison whose instance needed widening was
+    emitted as a bare C comparison (`x > 300` with `x` a `uint8_t`), where
+    concrete code casts to the common type first, so clang's
+    `-Wtautological-constant-out-of-range-compare` rejected the C. Instances
+    now get the casts concrete code gets (`widen_for_instance`).
+  - **B29, fixed:** a value whose type involves a type variable, passed to a
+    non-generic function, function value or extern, was never checked per
+    instance: `u64` reached an `i64` parameter as -1, `1.5` as 1, `true` as
+    1. The argument is now checked for each instance by the concrete rule.
+  - B27-B29 are one principle, now in the spec (§Errors at monomorphization)
+    and in CLAUDE.md's feature checklist: a generic instance means exactly
+    what the same code with concrete types means. A sweep of every
+    concrete-path widening site found no other place where a generic body
+    defers a check.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
 - **Module cycles: complete rule (decided 2026-09-28).** Every reference

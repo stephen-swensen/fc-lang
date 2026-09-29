@@ -1,0 +1,5 @@
+let low = (x: 'a) -> x & 255
+
+let main = (args: str[]) ->
+    let r = low(7u16)
+    0

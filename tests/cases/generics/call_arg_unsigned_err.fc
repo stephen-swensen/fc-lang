@@ -1,0 +1,8 @@
+// An argument is checked for each instance by the rule the concrete call
+// gets: u64 does not widen to i64.
+let g = (v: i64) -> v
+let f = (x: 'a) -> g(x)
+
+let main = (args: str[]) ->
+    let r = f(5u64)
+    0

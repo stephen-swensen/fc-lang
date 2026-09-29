@@ -1,0 +1,7 @@
+// The check follows a generic call into the callee's body.
+let big = (x: 'a) -> x + 300
+let outer = (y: 'b) -> big(y)
+
+let main = (args: str[]) ->
+    let r = outer(5u8)
+    0

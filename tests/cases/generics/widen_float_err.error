@@ -1,0 +1,1 @@
+'a and f64 widen to f64 when 'a is f32

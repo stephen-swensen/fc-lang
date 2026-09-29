@@ -1,0 +1,6 @@
+// A literal operand keeps its type: u8 + i32 widens to i32, which is not 'a.
+let big = (x: 'a) -> x + 300
+
+let main = (args: str[]) ->
+    let r = big(5u8)
+    0

@@ -1,0 +1,8 @@
+// The argument check follows a generic call into the callee's body.
+let g = (v: i64) -> v
+let inner = (x: 'b) -> g(x)
+let outer = (y: 'a) -> inner(y)
+
+let main = (args: str[]) ->
+    let r = outer(5u64)
+    0

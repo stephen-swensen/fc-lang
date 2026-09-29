@@ -1,0 +1,6 @@
+let g = (v: i64) -> v
+let apply = (f: (i64) -> i64, x: 'a) -> f(x)
+
+let main = (args: str[]) ->
+    let r = apply(g, true)
+    0

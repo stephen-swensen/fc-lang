@@ -1,0 +1,6 @@
+let g = (v: i64) -> v
+let f = (x: 'a) -> g(x)
+
+let main = (args: str[]) ->
+    let r = f(1.5)
+    0
