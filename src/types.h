@@ -189,8 +189,12 @@ Type *type_copy(Arena *a, Type *t);
 Type *type_deep_copy(Arena *a, Type *t);
 Type *type_make_const(Arena *a, Type *t);
 Type *type_strip_const(Arena *a, Type *t);
-/* The type of an element loaded from `slice`: a reference (pointer, slice or
- * any*) read out of a read-only slice is read-only too. */
+/* `t` as read out of read-only storage: a reference (pointer, slice or any*)
+ * is const-qualified, also inside an option or result. Other types are
+ * returned unchanged; a struct, tuple or union has no read-only form. */
+Type *type_read_only(Arena *a, Type *t);
+/* The type of an element loaded from `slice`: read-only (type_read_only)
+ * when the slice is. */
 Type *type_slice_elem_read(Arena *a, Type *slice);
 
 /* Queries */

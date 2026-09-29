@@ -1,0 +1,1 @@
+cannot copy shape out of read-only storage: its member 'named.s' is a writable reference; read the member in place, or declare it const

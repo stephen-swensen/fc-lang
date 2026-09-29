@@ -1,0 +1,13 @@
+// A frozen module constant lives in read-only memory, so a copy of it may not
+// hold a writable view of that memory. Regression: `let q = m.c` gave `q.s` as
+// a writable str into .rodata, and writing through it crashed at run time.
+struct holder =
+    s: str
+
+module m =
+    let c = holder { s = u8[2] { 1u8, 2u8 } }
+
+let main = (args: str[]) ->
+    let q = m.c
+    q.s[0] = 5u8
+    0

@@ -119,8 +119,8 @@ CLAUDE.md.
   `test-all` recipe shared with `test-all-O2`, `fcc --help`, README and editor
   docs fixed. The 33 `bugsearch` test headers were rewritten too. Left undone,
   optional: restructuring `tests/lsp/lsp_test.py`.
-- Still open: B30 (phase 4), B39 and B40 (phase 6), and the struct-copy
-  const question. When they are settled, move this plan to `spec/hist/`.
+- Still open: B30 (phase 4), B39 and B40 (phase 6), and B43 (generic
+  const). When they are settled, move this plan to `spec/hist/`.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
 - **Module cycles: complete rule (decided 2026-09-28).** Every reference
@@ -487,12 +487,31 @@ these. B37, B38, B41 and B42 are fixed; B39 and B40 are open.
   `structs/fixed_array_module_const_string_overflow_err`,
   `generics/fixed_array_generic_const_source_err`,
   `control_flow/for_*const_slice*`, `memory/alloc_const_slice_*`)
-- Open design question (not a bug fix): const is not carried through a
-  struct copied out of a read-only slice. `let q = ro[0]` with
-  `ro: const p[]` and `p` holding a `s: str` gives a writable `q.s`, as in
-  C's shallow const, while `ro[0].s[0] = x` is rejected. The spec says an
-  element "cannot be laundered into a writable view"; whether that should
-  reach reference fields of a copied struct is for the user to decide.
+- Read-only storage (decided and fixed). A struct copied out of read-only
+  storage dropped the const on its references: `let q = m.c` of a frozen
+  module constant gave a writable view of .rodata, and writing through it
+  segfaulted. Two sibling leaks: a reference field read by value
+  (`let t = ro[0].s`, `(*h).s`) came out writable, and a pointer inside an
+  option field (`n.next` through a `const node*`) did too, contrary to the
+  spec's own example. The decision (spec: Deep const, "Copying out of
+  read-only storage"): a reference read out of read-only storage is read-only
+  by every route (field, tuple element, index, deref, unwrap, pattern binding,
+  `for` element; `type_read_only` reaches inside options and results), and a
+  struct, tuple, union, option or result holding a writable reference cannot
+  be copied out of it (`check_readonly_copy`, `bound_type`, and a per-instance
+  check for generic code). Measured before deciding: no existing test, stdlib
+  test, demo, wolf-fc or euler-fc program is rejected. (`const/copy_out_*`,
+  `const/readonly_*`)
+- B43 (open, design question). A generic function returns a writable
+  reference read out of read-only storage when its type variable binds to a
+  reference type: `first = (xs: const 'a[]) -> xs[0]` called with a
+  `const str[]` binds `'a = str` and returns a writable `str`, where the
+  concrete `(xs: const str[]) -> xs[0]` returns `const str`. The spec's
+  `deref = (p: const 'a*) -> *p` does the same for `const str*`. The concrete
+  rule is right, so this is the "a generic instance means what the concrete
+  code means" principle again; the fix is a decision about how `const`
+  composes with type variables (for example, binding `'a` to the element as
+  read, `const str`, when matching `const 'a[]`).
 - Dead code (removed): the "update imported symbols' types" loop in
   `pass2_check` could never match, since module lets are only in member
   tables, never in the global table it searched. An instrumented build ran it

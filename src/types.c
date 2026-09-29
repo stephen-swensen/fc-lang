@@ -265,9 +265,31 @@ Type *type_make_const(Arena *a, Type *t) {
     return c;
 }
 
+Type *type_read_only(Arena *a, Type *t) {
+    if (!t) return NULL;
+    switch (t->kind) {
+    case TYPE_POINTER: case TYPE_SLICE: case TYPE_ANY_PTR:
+        return type_make_const(a, t);
+    case TYPE_OPTION: {
+        Type *inner = type_read_only(a, t->option.inner);
+        return inner == t->option.inner ? t : type_option(a, inner);
+    }
+    case TYPE_RESULT: {
+        Type *inner = type_read_only(a, t->result.inner);
+        if (inner == t->result.inner) return t;
+        Type *c = arena_alloc(a, sizeof(Type));
+        *c = *t;
+        c->result.inner = inner;
+        return c;
+    }
+    default:
+        return t;
+    }
+}
+
 Type *type_slice_elem_read(Arena *a, Type *slice) {
     Type *elem = slice->slice.elem;
-    return slice->is_const ? type_make_const(a, elem) : elem;
+    return slice->is_const ? type_read_only(a, elem) : elem;
 }
 
 bool is_str_type(Type *t) {

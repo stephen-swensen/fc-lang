@@ -1,0 +1,13 @@
+// An option of a struct holding a writable reference is copied whole, so it
+// cannot leave read-only storage either.
+struct holder =
+    s: str
+
+struct box =
+    maybe: holder?
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const box[]) box[1] { box { maybe = some(holder { s = buf }) } }
+    let o = ro[0].maybe
+    (i32) o.is_some

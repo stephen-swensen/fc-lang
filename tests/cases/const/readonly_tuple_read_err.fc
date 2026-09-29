@@ -1,0 +1,7 @@
+// An element of a tuple read out of read-only storage is read-only.
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const {str, i32}[]) {str, i32}[1] { { buf, 1 } }
+    let t = ro[0][0]
+    t[0] = 5u8
+    (i32) buf[0]

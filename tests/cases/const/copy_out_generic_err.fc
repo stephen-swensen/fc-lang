@@ -1,0 +1,13 @@
+// A generic body that copies an element out of a `const 'a[]` is judged per
+// instance: with 'a bound to a struct holding a writable reference, the
+// instance is rejected, as the same code written for that struct would be.
+struct holder =
+    s: str
+
+let first = (xs: const 'a[]) -> xs[0]
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const holder[]) holder[1] { holder { s = buf } }
+    let h = first(ro)
+    (i32) h.s.len

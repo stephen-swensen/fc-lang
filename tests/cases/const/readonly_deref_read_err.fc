@@ -1,0 +1,14 @@
+// A field read through a dereferenced read-only pointer is read-only, as it is
+// through `.` on the pointer.
+struct holder =
+    s: str
+
+let poke = (h: const holder*) ->
+    let t = (*h).s
+    t[0] = 5u8
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let h = holder { s = buf }
+    poke(&h)
+    (i32) buf[0]

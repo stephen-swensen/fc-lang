@@ -1,0 +1,14 @@
+// Dereferencing a read-only pointer to a struct holding a writable reference
+// would copy it: rejected like a copy out of a read-only slice.
+struct holder =
+    s: str
+
+let poke = (h: const holder*) ->
+    let q = *h
+    q.s[0] = 5u8
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let h = holder { s = buf }
+    poke(&h)
+    (i32) buf[0]

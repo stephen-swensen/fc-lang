@@ -1,0 +1,10 @@
+// Returning a value copies it out, so it is judged like a binding.
+struct holder =
+    s: str
+
+let first = (hs: const holder[]) -> hs[0]
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let h = first(holder[1] { holder { s = buf } })
+    (i32) h.s.len

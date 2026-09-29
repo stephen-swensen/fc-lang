@@ -1,0 +1,68 @@
+// What stays legal around read-only storage: a value holding no writable
+// reference copies freely, members are read in place (a reference comes out
+// read-only), comparison and address-of do not copy, and destructuring binds
+// read-only references. A module constant that holds a program-supplied
+// address is not frozen, so a copy of it keeps its writable address.
+struct point =
+    x: i32
+    y: i32
+
+struct named =
+    name: const str
+    at: point
+
+struct holder =
+    s: str
+    n: i32
+    maybe: str?
+
+struct dev =
+    regs: u8*
+
+module m =
+    let origin = point { x = 1, y = 2 }
+    let port = dev { regs = (u8*) 4096usize }
+
+let total = (s: const str) ->
+    let mut n = 0
+    for c in s do
+        n = n + (i32) c
+    n
+
+let first = (xs: const 'a[]) -> xs[0]
+
+let takes_writable = (p: u8*) -> (usize) p
+
+let main = (args: str[]) ->
+    // Values holding no writable reference copy freely.
+    let pts = (const point[]) point[2] { point { x = 1, y = 2 }, point { x = 3, y = 4 } }
+    let mut sum = 0
+    for p in pts do
+        sum = sum + p.x
+    let q = pts[1]
+    let o = m.origin
+    assert(sum == 4 && q.y == 4 && o.x == 1)
+    let ns = (const named[]) named[1] { named { name = "a", at = q } }
+    let n0 = ns[0]
+    assert(n0.name.len == 1 && n0.at.x == 3)
+    assert(first(pts).y == 2 && first(ns).name[0] == 'a')
+
+    // A struct holding a writable reference is read in place.
+    let mut buf = alloc(u8[2] { 7u8, 8u8 })!
+    defer free(buf)
+    let hs = (const holder[]) holder[1] { holder { s = buf, n = 5, maybe = some(buf) } }
+    let s = hs[0].s
+    let inner = hs[0].maybe!
+    assert(total(s) == 15 && total(inner) == 15 && hs[0].n == 5)
+    assert(hs[0] == hs[0])
+    let hp = &hs[0]
+    assert(hp.n == 5)
+    match hs[0] with
+    | { s = t, n = k, maybe = _ } -> assert(t[1] == 8u8 && k == 5)
+    let { s = v, n = _, maybe = _ } = hs[0]
+    assert(v[0] == 7u8)
+
+    // A module constant holding a program-supplied address is not frozen.
+    let d = m.port
+    assert(takes_writable(d.regs) == 4096usize)
+    0

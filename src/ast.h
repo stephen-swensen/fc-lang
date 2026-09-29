@@ -140,6 +140,12 @@ struct Expr {
      * so an element load must not inherit the backing's tag. PROV_UNKNOWN
      * means "not tracked here" (function results, raw-parts slices, params). */
     Provenance elem_prov;
+    /* Set by pass2 when this node copies a value out of read-only storage and
+     * the value's type involves type variables: whether the copy is allowed
+     * depends on the instance, so validate_generic_expr decides it there. For
+     * a `for`, `match` or destructuring `let` it is the element, subject or
+     * initializer that is copied into bindings. */
+    bool readonly_copy;
     union {
         /* EXPR_INT_LIT */
         struct { uint64_t value; Type *lit_type; bool out_of_range; } int_lit;

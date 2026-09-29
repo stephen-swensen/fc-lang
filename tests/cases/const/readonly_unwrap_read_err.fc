@@ -1,0 +1,11 @@
+// Unwrapping an option read out of read-only storage yields a read-only
+// reference.
+struct holder =
+    maybe: str?
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const holder[]) holder[1] { holder { maybe = some(buf) } }
+    let t = ro[0].maybe!
+    t[0] = 5u8
+    (i32) buf[0]

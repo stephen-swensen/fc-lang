@@ -1,0 +1,11 @@
+// The element of a `for` over a read-only slice is a copy, so it may not hold a
+// writable reference. Iterate by index and read the member in place instead.
+struct holder =
+    s: str
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const holder[]) holder[1] { holder { s = buf } }
+    for h in ro do
+        h.s[0] = 5u8
+    (i32) buf[0]

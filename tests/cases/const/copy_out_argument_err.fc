@@ -1,0 +1,13 @@
+// Passing a value by value copies it, so a struct holding a writable
+// reference cannot be passed straight out of read-only storage.
+struct holder =
+    s: str
+
+let clear = (h: holder) ->
+    h.s[0] = 0u8
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { 1u8, 1u8 })!
+    let ro = (const holder[]) holder[1] { holder { s = buf } }
+    clear(ro[0])
+    (i32) buf[0]

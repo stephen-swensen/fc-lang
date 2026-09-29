@@ -1,0 +1,1 @@
+cannot copy holder out of read-only storage: its member 's' is a writable reference; read the member in place, or declare it const

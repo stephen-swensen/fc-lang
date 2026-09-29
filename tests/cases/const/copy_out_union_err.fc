@@ -1,0 +1,16 @@
+// A union holding a writable reference in one of its payloads cannot be copied
+// out of read-only storage; the message names the variant and member.
+struct holder =
+    s: str
+
+union shape =
+    | named(holder)
+    | empty
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const shape[]) shape[1] { shape.named(holder { s = buf }) }
+    let x = ro[0]
+    match x with
+    | named(h) -> (i32) h.s.len
+    | empty -> 0

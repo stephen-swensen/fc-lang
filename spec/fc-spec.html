@@ -1269,6 +1269,27 @@ read_only(words)           // ok — widens to const str[]
 
 Adding const to the container is what permits dropping it from the element: the read-only slice forbids the slot write and still hands the element back as `const str`, so it grants strictly less. The reverse — `str[]` to `(const str)[]` — is **not** a widen, and is rejected: it would park a read-only element in a slot another holder still reads as writable. An explicit cast spells either direction, as it does for every const conversion.
 
+##### Copying out of read-only storage
+
+*Read-only storage* is memory reached through a read-only view — an element of a `const T[]`, the pointee of a `const T*`, a field of either — or emitted for a frozen module constant. Two rules keep it read-only however it is read:
+
+- **A reference read out of it is read-only**, whatever the route: a field, a tuple element, an index, a dereference, an unwrap (`x!`, `x?`), a pattern binding, a `for` element. A reference wrapped in an option or result reads with the reference read-only (`n.next` above is `const node*?`).
+- **A value holding a writable reference cannot be copied out of it.** A struct, tuple, union, option or result with a writable pointer or slice anywhere in its own bytes has no read-only form a copy could take, so binding, passing, returning or storing such a value straight out of read-only storage is a compile error. A copy of a frozen module constant would otherwise hand out a writable view of memory that is read-only at run time.
+
+```fc
+struct holder =
+    s: str
+
+let f = (hs: const holder[]) ->
+    let s = hs[0].s          // ok: const str, read in place
+    let { s = t } = hs[0]    // ok: destructuring binds t as const str
+    let same = hs[0] == hs[0]    // ok: comparison does not copy
+    // let h = hs[0]         // ERROR: cannot copy holder out of read-only storage
+    s.len
+```
+
+A value that holds no writable reference — only values, or references declared `const` — copies freely, so a table meant to be read-only should declare its reference fields `const` (`s: const str`). Taking the address (`&hs[0]`) gives a read-only pointer and copies nothing. In generic code the rule is judged per instance: `(xs: const 'a[]) -> xs[0]` is rejected for an `'a` holding a writable reference, as the same code written for that type would be.
+
 #### Write rejection
 
 The compiler rejects these operations through const:
@@ -1291,7 +1312,7 @@ These are `diag_error` (non-fatal) — the compiler reports all const violations
 Type variables can bind to const types. `const` composes with type variable syntax:
 
 ```fc
-let deref = (p: const 'a*) -> *p    // works for any T — const preserved through monomorphization
+let deref = (p: const 'a*) -> *p    // const preserved through monomorphization; *p copies, so 'a must hold no writable reference
 
 deref(&x)                            // 'a = i32, param is const i32*
 ```

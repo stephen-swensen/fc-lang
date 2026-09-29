@@ -477,6 +477,17 @@ typedef struct {
      * pattern checkers by their callers; PROV_UNKNOWN everywhere else. Without
      * it every non-`let` binding form launders its source's tag. */
     Provenance bind_prov;
+    /* Set with bind_prov when the value being destructured or iterated is read
+       from read-only storage (reads_readonly_storage): each binding then takes
+       its piece read-only (bound_type). bind_owner is the for/match/let node,
+       marked readonly_copy when a piece's type involves type variables. */
+    bool bind_readonly;
+    Expr *bind_owner;
+    /* Set by a parent immediately before checking a child it uses without
+       copying it (a field or index object, an & operand, an ==/!= operand, a
+       match subject, a destructured value, an unwrapped operand); check_expr
+       reads and clears it on entry. See check_readonly_copy. */
+    bool in_projection_position;
     SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
     ModuleScopeChain *parent_modules;  /* chain of ancestor module symtabs (nearest first) */
     const char *current_ns;      /* current namespace for namespace isolation */
@@ -2384,6 +2395,7 @@ static bool atomic_pointee_ok(Type *pt, SrcLoc loc, const char *op_name) {
 }
 
 static Type *check_match(CheckCtx *ctx, Expr *e);
+static Type *bound_type(CheckCtx *ctx, Type *t, SrcLoc loc);
 
 /* ---- Generic unification ---- */
 
@@ -2885,7 +2897,7 @@ static void check_destruct_pattern(CheckCtx *ctx, Pattern *pat, Type *struct_typ
                 inner->binding.codegen_name = local_c_name(ctx->arena, inner->binding.name);
             Provenance prov = bound_prov(ctx, field_type);
             scope_add(ctx->scope, inner->binding.name, inner->binding.codegen_name,
-                      field_type, is_mut, inner->loc)->prov = prov;
+                      bound_type(ctx, field_type, inner->loc), is_mut, inner->loc)->prov = prov;
         } else if (inner->kind == PAT_WILDCARD) {
             /* skip this field */
         } else if (inner->kind == PAT_STRUCT) {
@@ -2934,7 +2946,7 @@ static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is
                 inner->binding.codegen_name = local_c_name(ctx->arena, inner->binding.name);
             Provenance prov = bound_prov(ctx, elem_type);
             scope_add(ctx->scope, inner->binding.name, inner->binding.codegen_name,
-                      elem_type, is_mut, inner->loc)->prov = prov;
+                      bound_type(ctx, elem_type, inner->loc), is_mut, inner->loc)->prov = prov;
         } else if (inner->kind == PAT_WILDCARD) {
             /* skip this element */
         } else if (inner->kind == PAT_STRUCT) {
@@ -3011,7 +3023,8 @@ static void bind_for_element(CheckCtx *ctx, Expr *e, Type *elem_type) {
         if (!e->for_expr.var_codegen_name)
             e->for_expr.var_codegen_name = local_c_name(ctx->arena, e->for_expr.var);
         Provenance prov = bound_prov(ctx, elem_type);
-        scope_add(ctx->scope, e->for_expr.var, e->for_expr.var_codegen_name, elem_type,
+        scope_add(ctx->scope, e->for_expr.var, e->for_expr.var_codegen_name,
+                  bound_type(ctx, elem_type, e->for_expr.var_loc),
                   false, e->for_expr.var_loc)->prov = prov;
     }
 }
@@ -3148,6 +3161,138 @@ static bool is_write_through_const(Expr *target) {
            is_write_through_const_type(target);
 }
 
+/* Does reading `e` read storage the program may only read? That is storage
+ * reached through a const view (a const slice's element, a const pointer's
+ * pointee, a field of either) or emitted for a frozen module constant. A
+ * reference read out of it is read-only (type_read_only), and a value holding
+ * a writable reference may not be copied out of it (check_readonly_copy).
+ * An unwrap (`x!`, `x?`) reads what `x` reads. A module constant that holds a
+ * program-supplied address is not frozen, and writes through what it holds
+ * stay legal, so it is not read-only storage here. */
+static bool reads_readonly_storage(Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case EXPR_UNARY_POSTFIX:
+        return (e->unary_postfix.op == TOK_BANG ||
+                e->unary_postfix.op == TOK_QUESTION) &&
+               reads_readonly_storage(e->unary_postfix.operand);
+    case EXPR_FIELD:
+        if (reads_readonly_storage(e->field.object)) return true;
+        break;
+    case EXPR_INDEX:   /* a tuple element; a slice element is judged below */
+        if (e->index.object->type && e->index.object->type->kind == TYPE_STRUCT &&
+            reads_readonly_storage(e->index.object))
+            return true;
+        break;
+    default:
+        break;
+    }
+    return is_write_through_const_type(e) || reads_frozen_const_storage(e);
+}
+
+/* The first writable reference `t` holds by value, as a member path from `t`
+ * ("s", "inner.s", "circle.p"), or NULL when it holds none; "" means `t` is
+ * itself one. Options, results and fixed arrays are looked through; pointers
+ * are not followed, since what they point at is not part of the value. A
+ * field type named by a stub is looked up in the global table, which has
+ * every type under its mangled name once pass 0 has canonicalized them.
+ * Unlike type_has_provenance, a const reference or a function value does not
+ * count, and an unknown stub counts as holding nothing. */
+static const char *writable_ref_path(Arena *arena, SymbolTable *symtab, Type *t,
+                                     int depth) {
+    if (!t || depth > 32) return NULL;
+    switch (t->kind) {
+    case TYPE_POINTER: case TYPE_SLICE: case TYPE_ANY_PTR:
+        return t->is_const ? NULL : "";
+    case TYPE_OPTION:
+        return writable_ref_path(arena, symtab, t->option.inner, depth + 1);
+    case TYPE_RESULT:
+        return writable_ref_path(arena, symtab, t->result.inner, depth + 1);
+    case TYPE_FIXED_ARRAY:
+        return writable_ref_path(arena, symtab, t->fixed_array.elem, depth + 1);
+    case TYPE_STRUCT:
+        for (int i = 0; i < t->struc.field_count; i++) {
+            const char *sub = writable_ref_path(arena, symtab,
+                                                t->struc.fields[i].type, depth + 1);
+            if (!sub) continue;
+            const char *name = t->struc.is_tuple
+                ? arena_sprintf(arena, "%d", i) : t->struc.fields[i].name;
+            return *sub ? arena_sprintf(arena, "%s.%s", name, sub) : name;
+        }
+        return NULL;
+    case TYPE_UNION:
+        for (int i = 0; i < t->unio.variant_count; i++) {
+            const char *sub = writable_ref_path(arena, symtab,
+                                                t->unio.variants[i].payload, depth + 1);
+            if (!sub) continue;
+            const char *name = t->unio.variants[i].name;
+            return *sub ? arena_sprintf(arena, "%s.%s", name, sub) : name;
+        }
+        return NULL;
+    case TYPE_STUB: {
+        Symbol *sym = t->stub.name ? symtab_lookup_type(symtab, t->stub.name) : NULL;
+        if (!sym || !sym->type) return NULL;
+        Type *st = sym->type;
+        if (t->stub.type_arg_count > 0 && sym->is_generic &&
+            sym->type_param_count == t->stub.type_arg_count)
+            st = type_substitute(arena, st, sym->type_params, t->stub.type_args,
+                                 sym->type_param_count);
+        return writable_ref_path(arena, symtab, st, depth + 1);
+    }
+    default:
+        return NULL;
+    }
+}
+
+/* The diagnostic for a copy out of read-only storage of a value of type `t`
+ * whose member `path` is a writable reference. */
+static char *readonly_copy_error(Type *t, const char *path) {
+    if (!*path)
+        return str_sprintf("cannot copy a writable %s out of read-only storage",
+                           type_name(t));
+    return str_sprintf("cannot copy %s out of read-only storage: its member '%s' "
+        "is a writable reference; read the member in place, or declare it const",
+        type_name(t), path);
+}
+
+/* A value read out of read-only storage (reads_readonly_storage) may not be
+ * copied when it holds a writable reference: the copy would give write access
+ * to memory the program may only read, and FC has no read-only struct type to
+ * give the copy instead. A reference itself is loaded read-only by the access
+ * that reads it, so in practice this rejects structs, tuples and unions. When
+ * the type involves type variables the answer depends on the instance, so the
+ * node is marked for validate_generic_expr. */
+static void check_readonly_copy(CheckCtx *ctx, Expr *e, Type *t) {
+    if (!reads_readonly_storage(e)) return;
+    if (type_contains_type_var(t)) { e->readonly_copy = true; return; }
+    const char *path = writable_ref_path(ctx->arena, ctx->symtab, t, 0);
+    if (!path) return;
+    char *msg = readonly_copy_error(t, path);
+    diag_error(e->loc, "%s", msg);
+    free(msg);
+}
+
+/* The type a pattern or loop binding takes for its piece of the value being
+ * destructured or iterated. When that value is read from read-only storage
+ * (ctx->bind_readonly), a reference comes out read-only, and a piece holding
+ * a writable reference cannot be bound, for the reason a copy of it cannot
+ * (check_readonly_copy). */
+static Type *bound_type(CheckCtx *ctx, Type *t, SrcLoc loc) {
+    if (!ctx->bind_readonly || !t) return t;
+    Type *ro = type_read_only(ctx->arena, t);
+    if (type_contains_type_var(ro)) {
+        if (ctx->bind_owner) ctx->bind_owner->readonly_copy = true;
+        return ro;
+    }
+    const char *path = writable_ref_path(ctx->arena, ctx->symtab, ro, 0);
+    if (path) {
+        char *msg = readonly_copy_error(ro, path);
+        diag_error(loc, "%s", msg);
+        free(msg);
+    }
+    return ro;
+}
+
 /* Provenance of the storage an lvalue names: where a write to it lands, and
  * equally where its address points (`&lv`). Walks the lvalue path (field /
  * index / deref / deref-field) down to the root so the escape check can ask
@@ -3277,6 +3422,7 @@ typedef struct {
     bool inf_reported;
     GenSeen *seen;
     int seen_n, seen_cap;
+    SymbolTable *symtab;    /* for per-instance type queries (writable_ref_path) */
 } GenValidation;
 
 /* Record (sym, desc) as validated. Returns true if newly added (caller should
@@ -3734,6 +3880,31 @@ static void check_generic_type_operand(Expr *e, Type *t, GenericCheck *gc) {
  * properties on type variables, const params read as values, sizes that use
  * const params, and calls into other generic functions. Children are checked
  * first, so inner errors are reported before outer ones. */
+/* A copy out of read-only storage deferred at template time (check_readonly_copy
+ * and bound_type mark the node): judge it under this instance's bindings, as
+ * the concrete code would be judged. For a for, match or destructuring let the
+ * copied value is the element, subject or initializer. */
+static void check_generic_readonly_copy(Expr *e, GenericCheck *gc) {
+    Type *t = e->type;
+    if (e->kind == EXPR_FOR) {
+        Type *it = e->for_expr.iter->type;
+        t = it && it->kind == TYPE_SLICE ? it->slice.elem : NULL;
+    } else if (e->kind == EXPR_MATCH) {
+        t = e->match_expr.subject->type;
+    } else if (e->kind == EXPR_LET_DESTRUCT) {
+        t = e->let_destruct.init->type;
+    }
+    if (!t) return;
+    Type *ct = type_read_only(gc->arena,
+        type_substitute(gc->arena, t, gc->type_params, gc->bindings, gc->ntp));
+    const char *path = writable_ref_path(gc->arena, gc->run->symtab, ct, 0);
+    if (!path) return;
+    char *msg = readonly_copy_error(ct, path);
+    gen_inst_diag(gc->frame, e->loc, "%s", msg);
+    free(msg);
+    gc->ok = false;
+}
+
 static void validate_generic_expr(Expr *e, void *check) {
     GenericCheck *gc = check;
     switch (e->kind) {
@@ -3749,6 +3920,7 @@ static void validate_generic_expr(Expr *e, void *check) {
         break;
     }
     expr_for_each_child(e, validate_generic_expr, check);
+    if (e->readonly_copy) check_generic_readonly_copy(e, gc);
     switch (e->kind) {
     case EXPR_BINARY:       check_generic_binary(e, gc); break;
     case EXPR_UNARY_PREFIX: check_generic_unary(e, gc); break;
@@ -3997,7 +4169,7 @@ static Type *check_pointer_field(CheckCtx *ctx, Expr *e, Type *ptr_type) {
                 e->elem_prov = e->field.object->elem_prov;
             } else {
                 e->type = ft;
-                if (through_const) e->type = type_make_const(ctx->arena, e->type);
+                if (through_const) e->type = type_read_only(ctx->arena, e->type);
                 /* Propagate provenance from the pointed-to struct. */
                 if (type_has_provenance(ft)) {
                     e->prov = e->field.object->prov;
@@ -4131,8 +4303,10 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     /* Callee and reflection positions are not value positions, so the two
      * function-value checks below are skipped there. */
     bool in_value_position = !(ctx->in_callee_position || ctx->in_reflection_position);
+    bool projected = ctx->in_projection_position;
     ctx->in_callee_position = false;
     ctx->in_reflection_position = false;
+    ctx->in_projection_position = false;
     /* Track conditional context for static_assert placement (see the
      * CheckCtx field). */
     bool saved_cond_ctx = ctx->in_conditional;
@@ -4154,6 +4328,8 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
     Type *t = check_expr_inner(ctx, e);
     ctx->in_value_position = saved_vp;
     ctx->in_conditional = saved_cond_ctx;
+    if (in_value_position && !projected && t && !type_is_error(t))
+        check_readonly_copy(ctx, e, t);
     /* Reject a generic function declaration used as a value: it has no single
      * concrete type until instantiated, so the fix is a wrapper lambda that
      * instantiates it. The test is the resolved symbol's is_generic flag plus
@@ -4514,6 +4690,7 @@ static Type *check_generic_call(CheckCtx *ctx, Expr *e, Type *ft, Symbol *callee
                     if (d > seed_d) seed_d = d;
                 }
                 GenValidation run = {0};
+                run.symtab = ctx->symtab;
                 gen_seen_add(&run, ctx->arena, callee_sym,
                     arena_sprintf(ctx->arena, "%d:%s", seed_d, inst_desc));
                 /* Entry (root) chain frame: this instantiation, required by
@@ -5111,13 +5288,13 @@ static Type *check_value_field(CheckCtx *ctx, Expr *e, Type *obj_type) {
                     e->elem_prov = e->field.object->elem_prov;
                 }
             }
-            /* Deep const, rooted at a binding instead of a pointer: a
-               reference read out of a frozen module constant carries the
-               freeze with it, so it cannot be handed to a callee as a
-               writable view of read-only memory. Value fields need no type
-               change; a write to one is rejected on the path. */
-            if (reads_frozen_const_storage(e->field.object))
-                e->type = type_make_const(ctx->arena, e->type);
+            /* Deep const: a reference read out of read-only storage (through
+               a const view, or from a frozen module constant) is read-only,
+               so it cannot be handed on as a writable view of memory the
+               program may only read. Value fields need no type change; a
+               write to one is rejected on the path. */
+            if (reads_readonly_storage(e->field.object))
+                e->type = type_read_only(ctx->arena, e->type);
             return e->type;
         }
     }
@@ -5188,6 +5365,7 @@ static Type *check_field(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
 
+    ctx->in_projection_position = true;
     Type *obj_type = check_expr(ctx, e->field.object);
     if (type_is_error(obj_type)) { return poison(e); }
 
@@ -6049,6 +6227,7 @@ static Type *check_unary_prefix(CheckCtx *ctx, Expr *e) {
             return check_expr(ctx, e);
         }
     }
+    ctx->in_projection_position = e->unary_prefix.op == TOK_AMP;
     Type *ot = check_expr(ctx, e->unary_prefix.operand);
     if (reject_unresolved_recursive_value(e->unary_prefix.operand)) { return poison(e); }
     if (type_is_error(ot)) { return poison(e); }
@@ -6098,7 +6277,7 @@ static Type *check_unary_prefix(CheckCtx *ctx, Expr *e) {
          * reference loaded out of a read-only pointer stays read-only,
          * the rule indexing a `const T[]` applies to its elements. A value
          * pointee is not writable anyway and needs no type change. */
-        if (ot->is_const) e->type = type_make_const(ctx->arena, e->type);
+        if (ot->is_const) e->type = type_read_only(ctx->arena, e->type);
     } else {
         diag_error(e->loc, "unsupported unary operator");
         return poison(e);
@@ -6771,14 +6950,19 @@ static Type *check_for(CheckCtx *ctx, Expr *e) {
              * `for p in i32*[1] { &a }` yields a stack pointer, while
              * iterating a stack slice of heap slices does not. */
             Provenance saved_bind = ctx->bind_prov;
+            bool saved_ro = ctx->bind_readonly;
+            Expr *saved_owner = ctx->bind_owner;
             ctx->bind_prov = e->for_expr.iter->elem_prov;
-            /* The element reads as indexing reads it: const through a
-             * read-only slice. */
-            Type *elem = type_slice_elem_read(ctx->arena, iter_type);
-            if (reads_frozen_const_storage(e->for_expr.iter))
-                elem = type_make_const(ctx->arena, elem);
-            bind_for_element(ctx, e, elem);
+            /* The element reads as indexing reads it: read-only through a
+             * read-only slice, where a copy of it is judged like any other
+             * (bound_type). */
+            ctx->bind_readonly = iter_type->is_const ||
+                                 reads_frozen_const_storage(e->for_expr.iter);
+            ctx->bind_owner = e;
+            bind_for_element(ctx, e, iter_type->slice.elem);
             ctx->bind_prov = saved_bind;
+            ctx->bind_readonly = saved_ro;
+            ctx->bind_owner = saved_owner;
             if (e->for_expr.index_var) {
                 if (!e->for_expr.index_codegen_name)
                     e->for_expr.index_codegen_name =
@@ -7191,7 +7375,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return check_ident(ctx, e);
 
     case EXPR_BINARY: {
+        /* Comparing for equality reads its operands without copying them. */
+        bool eq = e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ;
+        ctx->in_projection_position = eq;
         Type *lt = check_expr(ctx, e->binary.left);
+        ctx->in_projection_position = eq;
         Type *rt = check_expr(ctx, e->binary.right);
         if (reject_unresolved_recursive_value(e->binary.left) ||
             reject_unresolved_recursive_value(e->binary.right)) {
@@ -7276,12 +7464,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return check_unary_prefix(ctx, e);
 
     case EXPR_UNARY_POSTFIX: {
+        ctx->in_projection_position = true;
         Type *ot = check_expr(ctx, e->unary_postfix.operand);
         if (type_is_error(ot)) { return poison(e); }
+        /* The payload is read out of the operand's storage, read-only when
+         * that is (the result's copy, if any, is judged where it is used). */
+        bool ro = reads_readonly_storage(e->unary_postfix.operand);
         if (e->unary_postfix.op == TOK_BANG) {
             /* Option unwrap T? -> T; result unwrap T! -> T (aborts with the code) */
             if (ot->kind == TYPE_RESULT) {
                 e->type = ot->result.inner;
+                if (ro) e->type = type_read_only(ctx->arena, e->type);
                 e->prov = e->unary_postfix.operand->prov;
                 e->elem_prov = e->unary_postfix.operand->elem_prov;
                 return e->type;
@@ -7291,6 +7484,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 return poison(e);
             }
             e->type = ot->option.inner;
+            if (ro) e->type = type_read_only(ctx->arena, e->type);
             e->prov = e->unary_postfix.operand->prov;
             e->elem_prov = e->unary_postfix.operand->elem_prov;
             return e->type;
@@ -7311,6 +7505,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 return poison(e);
             }
             e->type = ot->kind == TYPE_RESULT ? ot->result.inner : ot->option.inner;
+            if (ro) e->type = type_read_only(ctx->arena, e->type);
             e->prov = e->unary_postfix.operand->prov;
             LambdaCtx *lc = ctx->lambda_ctx;
             DA_APPEND(lc->props, lc->prop_count, lc->prop_cap, e);
@@ -7460,6 +7655,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return check_let(ctx, e);
 
     case EXPR_LET_DESTRUCT: {
+        ctx->in_projection_position = true;   /* its pieces are judged as bound */
         Type *t = check_expr(ctx, e->let_destruct.init);
         if (type_is_error(t)) {
             e->type = type_void();
@@ -7486,12 +7682,18 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
          * it inherits that value's provenance; otherwise `let {p, n} = {&x, 1}`
          * would drop the stack tag and let `p` escape the frame. */
         Provenance saved_bind = ctx->bind_prov;
+        bool saved_ro = ctx->bind_readonly;
+        Expr *saved_owner = ctx->bind_owner;
         ctx->bind_prov = e->let_destruct.init->prov;
+        ctx->bind_readonly = reads_readonly_storage(e->let_destruct.init);
+        ctx->bind_owner = e;
         if (e->let_destruct.pattern->kind == PAT_TUPLE)
             check_tuple_destruct(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
         else
             check_destruct_pattern(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
         ctx->bind_prov = saved_bind;
+        ctx->bind_readonly = saved_ro;
+        ctx->bind_owner = saved_owner;
         check_dup_bindings(ctx->scope, first_local, "pattern");
 
         e->type = type_void();
@@ -7652,6 +7854,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     case EXPR_DEREF_FIELD: {
         /* Produced only by check_field, which rewrites a `.`-on-pointer
            EXPR_FIELD to this kind; the parser never emits it. */
+        ctx->in_projection_position = true;
         Type *obj_type = check_expr(ctx, e->field.object);
         if (type_is_error(obj_type)) { return poison(e); }
         if (obj_type->kind != TYPE_POINTER) {
@@ -7662,6 +7865,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     }
 
     case EXPR_INDEX: {
+        ctx->in_projection_position = true;
         Type *obj_type = check_expr(ctx, e->index.object);
         Type *idx_type = check_expr(ctx, e->index.index);
         if (reject_unresolved_recursive_value(e->index.object) ||
@@ -7692,6 +7896,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 return poison(e);
             }
             e->type = obj_type->struc.fields[(int)idx].type;
+            if (reads_readonly_storage(e->index.object))
+                e->type = type_read_only(ctx->arena, e->type);
             if (type_has_provenance(e->type))
                 e->prov = e->index.object->prov;
             return e->type;
@@ -7712,7 +7918,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
              * view or a frozen module constant. */
             e->type = type_slice_elem_read(ctx->arena, obj_type);
             if (reads_frozen_const_storage(e->index.object))
-                e->type = type_make_const(ctx->arena, e->type);
+                e->type = type_read_only(ctx->arena, e->type);
             /* A load yields the stored value, whose provenance is the
              * container's element provenance, not the backing store's. A heap
              * slice kept in a stack slice stays freeable; a stack pointer kept
@@ -8298,8 +8504,8 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
         if (!pat->binding.codegen_name)
             pat->binding.codegen_name = local_c_name(ctx->arena, pat->binding.name);
         Provenance prov = bound_prov(ctx, type);
-        scope_add(ctx->scope, pat->binding.name, pat->binding.codegen_name, type, false,
-                  pat->loc)->prov = prov;
+        scope_add(ctx->scope, pat->binding.name, pat->binding.codegen_name,
+                  bound_type(ctx, type, pat->loc), false, pat->loc)->prov = prov;
         break;
     case PAT_INT_LIT:
         if (type->kind == TYPE_ENUM) {
@@ -9378,6 +9584,7 @@ static void check_match_exhaustiveness(CheckCtx *ctx, Expr *e, Type *subj_type) 
 }
 
 static Type *check_match(CheckCtx *ctx, Expr *e) {
+    ctx->in_projection_position = true;   /* its pieces are judged as bound */
     Type *subj_type = check_expr(ctx, e->match_expr.subject);
     if (reject_unresolved_recursive_value(e->match_expr.subject)) { return poison(e); }
     subj_type = resolve_type(ctx, subj_type);
@@ -9436,9 +9643,15 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
          * subject, so it inherits the subject's provenance: returning p from
          * `match some(&x) with | some(p) -> p` is rejected as `some(&x)!` is. */
         Provenance saved_bind = ctx->bind_prov;
+        bool saved_ro = ctx->bind_readonly;
+        Expr *saved_owner = ctx->bind_owner;
         ctx->bind_prov = e->match_expr.subject->prov;
+        ctx->bind_readonly = reads_readonly_storage(e->match_expr.subject);
+        ctx->bind_owner = e;
         check_match_pattern(ctx, pat, subj_type, /*reject_bindings=*/false);
         ctx->bind_prov = saved_bind;
+        ctx->bind_readonly = saved_ro;
+        ctx->bind_owner = saved_owner;
         check_dup_bindings(arm_scope, 0, "pattern");
 
         /* Type-check the optional `when` guard in the arm scope, so

@@ -1,0 +1,17 @@
+// A pointer in an option field read through a read-only pointer is read-only
+// too (spec: Deep const, `n.next` is `const node*?`). Regression: the option
+// kept its writable pointer, so a write reached the next node.
+struct node =
+    data: i32
+    next: node*?
+
+let bump = (n: const node*) ->
+    match n.next with
+    | some(p) -> p.data = 9
+    | none -> void()
+
+let main = (args: str[]) ->
+    let mut second = node { data = 1, next = none(node*) }
+    let first = node { data = 0, next = some(&second) }
+    bump(&first)
+    second.data

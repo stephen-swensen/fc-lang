@@ -1,0 +1,16 @@
+// A struct field reached through a read-only pointer is read-only storage too,
+// so a struct field holding a writable reference cannot be copied out of it.
+struct holder =
+    s: str
+
+struct outer =
+    inner: holder
+
+let peek = (o: const outer*) ->
+    let h = o.inner
+    h.s.len
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let o = outer { inner = holder { s = buf } }
+    (i32) peek(&o)

@@ -1,0 +1,15 @@
+// A match binding is a copy of its piece of the subject: out of read-only
+// storage it may not hold a writable reference.
+struct holder =
+    s: str
+
+struct box =
+    maybe: holder?
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const box[]) box[1] { box { maybe = some(holder { s = buf }) } }
+    match ro[0].maybe with
+    | some(h) -> h.s[0] = 5u8
+    | none -> void()
+    (i32) buf[0]
