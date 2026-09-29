@@ -1,0 +1,19 @@
+// The instance a generic struct literal makes is the one its type names, and
+// that instance's static_assert is still checked: at 'n = 4 the literal is a
+// holder<8>, which holder rejects.
+struct wide =
+    limbs: u8['n]
+
+struct holder =
+    w: wide<'m>
+    static_assert('m > 8, "holder too small")
+
+let dbl = (a: wide<'n>) ->
+    default(wide<'n * 2>)
+
+let wrap = (a: wide<'n>) ->
+    holder { w = dbl(a) }
+
+let main = (args: str[]) ->
+    let h = wrap(default(wide<4>))
+    (i32) h.w.limbs.len

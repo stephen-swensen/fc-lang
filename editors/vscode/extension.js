@@ -2,7 +2,7 @@
 //
 // VSCode's extension host is Node/Electron, so we drive `fcc --lsp` directly
 // with the built-in `child_process` + a tiny JSON-RPC transport. No npm install,
-// no vscode-languageclient. `make install-vscode` is therefore a plain copy.
+// no vscode-languageclient; `make install-vscode` packages these files as a .vsix.
 
 const vscode = require("vscode");
 const cp = require("child_process");

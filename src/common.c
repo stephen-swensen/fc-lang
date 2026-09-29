@@ -16,18 +16,17 @@ int64_t fc_len_max(void) {
 
 /* ---- String-literal decoding ---- */
 
-static int hex_digit_val(char c) {
+int hex_digit_val(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return 0;
+    return -1;
 }
 
 /* Decode string-literal source text into raw bytes. The lexer has already
- * rejected malformed escapes, so the decode is total. Writes to `out` when
- * non-NULL and always returns the byte count, so one routine both sizes a
- * buffer and fills it: every consumer's length and codegen's bytes come from
- * the same place and cannot disagree. */
+ * rejected malformed escapes, so every input decodes. Writes to `out` when
+ * non-NULL and always returns the byte count, so the same routine sizes a
+ * buffer and fills it. */
 int decode_str_lit(const char *s, int slen, unsigned char *out) {
     int n = 0;
     for (int i = 0; i < slen; i++) {
@@ -62,6 +61,11 @@ int decode_str_lit(const char *s, int slen, unsigned char *out) {
     return n;
 }
 
+static _Noreturn void out_of_memory(void) {
+    fprintf(stderr, "fcc: out of memory\n");
+    exit(1);
+}
+
 /* ---- Arena allocator ---- */
 
 static ArenaPage *arena_new_page(size_t min_size) {
@@ -69,8 +73,7 @@ static ArenaPage *arena_new_page(size_t min_size) {
     if (min_size > size) size = min_size;
     ArenaPage *page = malloc(sizeof(ArenaPage) + size);
     if (!page) {
-        fprintf(stderr, "fcc: out of memory\n");
-        exit(1);
+        out_of_memory();
     }
     page->next = NULL;
     page->used = 0;
@@ -100,13 +103,20 @@ void *arena_alloc(Arena *a, size_t size) {
 }
 
 char *arena_strdup(Arena *a, const char *s, int len) {
-    /* A negative length is always a caller bug (e.g. a source-span subtraction
-       across unrelated buffers); the size_t cast would turn it into an absurd
-       allocation. Fail crisply instead of dying with "out of memory". */
+    /* A negative length is a caller bug (e.g. a source-span subtraction across
+       unrelated buffers); the size_t cast would turn it into a huge
+       allocation and an "out of memory" exit instead of a clear failure. */
     assert(len >= 0);
     char *dup = arena_alloc(a, (size_t)len + 1);
     memcpy(dup, s, (size_t)len);
     dup[len] = '\0';
+    return dup;
+}
+
+void *arena_dup(Arena *a, const void *src, int count, size_t size) {
+    if (count <= 0) return NULL;
+    void *dup = arena_alloc(a, size * (size_t)count);
+    memcpy(dup, src, size * (size_t)count);
     return dup;
 }
 
@@ -123,8 +133,8 @@ void arena_free(Arena *a) {
 
 /* ---- Exact-size string formatting ---- */
 
-/* Measure with a throwaway pass, then format for real. The va_list is consumed
- * by the measuring pass, so the copy is mandatory. */
+/* The formatted length. Measures on a copy of `ap`, because vsnprintf consumes
+ * its va_list and the caller still needs `ap` for the real pass. */
 static int format_len(const char *fmt, va_list ap) {
     va_list probe;
     va_copy(probe, ap);
@@ -140,8 +150,7 @@ char *str_vsprintf(const char *fmt, va_list ap) {
     int n = format_len(fmt, ap);
     char *buf = malloc((size_t)n + 1);
     if (!buf) {
-        fprintf(stderr, "fcc: out of memory\n");
-        exit(1);
+        out_of_memory();
     }
     vsnprintf(buf, (size_t)n + 1, fmt, ap);
     return buf;
@@ -172,11 +181,40 @@ char *str_appendf(char *acc, const char *fmt, ...) {
     size_t base = acc ? strlen(acc) : 0;
     char *buf = realloc(acc, base + (size_t)n + 1);
     if (!buf) {
-        fprintf(stderr, "fcc: out of memory\n");
-        exit(1);
+        out_of_memory();
     }
     vsnprintf(buf + base, (size_t)n + 1, fmt, ap);
     va_end(ap);
+    return buf;
+}
+
+/* ---- Strings and files ---- */
+
+char *str_ndup(const char *s, size_t n) {
+    char *copy = malloc(n + 1);
+    if (!copy) out_of_memory();
+    memcpy(copy, s, n);
+    copy[n] = '\0';
+    return copy;
+}
+
+char *str_dup(const char *s) {
+    return str_ndup(s, strlen(s));
+}
+
+char *read_file(const char *path, int *len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    char *buf = NULL;
+    long size = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+    if (size >= 0 && fseek(f, 0, SEEK_SET) == 0) {
+        buf = malloc((size_t)size + 1);
+        if (!buf) out_of_memory();
+        size_t got = fread(buf, 1, (size_t)size, f);
+        buf[got] = '\0';
+        if (len) *len = (int)got;
+    }
+    fclose(f);
     return buf;
 }
 
@@ -228,7 +266,7 @@ const char *intern(InternTable *t, const char *s, int len) {
     for (;;) {
         InternEntry *e = &t->entries[idx];
         if (!e->str) {
-            /* Empty slot — insert */
+            /* Empty slot: insert */
             char *interned = arena_strdup(t->arena, s, len);
             e->str = interned;
             e->length = len;
@@ -253,8 +291,7 @@ const char *intern_sprintf(InternTable *t, const char *fmt, ...) {
     int n = format_len(fmt, ap);
     char *buf = malloc((size_t)n + 1);
     if (!buf) {
-        fprintf(stderr, "fcc: out of memory\n");
-        exit(1);
+        out_of_memory();
     }
     vsnprintf(buf, (size_t)n + 1, fmt, ap);
     va_end(ap);
@@ -265,13 +302,13 @@ const char *intern_sprintf(InternTable *t, const char *fmt, ...) {
 
 /* ---- C identifier hygiene ---- */
 
-/* C reserved spellings that FC permits as identifiers and that therefore must
- * be escaped before reaching C scope. Covers C11 keywords, the `_Capital`
- * keyword family, and the C23 keywords plus the <stdbool.h>/<assert.h> macros
- * the prelude pulls in (bool/true/false/static_assert) — those can't currently
- * be FC identifiers, but listing them keeps the escape correct if that ever
- * changes. Spellings containing `__` are omitted: the lexer forbids `__` in FC
- * identifiers, so the user can never produce one. */
+/* C reserved spellings that must be escaped before reaching C. Covers the C11
+ * keywords, the `_Capital` keyword family, and the C23 keywords plus the
+ * <stdbool.h>/<assert.h> macros the prelude includes
+ * (bool/true/false/static_assert). `bool` is a legal FC field or binding name;
+ * the other three are FC keywords, listed so the escape stays correct if that
+ * changes. Spellings containing `__` are omitted because the lexer rejects
+ * `__` in FC identifiers. */
 static const char *const C_RESERVED[] = {
     "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic",
     "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local",
@@ -297,9 +334,9 @@ const char *c_safe_ident(InternTable *t, const char *name) {
     return intern_sprintf(t, "fc__%s", name);
 }
 
-/* The `fc__` root test. c_safe_ident's escape also lands here, but it is applied
- * only to *member* names (per-type namespaces), which never enter the symbol
- * tables this predicate gates. */
+/* c_safe_ident's escape also starts with `fc__`, but it is applied only to
+ * member names (per-type namespaces), which never enter the symbol tables this
+ * predicate gates. */
 bool is_mangled_root_name(const char *name) {
     return name && strncmp(name, "fc__", 4) == 0;
 }

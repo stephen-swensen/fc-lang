@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): `??` sequences in string literals are emitted
-// raw into the C string — gcc/clang -std=c11 reject with -Werror=trigraphs
-// ("trigraph ??! converted to |"), and a conforming C11 translator would
-// silently rewrite the bytes. The emitter needs to escape `?` runs.
+// `??` sequences in a string literal are ordinary bytes: "what??!" is 7 bytes
+// ending in `?`, `?`, `!`. Regression: they used to be emitted raw into the C
+// string, which gcc/clang -std=c11 reject under -Werror=trigraphs ("trigraph
+// ??! converted to |") and a conforming C11 translator would rewrite.
 let main = (args: str[]) ->
     let s = "what??!"
     assert(s.len == 7)

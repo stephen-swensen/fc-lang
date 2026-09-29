@@ -1,9 +1,8 @@
-// BUG (bugsearch 2026-07-18): a const-arg instantiation can't be a
-// slice-literal element type: `wide<64>[2]{}` is a parse error ("expected
-// type, got int literal") while the type-arg twin box<i32>[2]{} works
-// (generics/qualified_type_arg_array_lit) and wide<'n>[2]{} /
-// wide<cfg.n>[2]{} work. Twin drift: the array-lit lookahead admits int
-// literals but the element-type parse uses parse_type, not parse_type_arg.
+// A const-arg instantiation may be a slice literal's element type
+// (`wide<64>[2]{}`), like the type-arg form `box<i32>[2]{}`
+// (generics/qualified_type_arg_array_lit). Regression: it used to be a parse
+// error ("expected type, got int literal"), because the lookahead admitted an
+// int literal argument but the element-type parse did not.
 struct wide =
     limbs: u32['n / 32]
 

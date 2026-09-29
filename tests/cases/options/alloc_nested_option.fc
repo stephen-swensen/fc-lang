@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): when a nested option type's sole occurrence is
-// the type argument of alloc(T), its typedef is never emitted — the C
-// references undeclared fc_option_fc_option_int32_t. Codegen's option-typedef
-// discovery walk doesn't visit alloc's type operand.
+// A nested option type whose only occurrence is alloc's type operand
+// (`alloc(i32??)`) still gets its C typedef. Regression: the option-typedef
+// discovery walk skipped alloc's operand, so the C referenced the undeclared
+// fc_option_fc_option_int32_t.
 let main = (args: str[]) ->
     let ho = alloc(i32??)
     match ho with

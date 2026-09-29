@@ -69,7 +69,7 @@ make dev          # clean rebuild at -O0 for clearer diagnostics during developm
 make clean        # remove build artifacts
 ```
 
-This produces the `fcc` binary at `./build/<os>/fcc` (where `<os>` is `linux`, `windows`, or `macos`; `fcc.exe` on Windows). The per-OS subdirectory lets a shared source tree across two operating systems — e.g. WSL Linux + MSYS2 on the same Windows box accessing the WSL filesystem via `\\wsl.localhost\...` — hold both binaries without one stomping the other. `make print-bin` echoes the path for scripts.
+This produces the `fcc` binary at `./build/<os>/fcc` (where `<os>` is `linux`, `windows`, or `macos`; `fcc.exe` on Windows). `make print-bin` echoes the path for scripts.
 
 `make` defaults to `-O2`; override with `OPT=` (e.g. `make OPT=-O0` or `make OPT="-O0 -fsanitize=address,undefined"`). `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes.
 
@@ -102,6 +102,7 @@ After `make install`, `fcc` is on `$PATH`:
 fcc input.fc                # compile to input.c
 fcc input.fc -o output.c    # compile to a specific output file
 fcc --version               # or -V — print version and build info
+fcc --help                  # or -h — list every option
 ```
 
 The compiler transpiles `.fc` source to a `.c` file. To build and run the result:
@@ -139,36 +140,23 @@ The `1.0.0-rc.7` prefix is hand-maintained in the `VERSION` file at the repo roo
 ## Testing
 
 ```sh
-make check                          # run full test suite (alias of test-all)
-make test-all                       # run all tests with both gcc and clang
-make test-gcc                       # run all tests with gcc
-make test-clang                     # run all tests with clang
-make test-gcc FILTER=closures       # run only tests matching a pattern
-make test-gcc FILTER=stdlib/data    # patterns match against category/test_name
+make check                          # ASCII check on src/, then the full suite with gcc and clang
+make test-gcc                       # the suite with gcc only (also test-clang)
+make test-gcc FILTER=closures       # only tests whose category/name matches a pattern
 ```
 
-Tests live in `tests/cases/`, organized into subdirectories by category (e.g., `expressions/`, `structs/`, `generics/`, `modules/`, etc.).
-
-**Single-file tests** are an `.fc` file optionally paired with:
-
-- **`.expected_exit`** — expected exit code (0–255). If omitted, the expected exit code is 0.
-- **`.error`** — expected compiler error message (substring match); the test must fail to compile.
-
-Most tests use `assert` (which calls `abort()`, exit code 134) for correctness checks and omit `.expected_exit`, so a passing test simply exits 0.
-
-**Multi-file tests** use a subdirectory within a category dir, containing multiple `.fc` files plus an optional `expected_exit` or `error` file (no dot prefix), and an optional `deps` file listing external dependencies (one per line, e.g., `stdlib/io.fc`). Use subdirectories for tests that need multiple source files or dependencies.
-
-The test runner (`tests/run_tests.sh`) compiles each FC file to C, compiles the C with `-Wall -Werror`, runs the binary, and checks the result. All intermediate files go into a system temp directory that is automatically cleaned up on exit.
+Tests live in `tests/cases/`, one subdirectory per category. [CONTRIBUTING.md](CONTRIBUTING.md) describes the test layout, every test marker, and the other test targets (`-O2`, 16-bit slice lengths, the language server).
 
 ## Repository Layout
 
-- **`src/`** — The compiler, written in C11. Pipeline: lexer → parser → pass1 (declaration collection) → pass2 (type checking) → monomorphization → codegen (C11 emission).
+- **`src/`** — The compiler, written in C11. Pipeline: lexer → parser → pass1 (declaration collection) → pass2 (type checking) → monomorphization → codegen (C11 emission). [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how it fits together.
 - **`stdlib/`** — Standard library modules (`std::io`, `std::sys`, etc.), written in FC.
-- **`spec/`** — Language specification (`fc-spec.html`, best viewed in a browser) and formal grammar.
-- **`tests/cases/`** — Integration tests organized by functional areas.
+- **`spec/`** — The language specification (`fc-spec.html`, best viewed in a browser), `examples.fc` (a runnable tour of the language), open work in `TODO.md`, and design records. `spec/hist/` holds historical notes.
+- **`tests/`** — The compiler test suite (`tests/cases/`) and the language server tests (`tests/lsp/`).
+- **`editors/`** — The VSCode extension and a Vim syntax file.
+- **`demos/`** — Example programs and games written in FC.
 - **[`FEATURES.md`](FEATURES.md)** — Complete inventory of language and tooling features.
-
-For code examples, see the full language specification in `spec/fc-spec.html`.
+- **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — How to build, test and change the compiler.
 
 ## License
 

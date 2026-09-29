@@ -1,10 +1,8 @@
-// BUG (bugsearch 2026-07-18): name capture in transitive const-generic
-// instantiation. mk2<64> calls mk<'n * 2>; the fn-type typedef collection
-// substitutes the CALLER's 'n (64) into the callee's signature instead of
-// the callee's inferred binding (128), emitting a typedef over the phantom
-// type fc__wide__5___k64 which is never defined — invalid C. Renaming the
-// callee's param to 'm avoids it. This is the wideint mul_wide shape; it
-// works there only because every width instance happens to exist.
+// A transitive const-generic call with a computed argument (mk2<64> calls
+// mk<'n * 2>) instantiates the callee at the computed value, 128, even though
+// the callee's parameter is also named 'n. Regression: the fn-type typedef
+// collection substituted the caller's 'n (64) into the callee's signature,
+// emitting a typedef over the never-defined type fc__wide__5___k64.
 struct wide =
     limbs: u32['n / 32]
 

@@ -26,10 +26,7 @@ if [ ${#fc_files[@]} -eq 0 ]; then
     exit 1
 fi
 
-# Build compiler if needed. The binary path is per-OS (build/linux/, build/
-# windows/, ...), so we ask Make for it instead of hard-coding it — that
-# keeps a shared source tree across e.g. WSL + MSYS2 from cross-execing
-# each other's binaries.
+# Build the compiler if needed, and ask Make where it put it.
 make -s
 FCC="$(make -s print-bin)"
 

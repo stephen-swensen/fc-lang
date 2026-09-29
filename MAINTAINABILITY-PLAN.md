@@ -51,7 +51,9 @@ CLAUDE.md.
   tested, and the module-cycle check has moved to the end of pass2.
 - **Phase 3: done (2026-09-28).** B11-B20 are fixed and tested, and member
   completion after `->` is gone (it never produced results in practice) along
-  with the `>` trigger character. B21 stays with `pending_decls` in phase 4.
+  with the `>` trigger character. B21 was fixed in phase 4 with the removal
+  of `pending_decls` (LSP test: comma-list import diagnostics in source
+  order).
   Two more things came out of it:
   - The token name table missed `'...'` as well as `'const'`. It is now a
     switch, so `-Wswitch` catches a token kind with no name.
@@ -76,6 +78,49 @@ CLAUDE.md.
     what the same code with concrete types means. A sweep of every
     concrete-path widening site found no other place where a generic body
     defers a check.
+- **Phase 4: done (2026-09-29).** Every step was checked against byte-identical
+  emitted C and diagnostics over every test, demo, wolf-fc and euler-fc; the
+  deliberate differences are the bug fixes listed under "Found while doing
+  phase 4" (B21, B31, B33-B36), one diagnostic wording fix, one unified
+  negative-literal message, and dropping the duplicate generic-instance
+  prototypes. Left undone, both optional: routing match arms through
+  `emit_block_stmts` with a tail-mode enum, and having `ImportRef` hold a
+  `Symbol *`. The pass2 `resolved_member` item waits for phase 5's
+  `EXPR_FIELD` split. The seven pass2 instance sites share
+  `register_aggregate_instance` but still resolve their type arguments in
+  their own ways. New files: `src/facts.c/h`, the facts pass2 judges by and
+  codegen emits by (null/zero provability, error constants, interpolation
+  format reading).
+- **Phase 5: done (2026-09-29).** Pure moves, each checked against
+  byte-identical output. The big dispatch switches (`check_expr_inner`,
+  `emit_expr`, `parse_prefix`) now hold small cases; their large cases are
+  named functions (`check_call`, `check_field` and its three parts,
+  `emit_binary` and its helpers, which removed the last `goto`, and so on).
+  `codegen_emit` and `pass1_collect` are short drivers over named steps.
+  `emit_interp_string` was left as it is (nothing natural fell out).
+- **Phase 6: done (2026-09-29).** Every comment in `src/` was rewritten by the
+  phase 6 rules, verified comment-only by comparing each file with comments
+  stripped against its pre-rewrite copy (the one code change is moving
+  `BUILTIN_DOCS` and the hover rule into `src/builtin_docs.inc`). `src/` is
+  ASCII apart from that file, and `make check` now enforces it
+  (`check-ascii`). Diagnostics are ASCII (three `.error` expectations and one
+  spec quote changed). Test headers lost their `§7.8`/`§8.x` labels, and the
+  stdlib headers were trimmed. The rewrite found the bugs listed under "Found
+  while doing phase 6".
+- **Phase 7: done (2026-09-29).** New `docs/ARCHITECTURE.md` and
+  `CONTRIBUTING.md` (test markers including `skip_o2`/`only_o2`, the new-kind
+  checklist, conventions, and the engineering principles that lived only in
+  assistant memory); CLAUDE.md is down to 58 lines of pointers, assistant
+  rules and FC syntax pitfalls. Working notes and `fc-vs-zig.md` moved to
+  `spec/hist/`; `fc.vim` moved to `editors/vim/`; the three design records
+  were curated (`result-type-design.md` 1000 -> 415 lines); `spec/TODO.md`
+  keeps only open items (777 -> 278 lines, history in `hist/archived-todos.md`).
+  One test runner (`tests/run_tests.sh`, no `.expected` support), one
+  `test-all` recipe shared with `test-all-O2`, `fcc --help`, README and editor
+  docs fixed. The 33 `bugsearch` test headers were rewritten too. Left undone,
+  optional: restructuring `tests/lsp/lsp_test.py`.
+- Still open: B30, B32 (phase 4) and B37-B40 (phase 6). When they are
+  settled, move this plan to `spec/hist/`.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
 - **Module cycles: complete rule (decided 2026-09-28).** Every reference
@@ -340,6 +385,85 @@ covers.
 - B26. A slice literal inside a tuple literal in a module constant was
   emitted with a null pointer, and reading it segfaulted.
   (`tuples/module_const_slice_elem`)
+
+### Found while doing phase 4
+
+- B30 (open, not fixed). A misplaced comma-list import reports "imports must
+  appear at the top" once per name: `import a, b, c from m` after another
+  declaration gives three identical errors. Each name is its own `DECL_IMPORT`
+  and both placement checks in pass1 run per declaration. A fix would report
+  once per statement (consecutive imports sharing a location are one
+  statement).
+- B31 (fixed). A slice literal whose element type has a parenthesized const
+  argument (`wide<(256 >> 1)>[2] {}`, the form a shift needs) did not parse:
+  `scan_type_head` carried its own copy of the type-argument scan, without
+  `typearg_scan`'s parenthesis handling. It now calls `typearg_scan`.
+  (`generics/const_arg_slice_lit_paren`)
+- B32 (open, not fixed). A radix prefix with no digits is accepted as an
+  integer literal: `let x = 0x` (also `0b`, `0o`, and `0xu8`) compiles
+  without error. C rejects `0x`. The lexer's `scan_digits` already reports
+  whether it consumed a digit, so the fix is a "requires at least one digit"
+  error in the three prefix paths.
+- B33 (fixed; the module-side twin of B11). Inside a module, a second nested
+  module sharing its name with a companion type was accepted silently, and its
+  members vanished: the duplicate check looked only at the first symbol of
+  that name, which was the type. The top level reported it. Nested module and
+  type registration now use the mirrored rules `module_name_taken` /
+  `type_name_taken`. (`modules/companion_duplicate_module_in_module_err`,
+  `modules/companion_duplicate_module_after_enum_err`)
+- B34 (fixed; the plan's `mono_instantiate` item). A generic struct literal
+  registered the instance made of the body's type variables in order, not the
+  instance its type names. `holder { w = dbl(a) }` has type `holder<'n * 2>`,
+  but at `'n = 5` monomorphization registered `holder<5>`. A correct program
+  was rejected when that phantom instance failed a `static_assert`, and in
+  general an unused instance was emitted (`box<i32>` beside `box<i32?>`). The
+  literal now goes through `discover_in_type`, like every other type operand.
+  (`generics/struct_lit_instance_from_type`,
+  `generics/struct_lit_instance_assert_err`)
+- B35 (fixed; the `unsigned_counterpart` item). An interpolated `isize` or
+  `usize` under an unsigned conversion (`%x`, `%u`) was reinterpreted through
+  `uint64_t` rather than at its own width, so on a 32-bit target a negative
+  `isize` printed 16 hex digits instead of 8. Invisible on a 64-bit host, so
+  there is no host test; the emitted C now casts through `size_t`.
+- B36 (fixed; the "stdin flags" item). A binding named `stdin`, `stdout` or
+  `stderr` of type `any*` was miscompiled: codegen recognized the C stream by
+  name and type, so `let stdout = (any*) 0usize; let p = stdout` gave `p` the
+  C stream. pass2 now marks the identifier that resolved to the built-in
+  (`ident.is_std_stream`) and codegen reads that. (`bindings/shadow_std_stream`)
+- Diagnostic: "type variable ''a' cannot be used as a value" quoted a name that
+  already starts with `'`. It now reads "type variable 'a ...", like the other
+  type-variable messages.
+
+### Found while doing phase 6
+
+The comment rewrite checked every comment against the code, which turned up
+these. B37-B40 are open, not fixed.
+
+- B37. `~` is rejected in a top-level initializer where `-` and `!` are
+  accepted: `module m = let a = ~5isize` reports "must be a constant
+  expression", while `-5isize` compiles. (`~5` of type i32 only works because
+  it folds to a literal first.) `is_init_expr` in pass2 lists the allowed
+  prefix operators and leaves out `~`, which C accepts in a constant
+  expression.
+- B38. fcc exits 0 with C that doesn't compile. At module scope, a struct
+  literal that gives a fixed-array field a longer slice literal
+  (`data: i32[2]` with `i32[3] { 1, 2, 3 }`) is accepted and emitted as
+  `.data = {1, 2, 3}`, which gcc rejects under `-Werror` ("excess elements in
+  array initializer"). The same literal inside a function aborts at run time.
+  The length is known statically in the module-scope case, so pass2 can
+  reject it.
+- B39. Completion never offers `static_assert`: lsp.c keeps its own copy of
+  the keyword list, which has drifted from the lexer's. The fix is to have
+  the lexer export its keyword table and completion read it, not to add the
+  one name.
+- B40 (minor). Go-to-definition into another file uses the byte column as the
+  UTF-16 column, so the range is off on lines with non-ASCII text before the
+  name. Same-file definitions convert correctly.
+- Dead code (removed): the "update imported symbols' types" loop in
+  `pass2_check` could never match, since module lets are only in member
+  tables, never in the global table it searched. An instrumented build ran it
+  on 830 corpus inputs without a match, and removing it left the emitted C
+  and diagnostics unchanged.
 
 ## Phase 2: One shared expression visitor (about 2-3 days)
 

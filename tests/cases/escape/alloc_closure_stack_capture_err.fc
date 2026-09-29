@@ -1,9 +1,8 @@
-// BUG (bugsearch 2026-07-18): alloc(lambda) promotes the closure context to
-// heap without checking captured values' provenance. Here the heap closure
-// captures a stack-backed slice; calling it after make() returns is a
-// stack-use-after-return (ASan-confirmed). The explicit-store twins ARE
-// rejected ("cannot store stack-allocated ... in heap-allocated struct
-// field") — this path must be too.
+// alloc(lambda) is a compile error when the closure captures a
+// stack-allocated value, just as storing that value into a heap struct field
+// is. Regression: the closure context used to be promoted to the heap without
+// checking its captures, so calling the closure after make() returned read a
+// dead frame (ASan: stack-use-after-return).
 let make = () ->
     let buf = i32[2] { 7, 8 }
     alloc(() -> buf[0])!

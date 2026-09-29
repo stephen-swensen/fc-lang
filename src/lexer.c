@@ -156,13 +156,13 @@ static TokenKind check_keyword(const char *start, int len) {
 static Token scan_identifier(Lexer *l) {
     while (isalnum((unsigned char)peek(l)) || peek(l) == '_') advance(l);
     int len = (int)(l->current - l->start);
-    /* Reject identifiers containing __ (double underscore) — reserved for
-     * the compiler's name mangling of namespace/module hierarchies. The one
-     * exception is the extern C-name position (`extern NAME` /
+    /* Reject identifiers containing __ (double underscore), which is reserved
+     * for the compiler's mangling of namespace and module paths. The exception
+     * is the extern C-name position (`extern NAME` /
      * `extern struct|union NAME`): C symbols in the implementation-reserved
-     * namespace (e.g. __errno_location) are emitted verbatim, never mangled.
-     * The parser requires an `as` alias there so the FC-visible name stays
-     * clean. */
+     * namespace (e.g. __errno_location) are emitted verbatim, not mangled.
+     * The parser requires an `as` alias there so the FC-visible name has no
+     * `__`. */
     bool extern_c_name_pos =
         l->prev_kind == TOK_EXTERN ||
         ((l->prev_kind == TOK_STRUCT || l->prev_kind == TOK_UNION) &&
@@ -180,117 +180,39 @@ static Token scan_identifier(Lexer *l) {
     return make_token(l, kw);
 }
 
-static Token scan_number_body(Lexer *l) {
-    /* Check for 0x, 0b, 0o prefixes */
-    if (l->current[-1] == '0') {
-        if (peek(l) == 'x' || peek(l) == 'X') {
-            advance(l); /* consume x */
-            bool has_hex_digit = false;
-            while (isxdigit((unsigned char)peek(l)) || (peek(l) == '_' && isxdigit((unsigned char)peek_next(l)))) {
-                if (peek(l) != '_') has_hex_digit = true;
-                advance(l);
-            }
-            /* Hex float: optional .hexdigits + required [pP][+-]?digits exponent.
-             * The 'p' exponent is mandatory in C99 hex floats because 'e' is a hex digit. */
-            bool has_hex_dot = false;
-            bool has_hex_exp = false;
-            if (peek(l) == '.' && isxdigit((unsigned char)peek_next(l))) {
-                advance(l); /* consume . */
-                while (isxdigit((unsigned char)peek(l)) || (peek(l) == '_' && isxdigit((unsigned char)peek_next(l)))) {
-                    if (peek(l) != '_') has_hex_digit = true;
-                    advance(l);
-                }
-                has_hex_dot = true;
-            }
-            if (peek(l) == 'p' || peek(l) == 'P') {
-                char c1 = peek_next(l);
-                bool committed = false;
-                if (isdigit((unsigned char)c1)) committed = true;
-                else if ((c1 == '+' || c1 == '-') && isdigit((unsigned char)peek_at(l, 2))) committed = true;
-                if (committed) {
-                    advance(l); /* consume p/P */
-                    if (peek(l) == '+' || peek(l) == '-') advance(l);
-                    while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
-                    has_hex_exp = true;
-                }
-            }
-            if (has_hex_dot && !has_hex_exp) {
-                SrcLoc loc = { .line = l->line, .col = l->start_col };
-                diag_fatal(loc, "hex float literal requires a binary exponent ('p' or 'P' followed by decimal digits)");
-            }
-            if (has_hex_dot || has_hex_exp) {
-                if (!has_hex_digit) {
-                    SrcLoc loc = { .line = l->line, .col = l->start_col };
-                    diag_fatal(loc, "hex float literal requires at least one mantissa digit");
-                }
-                if (peek(l) == 'f' && (peek_next(l) == '3' || peek_next(l) == '6')) {
-                    advance(l); advance(l);
-                    if (peek(l) == '2' || peek(l) == '4') advance(l);
-                }
-                return make_token(l, TOK_FLOAT_LIT);
-            }
-            /* int type suffix: i8/i16/i32/i64/u8/u16/u32/u64/isize/usize */
-            if ((peek(l) == 'i' || peek(l) == 'u') && isalnum((unsigned char)peek_next(l))) {
-                advance(l);
-                while (isalnum((unsigned char)peek(l))) advance(l);
-            }
-            return make_token(l, TOK_INT_LIT);
-        }
-        if (peek(l) == 'b' || peek(l) == 'B') {
-            advance(l); /* consume b */
-            while (peek(l) == '0' || peek(l) == '1' || (peek(l) == '_' && (peek_next(l) == '0' || peek_next(l) == '1'))) advance(l);
-            /* int type suffix: i8/i16/i32/i64/u8/u16/u32/u64/isize/usize */
-            if ((peek(l) == 'i' || peek(l) == 'u') && isalnum((unsigned char)peek_next(l))) {
-                advance(l);
-                while (isalnum((unsigned char)peek(l))) advance(l);
-            }
-            return make_token(l, TOK_INT_LIT);
-        }
-        if (peek(l) == 'o' || peek(l) == 'O') {
-            advance(l); /* consume o */
-            while ((peek(l) >= '0' && peek(l) <= '7') || (peek(l) == '_' && peek_next(l) >= '0' && peek_next(l) <= '7')) advance(l);
-            /* int type suffix: i8/i16/i32/i64/u8/u16/u32/u64/isize/usize */
-            if ((peek(l) == 'i' || peek(l) == 'u') && isalnum((unsigned char)peek_next(l))) {
-                advance(l);
-                while (isalnum((unsigned char)peek(l))) advance(l);
-            }
-            return make_token(l, TOK_INT_LIT);
-        }
-    }
-    while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
-    bool is_float = false;
-    if (peek(l) == '.' && isdigit((unsigned char)peek_next(l))) {
+static bool is_bin_digit(char c) { return c == '0' || c == '1'; }
+static bool is_oct_digit(char c) { return c >= '0' && c <= '7'; }
+static bool is_dec_digit(char c) { return isdigit((unsigned char)c); }
+static bool is_hex_digit(char c) { return isxdigit((unsigned char)c); }
+
+/* Consume a run of digits in which a '_' may separate two digits. Returns
+ * whether any digit was consumed. */
+static bool scan_digits(Lexer *l, bool (*is_digit)(char)) {
+    bool any = false;
+    while (is_digit(peek(l)) || (peek(l) == '_' && is_digit(peek_next(l)))) {
+        if (peek(l) != '_') any = true;
         advance(l);
-        while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
-        is_float = true;
     }
-    /* Optional exponent: [eE][+-]?digit{['_']digit}. Commit only if a digit
-     * (optionally preceded by sign) immediately follows e/E, with no whitespace.
-     * Rationale: keeps `1e3 - 2` parsing as subtraction, not `1.0e3-2`.
-     * An uncommitted e/E is not an identifier starting where a number ended —
-     * `1e` can only be a mistyped exponent, so it is named as one. */
-    if (peek(l) == 'e' || peek(l) == 'E') {
-        char c1 = peek_next(l);
-        bool committed = false;
-        if (isdigit((unsigned char)c1)) committed = true;
-        else if ((c1 == '+' || c1 == '-') && isdigit((unsigned char)peek_at(l, 2))) committed = true;
-        if (committed) {
-            advance(l); /* consume e/E */
-            if (peek(l) == '+' || peek(l) == '-') advance(l);
-            while (isdigit((unsigned char)peek(l)) || (peek(l) == '_' && isdigit((unsigned char)peek_next(l)))) advance(l);
-            is_float = true;
-        } else {
-            return error_token(l, "float exponent requires at least one digit");
-        }
-    }
-    if (is_float) {
-        if (peek(l) == 'f' && (peek_next(l) == '3' || peek_next(l) == '6')) {
-            advance(l); advance(l);
-            if (peek(l) == '2' || peek(l) == '4') advance(l);
-        }
-        return make_token(l, TOK_FLOAT_LIT);
-    }
-    /* int type suffix: i8/i16/i32/i64/u8/u16/u32/u64/isize/usize */
+    return any;
+}
+
+/* An exponent: `marker` in either case, an optional sign, then decimal digits.
+ * Consumed only when a digit follows immediately, so `1e3 - 2` stays a
+ * subtraction. Returns whether one was consumed. */
+static bool scan_exponent(Lexer *l, char marker) {
+    if (tolower((unsigned char)peek(l)) != marker) return false;
+    char c1 = peek_next(l);
+    if (!isdigit((unsigned char)c1) &&
+        !((c1 == '+' || c1 == '-') && isdigit((unsigned char)peek_at(l, 2))))
+        return false;
+    advance(l); /* consume the marker */
+    if (peek(l) == '+' || peek(l) == '-') advance(l);
+    scan_digits(l, is_dec_digit);
+    return true;
+}
+
+/* An integer literal's type suffix (i8 ... usize), if any, and its token. */
+static Token finish_int(Lexer *l) {
     if ((peek(l) == 'i' || peek(l) == 'u') && isalnum((unsigned char)peek_next(l))) {
         advance(l);
         while (isalnum((unsigned char)peek(l))) advance(l);
@@ -298,14 +220,79 @@ static Token scan_number_body(Lexer *l) {
     return make_token(l, TOK_INT_LIT);
 }
 
-/* A numeric literal owns its suffix: every valid one (i8…usize, f32/f64, and
- * the hex-float forms) is consumed by scan_number_body, so an identifier
- * character still adjacent to the literal is a malformed suffix — `1e9i32`,
- * `42foo`, `0x1fz`, a trailing `1_`. Naming it here keeps the diagnosis on the
- * literal; without this the token stream splits into a number and an
- * identifier, and the mistake surfaces indirectly (as a juxtaposed statement,
- * or an undefined name) at whatever position that lands. No legal program is
- * affected: FC has no juxtaposition rule that gives `1x` a meaning. */
+/* A float literal's f32/f64 suffix, if any, and its token. */
+static Token finish_float(Lexer *l) {
+    if (peek(l) == 'f' && (peek_next(l) == '3' || peek_next(l) == '6')) {
+        advance(l); advance(l);
+        if (peek(l) == '2' || peek(l) == '4') advance(l);
+    }
+    return make_token(l, TOK_FLOAT_LIT);
+}
+
+static Token scan_number_body(Lexer *l) {
+    if (l->current[-1] == '0') {
+        char base = (char)tolower((unsigned char)peek(l));
+        if (base == 'x') {
+            advance(l); /* consume x */
+            bool has_digit = scan_digits(l, is_hex_digit);
+            /* Hex float: optional .hexdigits + required [pP][+-]?digits exponent.
+             * The 'p' exponent is mandatory in C99 hex floats because 'e' is a hex digit. */
+            bool has_dot = false;
+            if (peek(l) == '.' && isxdigit((unsigned char)peek_next(l))) {
+                advance(l); /* consume . */
+                bool frac = scan_digits(l, is_hex_digit);
+                has_digit = has_digit || frac;
+                has_dot = true;
+            }
+            bool has_exp = scan_exponent(l, 'p');
+            if (has_dot && !has_exp) {
+                SrcLoc loc = { .line = l->line, .col = l->start_col };
+                diag_fatal(loc, "hex float literal requires a binary exponent ('p' or 'P' followed by decimal digits)");
+            }
+            if (has_dot || has_exp) {
+                if (!has_digit) {
+                    SrcLoc loc = { .line = l->line, .col = l->start_col };
+                    diag_fatal(loc, "hex float literal requires at least one mantissa digit");
+                }
+                return finish_float(l);
+            }
+            return finish_int(l);
+        }
+        if (base == 'b') {
+            advance(l); /* consume b */
+            scan_digits(l, is_bin_digit);
+            return finish_int(l);
+        }
+        if (base == 'o') {
+            advance(l); /* consume o */
+            scan_digits(l, is_oct_digit);
+            return finish_int(l);
+        }
+    }
+    scan_digits(l, is_dec_digit);
+    bool is_float = false;
+    if (peek(l) == '.' && isdigit((unsigned char)peek_next(l))) {
+        advance(l); /* consume . */
+        scan_digits(l, is_dec_digit);
+        is_float = true;
+    }
+    /* An e/E that does not start an exponent is not an identifier starting
+     * where the number ended: `1e` can only be a mistyped exponent. */
+    if (peek(l) == 'e' || peek(l) == 'E') {
+        if (!scan_exponent(l, 'e'))
+            return error_token(l, "float exponent requires at least one digit");
+        is_float = true;
+    }
+    return is_float ? finish_float(l) : finish_int(l);
+}
+
+/* A numeric literal owns its suffix: scan_number_body consumes every valid one
+ * (i8...usize, f32/f64, and the hex-float forms), so an identifier character
+ * still adjacent to the literal is a malformed suffix: `1e9i32`, `42foo`,
+ * `0x1fz`, a trailing `1_`. Reporting it here keeps the diagnostic on the
+ * literal. Otherwise the token stream splits into a number and an identifier,
+ * and the mistake surfaces later as a juxtaposed statement or an undefined
+ * name. FC gives `1x` no meaning, so no valid program is rejected. */
 static Token scan_number(Lexer *l) {
     Token t = scan_number_body(l);
     if (t.kind != TOK_ERROR && (isalnum((unsigned char)peek(l)) || peek(l) == '_'))
@@ -316,7 +303,8 @@ static Token scan_number(Lexer *l) {
 /* Check if position p (pointing past '%') looks like a format spec followed by '{'.
  * Returns length of the spec (not including '%' or '{'), or 0 if no match.
  * Format spec: optional flags (-+0# space), optional width (digits), optional .precision,
- * then a required conversion char (d,i,u,x,X,o,f,e,E,g,G,s,c,p). */
+ * then a required conversion char (d,i,u,x,X,o,f,e,E,g,G,s,c,p, or T for the
+ * compile-time type name). */
 static int check_interp_spec(const char *p) {
     const char *s = p;
     /* optional flags */
@@ -343,9 +331,10 @@ static int check_interp_spec(const char *p) {
 }
 
 /* Scan string literal text (after opening " or after closing } of interp expr).
- * If interpolation %spec{ is found, emits INTERP_START/MID and sets up FMT_SPEC state.
- * If closing " is found, emits STRING_LIT (plain) or INTERP_END.
- * tok_kind is TOK_INTERP_START for first segment, TOK_INTERP_MID for subsequent. */
+ * If interpolation %spec{ is found, emits tok_kind and sets up FMT_SPEC state.
+ * If closing " is found, emits STRING_LIT/CSTRING_LIT (plain) or INTERP_END.
+ * tok_kind is TOK_INTERP_START (TOK_CINTERP_START for a cstring) for the first
+ * segment, TOK_INTERP_MID for later ones. */
 static Token scan_string_body(Lexer *l, TokenKind tok_kind) {
     const char *text_start = l->current;  /* start of literal text content */
 
@@ -364,8 +353,8 @@ static Token scan_string_body(Lexer *l, TokenKind tok_kind) {
                 advance(l);
             } else if (esc == 'x') {
                 advance(l); /* skip 'x' */
-                /* \xNN requires exactly two hex digits (spec). Fewer leaves the
-                 * downstream byte-count/decode logic — which assumes two — wrong. */
+                /* \xNN takes two hex digits (spec); decode_str_lit and the
+                 * byte counts built on it assume two. */
                 if (!isxdigit((unsigned char)peek(l)))
                     return error_token(l, "\\x escape requires exactly two hex digits");
                 advance(l);
@@ -461,7 +450,7 @@ static Token scan_char_lit(Lexer *l) {
             advance(l);
         } else if (esc == 'x') {
             advance(l); /* skip 'x' */
-            /* \xNN requires exactly two hex digits (spec); see scan_string_body. */
+            /* \xNN takes two hex digits, as in scan_string_body. */
             if (!isxdigit((unsigned char)peek(l)))
                 return error_token(l, "\\x escape requires exactly two hex digits");
             advance(l);
@@ -541,8 +530,8 @@ static Token scan_token(Lexer *l) {
             }
             l->current = saved; l->col = saved_col;
             while (isalnum((unsigned char)peek(l)) || peek(l) == '_') advance(l);
-            /* Reject '__' in type variable names too — same name-mangling
-             * reservation as identifiers (the leading apostrophe never matches). */
+            /* Reject '__' in type variable names too, as for identifiers (the
+             * leading apostrophe never matches). */
             int tvlen = (int)(l->current - l->start);
             for (int i = 0; i + 1 < tvlen; i++) {
                 if (l->start[i] == '_' && l->start[i + 1] == '_') {
@@ -593,7 +582,6 @@ static Token scan_token(Lexer *l) {
         return make_token(l, TOK_GT);
     case '&': return match(l, '&') ? make_token(l, TOK_AMPAMP) : make_token(l, TOK_AMP);
     case '|': return match(l, '|') ? make_token(l, TOK_PIPEPIPE) : make_token(l, TOK_PIPE);
-    case '\'': return scan_char_lit(l);
     case '.':
         if (match(l, '.')) return match(l, '.') ? make_token(l, TOK_ELLIPSIS) : make_token(l, TOK_DOTDOT);
         return make_token(l, TOK_DOT);
@@ -606,7 +594,7 @@ static Token scan_token(Lexer *l) {
         int dlen = (int)(l->current - dir);
         if (dlen == 3 && memcmp(dir, "end", 3) == 0) return make_token(l, TOK_HASH_END);
         if (dlen == 4 && memcmp(dir, "else", 4) == 0) {
-            /* Check for "else if" — skip spaces, check for "if" */
+            /* Check for "else if": skip spaces, then look for "if" */
             const char *saved = l->current;
             int saved_col = l->col;
             while (*l->current == ' ') advance(l);
@@ -615,7 +603,7 @@ static Token scan_token(Lexer *l) {
                 advance(l); advance(l);
                 return make_token(l, TOK_HASH_ELSE_IF);
             }
-            /* Plain #else — restore position */
+            /* Plain #else: restore position */
             l->current = saved;
             l->col = saved_col;
             return make_token(l, TOK_HASH_ELSE);
@@ -714,8 +702,8 @@ static SrcLoc tok_loc(Token t) {
     return (SrcLoc){ .line = t.line, .col = t.col };
 }
 
-/* Peek at the current token, skipping newlines (a directive expression spans one logical line,
- * but the tokenizer may emit NEWLINE tokens we want to treat as end-of-expression). */
+/* True at the end of a directive's expression: past the last token, or at the
+ * NEWLINE that ends the directive line. */
 static bool at_expr_end(CondEval *e) {
     return e->pos >= e->count || e->tokens[e->pos].kind == TOK_NEWLINE;
 }
@@ -909,7 +897,7 @@ static Token *filter_conditionals(Token *tokens, int count,
     }
 
     if (depth != 0) {
-        /* Find the last #if for a better error location */
+        /* An #if is still open at the end of the input. */
         SrcLoc loc = { .line = tokens[count - 1].line, .col = 1 };
         diag_fatal(loc, "unclosed #if (missing #end)");
     }
@@ -944,8 +932,8 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
     free(raw);
     raw = filtered;
     raw_count = filtered_count;
-    /* raw_tokenize published the pre-filter array; it is now freed. Re-point the
-     * cleanup slot at the filtered array (live until line ~1052). */
+    /* raw_tokenize published the pre-filter array, which was just freed.
+     * Re-point the cleanup slot at the filtered array. */
     if (l->abort_slot_raw) *l->abort_slot_raw = raw;
 
     Token *out = NULL;
@@ -957,9 +945,9 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
     indent_stack[indent_depth] = 1;  /* base column */
     is_match_block[indent_depth] = false;
 
-    bool saw_decl_keyword = false;    /* let, struct, union, module on current line */
+    bool saw_decl_keyword = false;    /* let/struct/union/enum/error/module on current line */
     TokenKind last_kind = TOK_EOF;    /* last non-NEWLINE token emitted */
-    int bracket_depth = 0;            /* depth inside () [] {} — suppresses layout */
+    int bracket_depth = 0;            /* depth inside () [] {}; suppresses layout */
 
     for (int i = 0; i < raw_count; i++) {
         /* Publish the layout array so an indentation fatal (longjmp) can free
@@ -978,7 +966,7 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
             int j = i + 1;
             while (j < raw_count && raw[j].kind == TOK_NEWLINE) j++;
             if (j >= raw_count || raw[j].kind == TOK_EOF) {
-                /* Trailing newlines — skip */
+                /* Trailing newlines: skip */
                 i = j - 1;
                 continue;
             }
@@ -997,7 +985,7 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
             while (indent_depth > 0 && is_match_block[indent_depth] &&
                    next_col <= indent_stack[indent_depth]) {
                 if (next_col == indent_stack[indent_depth] && raw[j].kind == TOK_PIPE)
-                    break; /* still in match block — peer arm */
+                    break; /* still in match block: peer arm */
                 indent_depth--;
                 Token dedent = make_layout_token(TOK_DEDENT, t.line, t.col);
                 DA_APPEND(out, olen, ocap, dedent);
@@ -1026,13 +1014,13 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
                 Token indent_tok = make_layout_token(TOK_INDENT, raw[j].line, raw[j].col);
                 DA_APPEND(out, olen, ocap, indent_tok);
             } else if (next_col == indent_stack[indent_depth]) {
-                /* Peer separator — but don't emit after INDENT or at start */
+                /* Peer separator, but not after INDENT or at the start */
                 if (olen > 0 && out[olen-1].kind != TOK_INDENT && out[olen-1].kind != TOK_NEWLINE) {
                     Token nl = make_layout_token(TOK_NEWLINE, t.line, t.col);
                     DA_APPEND(out, olen, ocap, nl);
                 }
             } else if (next_col < indent_stack[indent_depth]) {
-                /* Dedent — pop until we match */
+                /* Dedent: pop until we match */
                 while (indent_depth > 0 && next_col < indent_stack[indent_depth]) {
                     indent_depth--;
                     Token dedent = make_layout_token(TOK_DEDENT, t.line, t.col);
@@ -1057,8 +1045,9 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
                     DA_APPEND(out, olen, ocap, nl);
                 }
             } else {
-                /* next_col > indent_stack top but not block former → continuation */
-                /* Suppress the newline — tokens continue the current expression */
+                /* next_col > indent_stack top but not a block former: a
+                 * continuation line. Suppress the newline; the tokens continue
+                 * the current expression. */
             }
 
             /* Skip over the consecutive newlines we already processed */
@@ -1066,7 +1055,7 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
             continue;
         }
 
-        /* Skip raw EOF — we emit our own after DEDENTs */
+        /* Skip raw EOF; we emit our own after the DEDENTs */
         if (t.kind == TOK_EOF) continue;
 
         /* Track bracket depth for layout suppression */

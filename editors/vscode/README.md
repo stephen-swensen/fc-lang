@@ -29,9 +29,9 @@ built-in language server (`fcc --lsp`).
   left are looked up in.)
 
 By default the server merges the installed standard library and the open file's
-sibling `.fc` files into every analysis, so `import ... from std::...` resolves
-and diagnostics for `std::` symbols are suppressed (only the open file's
-diagnostics are shown).
+sibling `.fc` files into every analysis, so `import ... from std::...` resolves.
+Diagnostics are shown for every file in that analysis, open or not, except the
+standard library's own files.
 
 ### Project files (`lsp.rsp`)
 

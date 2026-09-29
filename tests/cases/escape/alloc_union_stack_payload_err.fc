@@ -1,7 +1,8 @@
-// BUG (bugsearch 2026-07-18): alloc(union.variant(&stack)) copies a stack
-// pointer into heap memory with no diagnostic (ASan: stack-use-after-return).
-// The struct-literal twin IS rejected (escape/alloc_struct_stack_field_err)
-// — the union-constructor path misses the same check.
+// Heap-allocating a union variant whose payload is a stack pointer
+// (`alloc(carrier.held(&x))`) is a compile error, like the struct-literal
+// case (escape/alloc_struct_stack_field_err). Regression: the
+// union-constructor path used to skip the check and copy the stack pointer
+// into heap memory (ASan: stack-use-after-return).
 union carrier =
     | held(i32*)
     | empty

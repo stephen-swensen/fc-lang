@@ -1,1 +1,1 @@
-module 'm' has a 'from' clause — only extern declarations are allowed
+module 'm' has a 'from' clause; only extern declarations are allowed

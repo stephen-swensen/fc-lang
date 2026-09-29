@@ -1,5 +1,4 @@
-#ifndef FC_ARGS_H
-#define FC_ARGS_H
+#pragma once
 
 #include "lexer.h"   /* Flag */
 #include <stdbool.h>
@@ -12,19 +11,18 @@
  * files may reference other response files (`@nested`), expanded recursively;
  * a cycle (or excessive nesting) is an error.
  *
- * Two behaviours distinguish tokens that originate *inside* a response file
- * from tokens typed directly on the command line (which the shell already
- * processed):
+ * Tokens that come from a response file are treated differently from tokens
+ * typed on the command line (which the shell already processed):
  *   - relative paths resolve against the response file's own directory, not the
  *     cwd, so a project file is relocatable;
  *   - positional (input-file) tokens undergo shell-style glob expansion
  *     (`*`, `?`, `[...]`), since no shell ran over them.
- * Both apply only to response-file tokens. They are deferred to argument
- * *parsing* (args_parse) so they land only on real input paths, never on an
- * option value like the `debug` in `--flag debug`.
+ * Both happen in args_parse rather than during expansion, so they apply only
+ * to input paths (the -o value is rebased too), never to an option value like
+ * the `debug` in `--flag debug`.
  *
- * The same machinery backs `fcc @file` on the CLI and the LSP's by-convention
- * discovery of `lsp.rsp` (the LSP simply synthesizes a single `@<path>` token).
+ * The same machinery backs `fcc @file` on the CLI and the LSP's discovery of
+ * `lsp.rsp` (the LSP synthesizes a single `@<path>` token).
  */
 
 /* A flat token stream after @file splicing. tokens[i] is owned (malloc'd);
@@ -59,10 +57,8 @@ typedef struct {
 /* Interpret an expanded token stream: applies host platform auto-detect
  * (unless --no-auto-detect), --flag overrides (replace by name), -o, and turns
  * positionals into inputs with response-file glob/rebase. Flag name/value
- * strings BORROW `e`, so `e` must outlive the returned flags. Returns true on
+ * strings borrow from `e`, so `e` must outlive the returned flags. Returns true on
  * success; on failure returns false with out->error set (and out otherwise
  * safe to pass to args_compile_free). */
 bool args_parse(const ExpandedArgs *e, CompileArgs *out);
 void args_compile_free(CompileArgs *c);
-
-#endif

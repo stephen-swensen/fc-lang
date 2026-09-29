@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): xor with decimal-literal operands 2 or 10 is
-// emitted verbatim and trips gcc/clang -Werror=xor-used-as-pow ("result of
-// '10^6' is 12; did you mean '1e6'?"). Legal FC must produce warning-clean
-// C — fold the constants or emit hex/parenthesized operands.
+// Xor of decimal literals such as `10 ^ 6` and `2 ^ 8` is plain xor and
+// compiles to warning-clean C. Regression: the operands used to be emitted
+// verbatim, tripping gcc/clang -Werror=xor-used-as-pow ("result of '10^6' is
+// 12; did you mean '1e6'?").
 let main = (args: str[]) ->
     let x = 10 ^ 6
     assert(x == 12)

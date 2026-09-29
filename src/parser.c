@@ -7,26 +7,43 @@
 #include <math.h>
 #include <ctype.h>
 
-void parser_init(Parser *p, Token *tokens, int count, Arena *arena, InternTable *intern) {
-    p->tokens = tokens;
-    p->token_count = count;
-    p->pos = 0;
-    p->arena = arena;
-    p->intern = intern;
-    p->filename = NULL;
-    p->pending_decls = NULL;
-    p->pending_count = 0;
-    p->pending_cap = 0;
-    p->allow_fixed_array = false;
-    p->block_arm_arrow = false;
-    p->expr_start_pos = 0;
-    p->expr_start_errs = 0;
-    p->half_gt = false;
-    p->half_gt_pos = -1;
-    p->generic_names = NULL;
-    p->generic_name_count = 0;
-    p->generic_gate = false;
-}
+typedef struct Parser {
+    Token *tokens;
+    int token_count;
+    int pos;
+    Arena *arena;
+    InternTable *intern;
+    const char *filename;   /* source filename for SrcLoc */
+    bool allow_fixed_array; /* the type being parsed may be a fixed array T[N]: a struct
+                               field type or a sizeof/alignof operand */
+    bool in_const_expr;     /* true inside a const-expression slot (a generic <...> argument or a
+                               fixed-array size), including a parenthesized part, which accepts
+                               any expression. Const expressions evaluate in the i64 domain, so
+                               an unsuffixed integer literal is i64 there rather than the i32
+                               expression default. */
+    bool block_arm_arrow;   /* true while parsing a match-arm `when` guard, where a top-level
+                               `->` ends the guard; cleared inside brackets, where a `->`
+                               cannot be the arm's separator */
+    int expr_start_pos;     /* token index at start of current parse_expr (for the operand
+                               text of a postfix !) */
+    int expr_start_errs;    /* diag_error_count() at start of current parse_expr; a change means
+                               error recovery ran, so token pointers may span buffers and text
+                               capture is skipped (the text only feeds codegen, which never runs
+                               with errors) */
+    bool half_gt;           /* the first '>' of a '>>' (TOK_GTGT) has been consumed as a
+                               type-argument closer; the parser is parked on the token
+                               awaiting the second */
+    int half_gt_pos;        /* token index of that '>>' (valid iff half_gt) */
+    /* Whole-program set of names that may head a generic instantiation
+     * (`name<...>` in expression position), collected from every file's tokens
+     * before parsing (parser_collect_generic_names). The expression-position
+     * `<` scans claim a type-argument reading only for these names, so a
+     * comparison like `f(a < 2, b > (c))` keeps its comparison reading when
+     * the `<`'s left operand is not a generic declaration. Interned pointers. */
+    const char **generic_names;
+    int generic_name_count;
+} Parser;
+
 
 /* ---- Generic-name pre-pass (see parser.h) ---- */
 
@@ -48,7 +65,7 @@ void parser_collect_generic_names(Token *toks, int count, InternTable *it,
     for (int i = 0; i < count; i++) {
         switch (toks[i].kind) {
         case TOK_STRUCT: case TOK_UNION: {
-            /* struct NAME = INDENT body DEDENT — generic iff the body mentions
+            /* struct NAME = INDENT body DEDENT: generic iff the body mentions
              * a type variable (the evidence pass1's detection reads). */
             if (i + 2 >= count || toks[i + 1].kind != TOK_IDENT ||
                 toks[i + 2].kind != TOK_EQ)
@@ -67,9 +84,9 @@ void parser_collect_generic_names(Token *toks, int count, InternTable *it,
             break;
         }
         case TOK_LET: {
-            /* let NAME = <'a,...>(...) or let NAME = (... 'a ...) -> — generic
-             * iff the lambda header (explicit prefix or parameter list)
-             * mentions a type variable. */
+            /* let NAME = <'a,...>(...) or let NAME = (... 'a ...) -> ...:
+             * generic iff the lambda header (explicit prefix or parameter
+             * list) mentions a type variable. */
             int j = i + 1;
             if (j < count && toks[j].kind == TOK_MUT) j++;
             if (j + 1 >= count || toks[j].kind != TOK_IDENT ||
@@ -97,10 +114,9 @@ void parser_collect_generic_names(Token *toks, int count, InternTable *it,
             break;
         }
         case TOK_IMPORT: {
-            /* Conservatively admit every `as` alias on the import line: the
-             * aliased target's genericness is not resolvable at token level,
-             * and over-claiming only restores the historical scan behavior
-             * for that one name. */
+            /* Admit every `as` alias on the import line: the aliased target's
+             * genericness is not visible at token level, and an extra name
+             * only means a `<` after it is tried as type arguments first. */
             int j = i + 1;
             while (j < count && toks[j].kind != TOK_NEWLINE && toks[j].kind != TOK_EOF) {
                 if (toks[j].kind == TOK_AS && j + 1 < count &&
@@ -116,9 +132,8 @@ void parser_collect_generic_names(Token *toks, int count, InternTable *it,
 }
 
 /* Gate for the expression-position `<` scans: claim a generic reading only
- * when the callee name is a known generic declaration (or the gate is off). */
+ * when the callee name is a known generic declaration. */
 static bool gate_generic_name(Parser *p, Expr *left) {
-    if (!p->generic_gate) return true;
     const char *name = NULL;
     if (left->kind == EXPR_IDENT) name = left->ident.name;
     else if (left->kind == EXPR_FIELD) name = left->field.name;
@@ -140,6 +155,37 @@ static Token *peek_at(Parser *p, int offset) {
     return &p->tokens[idx];
 }
 
+/* Whether the '{' at `off` opens a struct literal's fields, `{ }` or
+ * `{ ident = ...`, as opposed to a tuple literal. */
+static bool at_struct_lit_brace(Parser *p, int off) {
+    if (peek_at(p, off)->kind != TOK_LBRACE) return false;
+    TokenKind next = peek_at(p, off + 1)->kind;
+    return next == TOK_RBRACE ||
+           (next == TOK_IDENT && peek_at(p, off + 2)->kind == TOK_EQ);
+}
+
+/* The offset just past the bracket group that opens at `off`, or of the EOF
+ * token when the group never closes. */
+static int skip_group(Parser *p, int off, TokenKind open, TokenKind close) {
+    int depth = 0;
+    do {
+        TokenKind k = peek_at(p, off)->kind;
+        if (k == open) depth++;
+        else if (k == close) depth--;
+        else if (k == TOK_EOF) break;
+        off++;
+    } while (depth > 0);
+    return off;
+}
+
+/* Whether `[ ... ] {` starts at `off`: the size (or empty brackets) and the
+ * opening brace of a slice literal. Nothing else puts a brace after a closing
+ * ']' in expression position, which is what separates a literal from indexing. */
+static bool at_slice_lit_brackets(Parser *p, int off) {
+    return peek_at(p, off)->kind == TOK_LBRACKET &&
+           peek_at(p, skip_group(p, off, TOK_LBRACKET, TOK_RBRACKET))->kind == TOK_LBRACE;
+}
+
 static bool check(Parser *p, TokenKind kind) {
     return current(p)->kind == kind;
 }
@@ -154,11 +200,10 @@ static Token *advance_p(Parser *p) {
     return t;
 }
 
-/* Backtrack to a saved token position. Always abandons any pending '>>' split
- * (the '>>' token is never mutated, so a re-parse from `save` sees it intact),
- * which keeps a split that occurred after `save` from leaking across the
- * restore — e.g. a tentative type parse in `(a<b>>c)` that splits the '>>' then
- * backtracks must re-parse it as the shift `b >> c`. */
+/* Backtrack to a saved token position, abandoning any pending '>>' split. The
+ * '>>' token itself is never mutated, so a re-parse from `save` sees it whole:
+ * a tentative type parse in `(a<b>>c)` that splits the '>>' and then backtracks
+ * re-parses it as the shift `b >> c`. */
 static void restore_pos(Parser *p, int save) {
     p->half_gt = false;
     p->half_gt_pos = -1;
@@ -175,11 +220,11 @@ static bool at_typearg_gt(Parser *p) {
 }
 
 /* Consume one closing '>' of a type-argument list. A '>>' (TOK_GTGT) carries two
- * closers: the first call splits it — recording the split and staying parked on
- * the token — so a nested list can close; the enclosing list's call consumes the
- * second half and advances. This mirrors the token-splitting that C++11, Java,
- * and Rust perform for '>>' in type-argument context. Returns false (consuming
- * nothing) when the current token closes no type-arg list. */
+ * closers: the first call records the split and stays parked on the token, so a
+ * nested list can close; the enclosing list's call consumes the second half and
+ * advances. C++11, Java and Rust split '>>' the same way in type-argument
+ * context. Returns false (consuming nothing) when the current token closes no
+ * type-argument list. */
 static bool consume_typearg_gt(Parser *p) {
     if (p->half_gt && p->pos == p->half_gt_pos) {
         /* second '>' of a previously-split '>>' */
@@ -212,13 +257,21 @@ static void expect_typearg_gt(Parser *p) {
     }
 }
 
-/* Error-recovery contract: on a token mismatch, report once and return the CURRENT
-   token WITHOUT consuming it, so an enclosing recovery loop can synchronize on it.
-   The parser never aborts: every syntax error is reported with diag_error and
-   parsing continues (only the lexer's layout errors are fatal). Forward progress is
-   guaranteed by the leaf-bump rule (parse_prefix / parse_pattern_atom) plus the
-   recover_progress() watchdog in every item loop. Callers read only the returned
-   token's text (->start/->length); they must not assume it was consumed. */
+/* A token's location, tagged with the file being parsed. */
+static SrcLoc tok_loc(Parser *p, const Token *t) {
+    SrcLoc l = loc_from_token(t);
+    l.filename = p->filename;
+    return l;
+}
+
+/* Error-recovery contract: on a token mismatch, report once and return the
+   current token without consuming it, so an enclosing recovery loop can
+   synchronize on it. The parser never aborts: every syntax error is reported
+   with diag_error and parsing continues (only the lexer's layout errors are
+   fatal). Forward progress comes from the leaf-bump rule (parse_prefix /
+   parse_pattern_atom) plus the recover_progress() watchdog in every item loop.
+   Callers may read the returned token's text but must not assume it was
+   consumed. */
 static Token *expect(Parser *p, TokenKind kind) {
     if (current(p)->kind != kind) {
         diag_error(loc_from_token(current(p)), "expected %s, got %s",
@@ -232,18 +285,18 @@ static void skip_newlines(Parser *p) {
     while (check(p, TOK_NEWLINE)) advance_p(p);
 }
 
-/* Skip statement separators: newlines and explicit `;`. Used only between
-   statements in a block / inline sequence — `;` is a same-level separator
-   semantically equivalent to a newline. */
+/* Skip statement separators between the statements of a block or inline
+   sequence: newlines and `;`, which separates statements just as a newline
+   does. */
 static void skip_separators(Parser *p) {
     while (check(p, TOK_NEWLINE) || check(p, TOK_SEMICOLON)) advance_p(p);
 }
 
 /* ---- Error recovery ---- */
 
-/* Tokens a recovery skip must never cross: layout boundaries, closing delimiters,
-   and statement separators. recover_to() stops *before* these so an outer construct
-   keeps its delimiter, and the leaf-bump rule never swallows them. */
+/* Tokens the leaf-bump rule never consumes: layout boundaries, closing
+   delimiters and statement separators, so an outer construct keeps its
+   delimiter. */
 static bool is_hard_stop(TokenKind k) {
     return k == TOK_NEWLINE || k == TOK_INDENT || k == TOK_DEDENT || k == TOK_EOF ||
            k == TOK_RPAREN  || k == TOK_RBRACE || k == TOK_RBRACKET || k == TOK_SEMICOLON;
@@ -270,11 +323,12 @@ static void recover_progress(Parser *p, int guard_pos) {
     if (p->pos == guard_pos && !at_end_p(p) && !check(p, TOK_DEDENT)) advance_p(p);
 }
 
-/* Synchronizing set (Dragon-Book hierarchical: anchor on declaration-starting
-   keywords so a dropped terminator resyncs at the next declaration rather than
-   swallowing it). Used by the top-level and module-body recovery loops; block-body
-   recovery resyncs on layout (NEWLINE/DEDENT) via leaf-bump + the watchdog instead,
-   since a statement keyword is not a reliable in-block anchor. */
+/* Synchronizing set for the top-level and module-body recovery loops: anchor on
+   declaration-starting keywords (hierarchical sync, as in the Dragon Book) so a
+   dropped terminator resyncs at the next declaration rather than swallowing it.
+   Block bodies resync on layout (NEWLINE/DEDENT) through leaf-bump and the
+   watchdog instead, since a statement keyword is not a reliable in-block
+   anchor. */
 static const TokenKind DECL_START[] = {
     TOK_LET, TOK_STRUCT, TOK_UNION, TOK_ENUM, TOK_ERROR_KW, TOK_MODULE,
     TOK_IMPORT, TOK_EXTERN, TOK_NAMESPACE, TOK_PRIVATE,
@@ -295,7 +349,7 @@ static Token *expect_extern_c_name(Parser *p) {
     }
     diag_error(loc_from_token(current(p)),
         "expected identifier in extern declaration, got %s", token_kind_name(k));
-    return current(p); /* no consume — recovery loop syncs on this token */
+    return current(p); /* no consume: the recovery loop syncs on this token */
 }
 
 /* ---- Pratt precedence ---- */
@@ -313,7 +367,7 @@ typedef enum {
     PREC_ADD,           /* + - */
     PREC_MUL,           /* * / % */
     PREC_PREFIX,        /* -x !x ~x &x *x */
-    PREC_POSTFIX,       /* x! x[i] x.f x->f x() */
+    PREC_POSTFIX,       /* x! x? x[i] x.f x() */
 } Prec;
 
 static Prec infix_prec(TokenKind kind) {
@@ -348,7 +402,6 @@ static Prec infix_prec(TokenKind kind) {
 
 static Expr *alloc_expr(Parser *p, ExprKind kind, SrcLoc loc) {
     Expr *e = arena_alloc(p->arena, sizeof(Expr));
-    memset(e, 0, sizeof(Expr));
     e->kind = kind;
     loc.filename = p->filename;
     e->loc = loc;
@@ -362,7 +415,6 @@ static Expr *alloc_expr_error(Parser *p, SrcLoc loc) {
 }
 static Pattern *alloc_pat_error(Parser *p, SrcLoc loc) {
     Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
-    memset(pat, 0, sizeof *pat);
     pat->kind = PAT_ERROR;
     loc.filename = p->filename;
     pat->loc = loc;
@@ -370,19 +422,42 @@ static Pattern *alloc_pat_error(Parser *p, SrcLoc loc) {
 }
 static Decl *alloc_decl_error(Parser *p, SrcLoc loc) {
     Decl *d = arena_alloc(p->arena, sizeof(Decl));
-    memset(d, 0, sizeof *d);
     d->kind = DECL_ERROR;
     loc.filename = p->filename;
     d->loc = loc;
     return d;
 }
 
-/* Copy a temp array into the arena */
+/* The source text from token `from` up to token `to`, trailing whitespace
+ * trimmed, for the runtime messages of `assert` and `!`. Empty when a parse
+ * error was reported since `errs_before`: recovery can synthesize layout tokens
+ * whose text is not in the source buffer. Errors stop codegen, the only
+ * consumer, so the empty text is never seen. */
+static const char *source_text(Parser *p, const Token *from, const Token *to,
+                               int errs_before, int *len) {
+    const char *s = from->start;
+    int n = 0;
+    if (diag_error_count() == errs_before) {
+        n = (int)(to->start - s);
+        while (n > 0 && (s[n-1] == ' ' || s[n-1] == '\n' || s[n-1] == '\r' || s[n-1] == '\t'))
+            n--;
+    }
+    *len = n;
+    return arena_strdup(p->arena, s, n);
+}
+
 static Expr **arena_copy_exprs(Parser *p, Expr **arr, int count) {
-    if (count == 0) return NULL;
-    Expr **a = arena_alloc(p->arena, sizeof(Expr*) * (size_t)count);
-    memcpy(a, arr, sizeof(Expr*) * (size_t)count);
-    return a;
+    return arena_dup(p->arena, arr, count, sizeof *arr);
+}
+
+/* A statement list as one expression: the statement itself when there is
+ * only one, otherwise an EXPR_BLOCK over the (arena-owned) list. */
+static Expr *block_or_single(Parser *p, Expr **stmts, int count, SrcLoc loc) {
+    if (count == 1) return stmts[0];
+    Expr *b = alloc_expr(p, EXPR_BLOCK, loc);
+    b->block.stmts = stmts;
+    b->block.count = count;
+    return b;
 }
 
 /* ---- Type parsing ---- */
@@ -417,9 +492,9 @@ static bool is_type_arg_token(TokenKind k) {
 /* Scan a balanced type-argument list: `start` is the token just after the '<',
  * and every token up to the matching '>' must be type-compatible. Returns the
  * index just past the closing '>' / '>>', or -1 when the run cannot be a
- * type-argument list at all. Every expression-position reading of `name<...>`
- * shares this one scan and differs only in what must *follow* it (see the three
- * predicates below) — the readings must agree on the extent of the list. */
+ * type-argument list at all. The expression-position readings of `name<...>`
+ * share this scan, so they agree on the extent of the list, and differ only in
+ * what must follow it (the three predicates below). */
 static int typearg_scan(Parser *p, int start) {
     int scan = start;
     int depth = 1;
@@ -427,7 +502,7 @@ static int typearg_scan(Parser *p, int start) {
     while (scan < p->token_count && depth > 0) {
         TokenKind k = p->tokens[scan].kind;
         /* Inside parentheses any token is admitted (a parenthesized const
-         * expression carries the full grammar, incl. shifts and comparisons)
+         * expression takes any expression, including shifts and comparisons)
          * and angle tokens don't count toward the <...> depth. */
         if (k == TOK_LPAREN) { paren++; scan++; continue; }
         if (k == TOK_RPAREN) { if (--paren < 0) return -1; scan++; continue; }
@@ -441,7 +516,7 @@ static int typearg_scan(Parser *p, int start) {
         if (k == TOK_GTGT) {
             /* '>>' closes two levels (split in type-argument context) */
             depth -= 2;
-            if (depth < 0) return -1; /* unbalanced — read as comparison/shift */
+            if (depth < 0) return -1; /* unbalanced: read as comparison/shift */
             scan++;
             continue;
         }
@@ -460,17 +535,13 @@ static bool generic_call_scan(Parser *p, int start) {
                         p->tokens[end].kind == TOK_DOT);
 }
 
-/* A *bare* generic instantiation in value position: the list is followed by a
- * token that cannot begin the right operand of a comparison (an expression
- * terminator). `name<Type>` followed by such a token can only be a misuse of
- * explicit type arguments without a call — never a valid comparison chain
- * (`a < b > c` keeps the comparison reading because `c` starts an expression) —
- * so we route it to pass2 for a clean "cannot be used as a value" diagnostic
- * instead of letting '>' fall through to a comparison and fail with a cryptic
- * "unexpected token" parse error. The terminator set is deliberately
- * conservative: it lists only tokens that unambiguously cannot start an
- * expression, so no valid comparison is ever misread (a terminator we omit just
- * keeps the old, less-helpful error — never a regression). */
+/* A bare generic instantiation in value position: the list is followed by a
+ * token that cannot begin an expression, so `name<Type>` there cannot be a
+ * comparison chain (`a < b > c` stays a comparison because `c` starts an
+ * expression). The node goes to pass2, which reports that a generic cannot be
+ * used as a value, instead of '>' failing later as a parse error. The set
+ * lists only tokens that cannot start an expression, so no valid comparison
+ * is misread; a terminator missing from it only costs the clearer message. */
 static bool bare_inst_scan(Parser *p, int start) {
     int end = typearg_scan(p, start);
     if (end < 0) return false;
@@ -484,28 +555,22 @@ static bool bare_inst_scan(Parser *p, int start) {
     }
 }
 
-/* Explicit type arguments on a struct literal — `name<Types> { field = ... }`,
- * which FC does not have: a struct literal's type arguments are always inferred
- * from its field values. The brace shape tested here is the same one
- * parse_prefix uses to tell a struct literal from a block (`{}` or `{ ident =`),
- * and it can never close a comparison chain — a tuple literal needs two
- * elements, so neither shape is a legal right operand — which is why this
- * reading is claimed without the generic-name gate: the form is wrong whether or
- * not the name is generic, and only the diagnostic depends on knowing that. */
+/* Explicit type arguments on a struct literal, `name<Types> { field = ... }`,
+ * which FC does not have: a struct literal's type arguments are inferred from
+ * its field values. The brace shape is the one parse_ident_prefix uses to tell
+ * a struct literal from a tuple literal (`{}` or `{ ident =`). Neither shape
+ * is a legal tuple literal, so neither can be the right operand of a
+ * comparison, and this reading needs no generic-name gate: the form is wrong
+ * whether or not the name is generic. */
 static bool struct_lit_typearg_scan(Parser *p, int start) {
     int end = typearg_scan(p, start);
-    if (end < 0 || p->tokens[end].kind != TOK_LBRACE ||
-        end + 1 >= p->token_count)
-        return false;
-    if (p->tokens[end + 1].kind == TOK_RBRACE) return true;   /* name<T> { } */
-    return p->tokens[end + 1].kind == TOK_IDENT &&            /* name<T> { f = */
-           end + 2 < p->token_count && p->tokens[end + 2].kind == TOK_EQ;
+    return end >= 0 && at_struct_lit_brace(p, end - p->pos);
 }
 
 /* Flatten an `a.b.c` chain of EXPR_IDENT/EXPR_FIELD back into the dotted,
  * interned spelling parse_struct_literal takes; NULL if the chain holds
- * anything else. Sized from the components rather than written into a fixed
- * buffer — FC identifiers are unbounded and snprintf truncation is silent. */
+ * anything else. The buffer is sized from the components, since FC
+ * identifiers are unbounded. */
 static int dotted_name_len(Expr *e) {
     if (e->kind == EXPR_IDENT) return (int)strlen(e->ident.name);
     if (e->kind != EXPR_FIELD) return -1;
@@ -532,35 +597,17 @@ static const char *dotted_name_of(Parser *p, Expr *e) {
     return intern(p->intern, buf, len);
 }
 
-static bool is_type_name(const char *s, int len) {
-    static const struct { const char *n; int l; } types[] = {
-        {"i8",2}, {"i16",3}, {"i32",3}, {"i64",3},
-        {"u8",2}, {"u16",3}, {"u32",3}, {"u64",3},
-        {"f32",3}, {"f64",3},
-        {"bool",4}, {"char",4},
-        {"str",3}, {"cstr",4},
-        {"any",3},
-        {"isize",5}, {"usize",5},
-    };
-    for (int i = 0; i < (int)(sizeof(types)/sizeof(types[0])); i++) {
-        if (types[i].l == len && memcmp(s, types[i].n, (size_t)len) == 0) return true;
-    }
-    return false;
-}
-
-/* type_from_name is now in types.c/h */
-
 static uint64_t parse_int_value(const char *start, int length, bool *out_of_range);
 
 static Type *parse_type_suffix(Parser *p, Type *base) {
-    /* T*, T[], T[N], T? — left to right */
+    /* T*, T[], T[N], T?, applied left to right */
     for (;;) {
-        /* A fixed array is a *field's* storage, not a general type: C spells it
-         * as an inside-out declarator (`uint8_t m[3][2]`), which no other type
-         * constructor here composes with — `u8[2][3]`, `u8[2][]`, `u8[2]*` and
-         * `u8[2]?` all emit `uint8_t[2]` as a type-specifier, which is not C.
-         * So a fixed array must be the outermost type it appears in; a fixed
-         * array *of* something (`u8[][2]`) is unaffected. */
+        /* A fixed array is a field's storage, not a general type: C spells it
+         * as an inside-out declarator (`uint8_t m[3][2]`) that no other type
+         * constructor here composes with, since `u8[2][3]`, `u8[2][]`,
+         * `u8[2]*` and `u8[2]?` would each emit `uint8_t[2]` as a type
+         * specifier, which is not C. So a fixed array must be the outermost
+         * type it appears in; a fixed array of something (`u8[][2]`) is fine. */
         if (base->kind == TYPE_FIXED_ARRAY &&
             (check(p, TOK_STAR) || check(p, TOK_LBRACKET) ||
              check(p, TOK_QUESTION) || check(p, TOK_BANG))) {
@@ -575,16 +622,16 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
         }
         if (check(p, TOK_LBRACKET) && peek_at(p, 1)->kind == TOK_RBRACKET &&
             peek_at(p, 2)->kind != TOK_LBRACE) {
-            /* "[]" NOT followed by "{" is a slice-type suffix. "T[] {" is a slice
-             * *literal* (T[] { ptr = .., len = .. }) whose "[]" belongs to the
-             * literal, not the element type — leave it for parse_array_lit_body.
-             * A type is never legitimately followed by an open brace, so this
-             * guard is unambiguous in every context. */
+            /* "[]" not followed by "{" is a slice-type suffix. In "T[] {" the
+             * "[]" belongs to a slice literal (T[] { ptr = .., len = .. }), not
+             * to the element type, and is left for parse_array_lit_body. A type
+             * is never otherwise followed by an open brace, so the test is
+             * unambiguous. */
             advance_p(p); advance_p(p);
             base = type_slice(p->arena, base);
             continue;
         }
-        /* T[N] — fixed-size inline array, only in struct/extern field declarations */
+        /* T[N]: fixed-size inline array, where allow_fixed_array admits one */
         if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
             peek_at(p, 1)->kind == TOK_INT_LIT && peek_at(p, 2)->kind == TOK_RBRACKET) {
             advance_p(p); /* consume [ */
@@ -602,7 +649,7 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
             base = type_fixed_array(p->arena, base, size);
             continue;
         }
-        /* T['n] — fixed array sized by a const generic parameter; positivity
+        /* T['n]: fixed array sized by a const generic parameter; positivity
          * is checked per instantiation once the value is known. */
         if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
             peek_at(p, 1)->kind == TOK_TYPE_VAR && peek_at(p, 2)->kind == TOK_RBRACKET) {
@@ -614,10 +661,9 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
             base = type_fixed_array_sym(p->arena, base, size_ref);
             continue;
         }
-        /* T['n / 32], T[('n * 2)], T[4 * 2], T[cfg.word] — fixed array sized
-         * by a const expression (over const generic params, named constants,
-         * or fully concrete — folded and positivity-checked in pass2/at
-         * instantiation). */
+        /* T['n / 32], T[('n * 2)], T[4 * 2], T[cfg.word]: fixed array sized
+         * by a const expression over const generic params, named constants or
+         * literals. pass2 or instantiation folds it and checks positivity. */
         if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
             (peek_at(p, 1)->kind == TOK_TYPE_VAR || peek_at(p, 1)->kind == TOK_LPAREN ||
              peek_at(p, 1)->kind == TOK_MINUS || peek_at(p, 1)->kind == TOK_INT_LIT ||
@@ -689,10 +735,10 @@ static Type *parse_type(Parser *p) {
 
     if (t->kind == TOK_VOID) {
         advance_p(p);
-        /* `void` takes exactly one suffix: `!`. void! is the payload-less
-         * result (repr: the i32 tag alone); further suffixes then compose on
-         * the result as usual (void!?). A bare option, pointer, or slice of
-         * void stays illegal — void is not a value type. */
+        /* `void` takes one suffix only, `!`. void! is the payload-less
+         * result (represented by the i32 tag alone); further suffixes compose
+         * on the result as usual (void!?). An option, pointer or slice of
+         * bare void is illegal, since void is not a value type. */
         if (check(p, TOK_BANG)) {
             advance_p(p);
             return parse_type_suffix(p, type_result(p->arena, type_void()));
@@ -701,18 +747,16 @@ static Type *parse_type(Parser *p) {
     }
 
     if (t->kind == TOK_ERROR_KW) {
-        /* `error` in type position: the i32 display alias (str/cstr precedent).
-         * An error code is an i32 everywhere; the alias only affects display. */
+        /* `error` in type position: a display alias for i32, like str and
+         * cstr. An error code is an i32 everywhere; the alias only affects
+         * display. */
         advance_p(p);
         return parse_type_suffix(p, type_error_code());
     }
 
     if (t->kind == TOK_TYPE_VAR) {
         advance_p(p);
-        Type *tv = arena_alloc(p->arena, sizeof(Type));
-        tv->kind = TYPE_TYPE_VAR;
-        tv->type_var.name = tok_intern(p, t);
-        return parse_type_suffix(p, tv);
+        return parse_type_suffix(p, type_type_var(p->arena, tok_intern(p, t)));
     }
 
     if (t->kind == TOK_IDENT) {
@@ -731,8 +775,9 @@ static Type *parse_type(Parser *p) {
             }
             return parse_type_suffix(p, base);
         }
-        /* User-defined type name (struct/union) — create a stub with just the name.
-         * Support module-qualified names: module.type, module.sub.type, etc. */
+        /* User-defined type name (struct/union): create a stub holding just
+         * the name, which may be module-qualified (module.type,
+         * module.sub.type). */
         advance_p(p);
         const char *type_name = tok_intern(p, t);
         while (check(p, TOK_DOT) && peek_at(p, 1)->kind == TOK_IDENT) {
@@ -774,12 +819,11 @@ static Type *parse_type(Parser *p) {
             } while (1);
             if (valid && at_typearg_gt(p)) {
                 consume_typearg_gt(p); /* consume > (splitting a >> for a nested list) */
-                udt->stub.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
-                memcpy(udt->stub.type_args, targs, sizeof(Type*) * (size_t)ta_count);
+                udt->stub.type_args = arena_dup(p->arena, targs, ta_count, sizeof(Type*));
                 udt->stub.type_arg_count = ta_count;
                 free(targs);
             } else {
-                /* Not type args — backtrack */
+                /* Not type args: backtrack */
                 restore_pos(p, save);
                 free(targs);
             }
@@ -787,7 +831,7 @@ static Type *parse_type(Parser *p) {
         return parse_type_suffix(p, udt);
     }
 
-    /* Tuple type: { T1, T2, ... } — anonymous positional product (>= 2 elements) */
+    /* Tuple type: { T1, T2, ... }, an anonymous positional product (>= 2 elements) */
     if (t->kind == TOK_LBRACE) {
         SrcLoc loc = loc_from_token(t);
         advance_p(p); /* consume { */
@@ -840,13 +884,11 @@ static Type *parse_type(Parser *p) {
         }
         expect(p, TOK_RPAREN);
         if (!check(p, TOK_ARROW)) {
-            /* No "->": this "(...)" was a parenthesized (grouped) type, not a
-             * function type — e.g. `((int32) -> int32)?` groups the inner
-             * function type so a postfix (?, *, []) can apply to the whole thing.
-             * Grammar: `type_atom = "(" type_param_list ")"`, which is a valid
-             * type_primary that postfixes attach to. Only a single, non-variadic
-             * element forms a grouped type; a bare `(T1, T2)` or `(...)` is
-             * meaningful only as a function parameter list and needs the `->`. */
+            /* No "->": this "(...)" is a grouped type, not a function type.
+             * `((i32) -> i32)?` groups the inner function type so a postfix
+             * (?, *, []) applies to the whole of it. Only a single, non-variadic
+             * element forms a grouped type; `(T1, T2)` or `(...)` is only a
+             * parameter list and needs the `->`. */
             if (pcount != 1 || is_variadic) {
                 diag_error(loc_from_token(current(p)),
                     "expected '->' after function parameter list");
@@ -865,19 +907,42 @@ static Type *parse_type(Parser *p) {
         ft->func.param_count = pcount;
         ft->func.return_type = ret;
         ft->func.is_variadic = is_variadic;
-        if (pcount > 0) {
-            ft->func.param_types = arena_alloc(p->arena, sizeof(Type*) * (size_t)pcount);
-            memcpy(ft->func.param_types, params, sizeof(Type*) * (size_t)pcount);
-            free(params);
-        }
+        ft->func.param_types = arena_dup(p->arena, params, pcount, sizeof(Type*));
+        free(params);
         return parse_type_suffix(p, ft);
     }
 
     SrcLoc loc = loc_from_token(t);
     diag_error(loc, "expected type, got %s", token_kind_name(t->kind));
-    /* No consume: the caller (a `: type` / param-list site) resyncs non-fatally.
-       The poison type flows through resolve_type/unify/type_eq guards in pass2. */
+    /* No consume: the caller (a `: type` or parameter-list site) resyncs. pass2
+       lets the poison type pass silently. */
     return type_error();
+}
+
+/* The comma-separated list after a '<' that has already been scanned as a
+ * type-argument list; stops before the closing '>'. */
+static Type **parse_type_arg_list(Parser *p, int *count) {
+    Type **args = NULL;
+    int n = 0, cap = 0;
+    do {
+        Type *ty = parse_type_arg(p);
+        DA_APPEND(args, n, cap, ty);
+        if (!check(p, TOK_COMMA)) break;
+        advance_p(p);
+    } while (1);
+    Type **out = arena_dup(p->arena, args, n, sizeof *args);
+    free(args);
+    *count = n;
+    return out;
+}
+
+/* A type in a slot that admits the fixed-array form T[N]. */
+static Type *parse_type_allowing_fixed_array(Parser *p) {
+    bool saved = p->allow_fixed_array;
+    p->allow_fixed_array = true;
+    Type *t = parse_type(p);
+    p->allow_fixed_array = saved;
+    return t;
 }
 
 /* ---- Expression parsing ---- */
@@ -889,8 +954,8 @@ static Expr *parse_match_expr(Parser *p);
 static Expr *parse_struct_literal(Parser *p, const char *type_name, SrcLoc loc);
 
 /* Parse a sub-expression inside matched brackets (parens, square, curly).
-   Clears `block_arm_arrow` for the duration so pointer-field access (`p->x`)
-   is unambiguous inside a bracketed guard sub-expression. */
+   Clears `block_arm_arrow` for the duration: a `->` inside brackets is never a
+   match arm's separator. */
 static Expr *parse_bracketed_expr(Parser *p, Prec min_prec) {
     bool saved = p->block_arm_arrow;
     p->block_arm_arrow = false;
@@ -899,12 +964,28 @@ static Expr *parse_bracketed_expr(Parser *p, Prec min_prec) {
     return e;
 }
 
+/* Call arguments after a consumed '(', stopping before the ')'. */
+static Expr **parse_call_args(Parser *p, int *count) {
+    Expr **args = NULL;
+    int n = 0, cap = 0;
+    if (!check(p, TOK_RPAREN)) {
+        do {
+            Expr *arg = parse_bracketed_expr(p, PREC_NONE + 1);
+            DA_APPEND(args, n, cap, arg);
+            if (!check(p, TOK_COMMA)) break;
+            advance_p(p);
+        } while (1);
+    }
+    Expr **out = arena_copy_exprs(p, args, n);
+    free(args);
+    *count = n;
+    return out;
+}
+
 static uint64_t parse_int_value(const char *start, int length, bool *out_of_range) {
-    /* Sized from the token, not a guessed maximum. A fixed buffer clipped the
-     * digit string, and a clipped *number* is not detectably wrong: strtoull on
-     * the surviving prefix succeeds and sets no ERANGE, so `0x000…0042` written
-     * with enough leading zeros to overrun the buffer silently evaluated to 0.
-     * The digits can never outnumber the token's own characters. */
+    /* Sized from the token, whose characters the digits never outnumber. A
+     * clipped digit string is not detectably wrong: strtoull on the prefix
+     * succeeds without ERANGE and yields a different number. */
     char *buf = malloc((size_t)length + 1);
     if (!buf) {
         fprintf(stderr, "fcc: out of memory\n");
@@ -966,20 +1047,14 @@ static int int_num_end(const char *start, int length) {
     return i;
 }
 
-static Type *parse_int_type(const char *start, int length) {
-    int num_end = int_num_end(start, length);
-    if (num_end >= length) return type_int32();
-    Type *t = type_from_int_suffix(start + num_end, length - num_end);
-    return t ? t : type_int32();
-}
-
 /* The literal's type in the current slot. A const expression evaluates in the
  * i64 domain, so an unsuffixed literal inside one is i64 rather than the i32
- * expression default — otherwise a lone `f<4000000000>` (taken as-is by
- * parse_type_arg) would be accepted while the same literal reached through
- * const arithmetic got judged against i32's range. A written suffix always
+ * expression default. A lone `f<4000000000>` and the same literal inside const
+ * arithmetic are then judged against the same range. A written suffix always
  * wins. */
-static Type *parse_int_type_in(Parser *p, const char *start, int length) {
+static Type *int_lit_type(Parser *p, const Token *tok) {
+    const char *start = tok->start;
+    int length = tok->length;
     int num_end = int_num_end(start, length);
     if (num_end >= length)
         return p->in_const_expr ? type_int64() : type_int32();
@@ -992,7 +1067,7 @@ static Type *parse_int_type_in(Parser *p, const char *start, int length) {
  * A generic argument is either a type or a const (value) expression. Bare
  * const expressions admit integer literals, const params ('n), named consts,
  * and + - * / % with unary minus; shifts and comparisons require parentheses
- * (`wide<('n >> 2)>`), inside which the full expression grammar applies. */
+ * (`wide<('n >> 2)>`), inside which any expression is accepted. */
 
 /* One atom of a bare const expression inside <...> or a size slot. */
 static Expr *parse_const_atom(Parser *p) {
@@ -1004,7 +1079,7 @@ static Expr *parse_const_atom(Parser *p) {
         Expr *e = alloc_expr(p, EXPR_INT_LIT, loc);
         bool oor = false;
         e->int_lit.value = parse_int_value(t->start, t->length, &oor);
-        e->int_lit.lit_type = parse_int_type_in(p, t->start, t->length);
+        e->int_lit.lit_type = int_lit_type(p, t);
         e->int_lit.out_of_range = oor;
         return e;
     }
@@ -1022,12 +1097,10 @@ static Expr *parse_const_atom(Parser *p) {
         while (check(p, TOK_DOT)) {
             advance_p(p);
             Token *m = expect(p, TOK_IDENT);
-            if (!m) break;
             Expr *fld = alloc_expr(p, EXPR_FIELD, loc);
             fld->field.object = e;
             fld->field.name = tok_intern(p, m);
-            fld->field.name_loc = loc_from_token(m);
-            fld->field.name_loc.filename = p->filename;
+            fld->field.name_loc = tok_loc(p, m);
             e = fld;
         }
         return e;
@@ -1084,14 +1157,14 @@ static Expr *parse_const_arith_inner(Parser *p, int min_prec) {
     return left;
 }
 
-/* Does the token at `idx` begin a const atom (for the `t*` vs `a * b`
- * disambiguation: after `*`, a const atom can never continue a pointer type)? */
+/* Can a token of kind `k` begin a const atom? Decides `t*` vs `a * b`: after
+ * `*`, a const atom never continues a pointer type. */
 static bool starts_const_atom(TokenKind k) {
     return k == TOK_INT_LIT || k == TOK_TYPE_VAR || k == TOK_IDENT ||
            k == TOK_LPAREN || k == TOK_MINUS;
 }
 
-/* Lookahead over a dotted name (IDENT ('.' IDENT)*) starting at offset 0;
+/* Lookahead over a dotted name (IDENT ('.' IDENT)*) starting at offset `off`;
  * returns the offset of the first token past it. */
 static int scan_dotted_ident(Parser *p, int off) {
     off++;  /* the IDENT itself */
@@ -1106,28 +1179,27 @@ static int scan_dotted_ident(Parser *p, int off) {
  * arithmetic; a following * is arithmetic iff the token after it can begin a
  * const atom (no type continues past `T*` with an expression atom).
  *
- * A dotted name is the one shape the parser cannot settle on its own — `m.point`
- * is a module-qualified type and `dir.count` is a value — so it is left to read
- * as a type here and pass2 takes the const reading when the name turns out to
- * denote one (try_named_const_arg). The exception is a *built-in* type name with
- * a member (`i32.bits`): no type continues past `i32`, so the value reading is
- * forced and the parser must take it — parse_type would stop at the `.` and
- * abandon the whole argument list. */
+ * A dotted name is the one shape the parser cannot settle on its own (`m.point`
+ * is a module-qualified type, `dir.count` a value), so it reads as a type here
+ * and pass2 takes the const reading when the name denotes one
+ * (try_named_const_arg). The exception is a built-in type name with a member
+ * (`i32.bits`): no type continues past `i32`, so only the value reading is
+ * possible, and parse_type would stop at the `.` and abandon the whole
+ * argument list. */
 static bool ident_arg_is_const_expr(Parser *p) {
     Token *head = current(p);
-    if (head->kind == TOK_IDENT && is_type_name(head->start, head->length) &&
+    if (head->kind == TOK_IDENT && type_from_name(head->start, head->length) &&
         peek_at(p, 1)->kind == TOK_DOT && peek_at(p, 2)->kind == TOK_IDENT)
         return true;
     int off = head->kind == TOK_TYPE_VAR ? 1 : scan_dotted_ident(p, 0);
     TokenKind k = peek_at(p, off)->kind;
     if (k == TOK_PLUS || k == TOK_SLASH || k == TOK_PERCENT) return true;
     if (k == TOK_MINUS)
-        /* `t - x` is never a type; but a '-' here could also start the next
-         * clause only in error cases — treat as arithmetic. */
+        /* `t - x` is never a type, and a valid program has no other use for
+         * a '-' here. */
         return true;
     if (k == TOK_STAR) {
-        /* consume any run of '*' (pointer levels); arithmetic iff a const
-         * atom follows the first '*' */
+        /* arithmetic iff a const atom follows the '*' */
         return starts_const_atom(peek_at(p, off + 1)->kind);
     }
     return false;
@@ -1182,36 +1254,13 @@ static Type *parse_type_arg(Parser *p) {
     return type_const_expr(p->arena, expr);
 }
 
-/* Parse the byte value from a char literal token (e.g., 'a', '\n', '\x41').
-   Token includes the surrounding single quotes. */
-static uint8_t parse_char_value(const char *start, int length) {
-    /* start[0] = ', start[length-1] = ' */
-    if (length < 3) return 0;
-    if (start[1] != '\\') return (uint8_t)start[1];
-    /* escape sequence */
-    if (length < 4) return 0;
-    switch (start[2]) {
-    case 'n':  return '\n';
-    case 't':  return '\t';
-    case 'r':  return '\r';
-    case '\\': return '\\';
-    case '\'': return '\'';
-    case '0':  return '\0';
-    case 'x': {
-        /* \xNN — two hex digits */
-        if (length < 6) return 0;
-        unsigned val = 0;
-        for (int i = 3; i < 5; i++) {
-            val <<= 4;
-            char c = start[i];
-            if (c >= '0' && c <= '9') val += (unsigned)(c - '0');
-            else if (c >= 'a' && c <= 'f') val += (unsigned)(c - 'a' + 10);
-            else if (c >= 'A' && c <= 'F') val += (unsigned)(c - 'A' + 10);
-        }
-        return (uint8_t)val;
-    }
-    default: return (uint8_t)start[2];
-    }
+/* A char literal's byte ('a', '\n', '\x41'; the token includes the quotes).
+ * The lexer admits one character or escape between the quotes, so the body
+ * decodes to one byte. */
+static uint8_t char_lit_value(const Token *t) {
+    unsigned char b = 0;
+    decode_str_lit(t->start + 1, t->length - 2, &b);
+    return b;
 }
 
 static bool at_stmt_terminator(Parser *p);
@@ -1223,7 +1272,7 @@ static Expr **parse_block(Parser *p, int *count) {
     int len = 0, cap = 0;
 
     expect(p, TOK_INDENT);
-    /* Error count as of the start of the current line — see the separator check. */
+    /* Error count as of the start of the current line (see the separator check). */
     int line_errs = diag_error_count();
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
         int at = p->pos;
@@ -1233,13 +1282,12 @@ static Expr **parse_block(Parser *p, int *count) {
         int guard = p->pos;
         Expr *e = parse_block_item(p);
         DA_APPEND(stmts, len, cap, e);
-        /* The grammar's `block` rule separates items: an item that stops short of
-           a separator means the rest of the line was never claimed by anything.
-           Without this check, juxtaposed items (`let x = 5 6`, `assert(a) assert(b)`,
-           `continue 5`) parse as separate statements and silently discard values.
-           Reported only for a line that has been error-free so far — once a line
-           has failed, its leftover tokens are that error's debris and every
-           further item on it is a recovery artifact, not a second diagnosis. */
+        /* Items in a block must be separated: an item that stops short of a
+           separator leaves the rest of the line unclaimed. Without this check,
+           juxtaposed items (`let x = 5 6`, `assert(a) assert(b)`, `continue 5`)
+           would parse as separate statements and silently discard values.
+           Reported only for a line with no error so far: once a line has
+           failed, its leftover tokens are that error's debris. */
         if (p->pos > guard && diag_error_count() == line_errs && !at_stmt_terminator(p)) {
             diag_error(loc_from_token(current(p)),
                 "expected a newline or ';' between statements, got %s",
@@ -1304,13 +1352,7 @@ static Expr *parse_guard(Parser *p, bool is_overflow_axis, bool enable, SrcLoc l
     if (check(p, TOK_INDENT)) {
         int count;
         Expr **stmts = parse_block(p, &count);
-        if (count == 1) {
-            body = stmts[0];
-        } else {
-            body = alloc_expr(p, EXPR_BLOCK, loc);
-            body->block.stmts = stmts;
-            body->block.count = count;
-        }
+        body = block_or_single(p, stmts, count, loc);
     } else {
         body = parse_expr(p, PREC_NONE + 1);
     }
@@ -1331,8 +1373,7 @@ static Expr *parse_func_literal(Parser *p) {
 
     if (!check(p, TOK_RPAREN)) {
         do {
-            SrcLoc ploc = loc_from_token(current(p));
-            ploc.filename = p->filename;
+            SrcLoc ploc = tok_loc(p, current(p));
             const char *name = tok_intern(p, expect(p, TOK_IDENT));
             expect(p, TOK_COLON);
             Type *type = parse_type(p);
@@ -1349,11 +1390,8 @@ static Expr *parse_func_literal(Parser *p) {
     Expr **body = parse_body(p, &body_count);
 
     Expr *e = alloc_expr(p, EXPR_FUNC, loc);
-    if (pcount > 0) {
-        e->func.params = arena_alloc(p->arena, sizeof(Param) * (size_t)pcount);
-        memcpy(e->func.params, params, sizeof(Param) * (size_t)pcount);
-        free(params);
-    }
+    e->func.params = arena_dup(p->arena, params, pcount, sizeof(Param));
+    free(params);
     e->func.param_count = pcount;
     e->func.body = body;
     e->func.body_count = body_count;
@@ -1370,15 +1408,7 @@ static Expr *parse_if_expr(Parser *p) {
     int then_count;
     Expr **then_body = parse_body(p, &then_count);
 
-    /* Wrap multi-expr then body in a block node */
-    Expr *then_expr;
-    if (then_count == 1) {
-        then_expr = then_body[0];
-    } else {
-        then_expr = alloc_expr(p, EXPR_BLOCK, loc);
-        then_expr->block.stmts = then_body;
-        then_expr->block.count = then_count;
-    }
+    Expr *then_expr = block_or_single(p, then_body, then_count, loc);
 
     int save_pos = p->pos;
     skip_newlines(p);
@@ -1392,16 +1422,10 @@ static Expr *parse_if_expr(Parser *p) {
         } else {
             int else_count;
             Expr **else_body = parse_body(p, &else_count);
-            if (else_count == 1) {
-                else_expr = else_body[0];
-            } else {
-                else_expr = alloc_expr(p, EXPR_BLOCK, loc);
-                else_expr->block.stmts = else_body;
-                else_expr->block.count = else_count;
-            }
+            else_expr = block_or_single(p, else_body, else_count, loc);
         }
     } else {
-        /* No else — restore position so NEWLINE is visible to Pratt loop */
+        /* No else: restore position so the Pratt loop sees the NEWLINE */
         restore_pos(p, save_pos);
     }
 
@@ -1412,13 +1436,11 @@ static Expr *parse_if_expr(Parser *p) {
     return e;
 }
 
-/* Parse a let-binding: `let [mut] <target> = <init>`.  When an explicit `in`
-   follows (mandatory if require_in), `let x = v in body` desugars to a
-   two-statement block (the `let`, then `body`) — EXPR_BLOCK already gives the
-   binding an inner scope, yields body's value, and codegens as a GNU
-   statement-expression, so no new pass2/codegen is needed.  Without `in` (the
-   offside form) the bare let node is returned; the enclosing block's subsequent
-   statements are its implied-`in` body. */
+/* Parse a let-binding: `let [mut] <target> = <init>`. When an explicit `in`
+   follows (required if require_in), `let x = v in body` desugars to an
+   EXPR_BLOCK of the `let` followed by `body`, which gives the binding an inner
+   scope and yields body's value. Without `in` (the offside form) the bare let
+   node is returned; the rest of the enclosing block is its implied body. */
 static Expr *parse_let_binding(Parser *p, bool require_in) {
     SrcLoc loc = loc_from_token(current(p));
     advance_p(p); /* consume 'let' */
@@ -1442,21 +1464,14 @@ static Expr *parse_let_binding(Parser *p, bool require_in) {
     } else {
         Token *name_tok = expect(p, TOK_IDENT);
         const char *name = tok_intern(p, name_tok);
-        SrcLoc name_loc = loc_from_token(name_tok);
-        name_loc.filename = p->filename;
+        SrcLoc name_loc = tok_loc(p, name_tok);
         expect(p, TOK_EQ);
 
         Expr *init;
         if (check(p, TOK_INDENT)) {
             int count;
             Expr **body = parse_block(p, &count);
-            if (count == 1) {
-                init = body[0];
-            } else {
-                init = alloc_expr(p, EXPR_BLOCK, loc);
-                init->block.stmts = body;
-                init->block.count = count;
-            }
+            init = block_or_single(p, body, count, loc);
         } else {
             init = parse_expr(p, PREC_NONE + 1);
         }
@@ -1470,10 +1485,9 @@ static Expr *parse_let_binding(Parser *p, bool require_in) {
 
     if (check(p, TOK_IN)) {
         advance_p(p);
-        /* The `in` body is greedy: an inline `;`-sequence that extends to the
-           enclosing boundary (dedent / `)` / `,` / `else` / EOF), exactly as in
-           ML/F#.  `let x = v in a; b` binds `x` over both `a` and `b`.  A single
-           expression yields the same two-statement block as before. */
+        /* The `in` body is greedy, as in ML and F#: an inline `;`-sequence
+           that extends to the enclosing boundary (newline, dedent, `)`, `,`,
+           `else`, EOF), so `let x = v in a; b` binds `x` over both `a` and `b`. */
         int body_count;
         Expr **body = parse_inline_seq(p, &body_count);
         Expr **stmts = arena_alloc(p->arena, sizeof(Expr *) * (size_t)(body_count + 1));
@@ -1532,12 +1546,12 @@ static Expr *parse_block_item(Parser *p) {
     if (check(p, TOK_DEFER)) {
         SrcLoc loc = loc_from_token(current(p));
         advance_p(p);
-        /* `defer` schedules a *value* expression to run at scope exit; a
-           control-flow transfer (break/continue/return) has no meaning there.
-           These tokens are only parsed as statements, so parse_expr below would
-           reject them with a bare "unexpected token" — give the purposeful
-           reason instead, then parse the transfer as an ordinary statement so
-           the defer is simply dropped and no cascade follows. */
+        /* `defer` schedules an expression to run at scope exit, where a
+           control transfer (break/continue/return) has no meaning. These
+           tokens parse only as statements, so parse_expr would reject them
+           with a bare "unexpected token". Report the reason instead, then parse
+           the transfer as an ordinary statement, dropping the defer, so no
+           cascade follows. */
         if (check(p, TOK_BREAK) || check(p, TOK_CONTINUE) || check(p, TOK_RETURN)) {
             diag_error(loc_from_token(current(p)),
                 "cannot defer a control-flow expression (break, continue, or return)");
@@ -1567,10 +1581,10 @@ static Expr *parse_block_item(Parser *p) {
  * the token just past it, or -1 if no type expression starts there. Covers the
  * heads that can front a slice literal in expression position:
  *   const* (IDENT (.IDENT)* <args>? | 'a) (? | * | !)*
- * (`void!` and `error` keep their own targeted paths in parse_prefix — a bare
- * `void`/`error` head is a diagnostic, not a type expression.) An unbalanced or
- * non-type-argument-shaped `<...>` leaves `off` at the '<', which no caller can
- * use — the comparison reading survives, as it must. */
+ * `void!` and `error` have their own paths in parse_prefix; a bare
+ * `void`/`error` head is a diagnostic, not a type expression. An unbalanced or
+ * non-type-argument `<...>` leaves `off` at the '<', which no caller accepts,
+ * so the comparison reading survives. */
 static int scan_type_head(Parser *p) {
     int off = 0;
     while (peek_at(p, off)->kind == TOK_CONST) off++;
@@ -1581,22 +1595,11 @@ static int scan_type_head(Parser *p) {
         off++;
         while (peek_at(p, off)->kind == TOK_DOT && peek_at(p, off + 1)->kind == TOK_IDENT)
             off += 2;
-        /* Generic arguments <T, 4, 'n * 2, ...>: depth-counted so nested lists
-           are skipped ('>>' closes two levels), claimed only when every token
-           inside is legal in a type-argument position. */
+        /* Generic arguments <T, 4, ('n >> 1), ...>, by the same scan every
+           expression-position `name<...>` reading uses. */
         if (peek_at(p, off)->kind == TOK_LT) {
-            int scan = off + 1, depth = 1;
-            bool ok = true;
-            while (depth > 0) {
-                TokenKind a = peek_at(p, scan)->kind;
-                if (a == TOK_EOF) { ok = false; break; }
-                if (a == TOK_LT) depth++;
-                else if (a == TOK_GT) depth--;
-                else if (a == TOK_GTGT) { depth -= 2; if (depth < 0) { ok = false; break; } }
-                else if (!is_type_arg_token(a)) { ok = false; break; }
-                scan++;
-            }
-            if (ok) off = scan; /* scan sits just past the closing > / >> */
+            int end = typearg_scan(p, p->pos + off + 1);
+            if (end >= 0) off = end - p->pos;
         }
     } else {
         return -1;
@@ -1607,30 +1610,20 @@ static int scan_type_head(Parser *p) {
     return off;
 }
 
-/* Is a slice literal — `type_expr [ size ] { ... }` or `type_expr [] { ... }` —
- * starting at the current token? The trailing '{' after the matching ']' is what
- * separates a literal from indexing (`xs[i]`) or a comparison chain, neither of
- * which is ever followed by a brace here.
+/* Is a slice literal, `type_expr [ size ] { ... }` or `type_expr [] { ... }`,
+ * starting at the current token? The '{' after the matching ']' separates a
+ * literal from indexing (`xs[i]`) or a comparison chain, neither of which is
+ * followed by a brace here.
  *
- * Detection and element-type parsing are deliberately split: this decides the
- * shape, parse_type owns the type grammar (const, dotted names, type *and*
- * const arguments, and the ? * ! suffixes). They stay in sync because '[' is never
- * part of a type in expression position — `T[]` before '{' belongs to the
- * literal (parse_type_suffix declines it) and fixed-array `T[N]` is
- * struct-field-only (allow_fixed_array is off here) — so the first '[' past the
- * head always opens the literal. */
+ * This decides only the shape; parse_type then parses the element type (const,
+ * dotted names, type and const arguments, the ? * ! suffixes). The two agree
+ * because '[' is never part of a type in expression position: `T[]` before
+ * '{' belongs to the literal (parse_type_suffix declines it), and a fixed
+ * array `T[N]` needs allow_fixed_array, which is off here. So the first '['
+ * past the head opens the literal. */
 static bool at_slice_literal(Parser *p) {
     int off = scan_type_head(p);
-    if (off < 0 || peek_at(p, off)->kind != TOK_LBRACKET) return false;
-    int depth = 0;
-    do {
-        TokenKind k = peek_at(p, off)->kind;
-        if (k == TOK_EOF) return false;
-        if (k == TOK_LBRACKET) depth++;
-        else if (k == TOK_RBRACKET) depth--;
-        off++;
-    } while (depth > 0);
-    return peek_at(p, off)->kind == TOK_LBRACE;
+    return off >= 0 && at_slice_lit_brackets(p, off);
 }
 
 /* The fields of a raw-parts slice literal, after its '{': `ptr = e, len = e`
@@ -1682,15 +1675,15 @@ static Expr **parse_slice_elems(Parser *p, int *count) {
     return copy;
 }
 
-/* Parse the body of an array or slice literal given an already-parsed element
- * type. The parser must be positioned just before the '[':
- *   T[]  { ptr = expr, len = expr }   → EXPR_SLICE_LIT
- *   T[N] { e0, e1, ... }              → EXPR_ARRAY_LIT
+/* Parse the rest of a slice literal, from its '[', given the already-parsed
+ * element type:
+ *   T[]  { ptr = expr, len = expr }   raw parts: EXPR_SLICE_LIT
+ *   T[N] { e0, e1, ... }              elements:  EXPR_ARRAY_LIT
  * Shared by the IDENT-typed and tuple-typed literal paths. */
 static Expr *parse_array_lit_body(Parser *p, Type *elem_type, SrcLoc loc) {
     expect(p, TOK_LBRACKET);
 
-    /* T[] { ptr = expr, len = expr } — slice construction from raw parts */
+    /* T[] { ptr = expr, len = expr }: slice construction from raw parts */
     if (check(p, TOK_RBRACKET)) {
         advance_p(p); /* consume ] */
         expect(p, TOK_LBRACE);
@@ -1738,6 +1731,522 @@ static bool token_starts_prefix_expr(TokenKind k) {
     }
 }
 
+/* alloc(...) or alloca(...): a type, a type with a count, a slice literal,
+ * or an expression to copy. */
+static Expr *parse_alloc(Parser *p, SrcLoc loc) {
+    bool is_stack = (current(p)->kind == TOK_ALLOCA);
+    advance_p(p);
+    expect(p, TOK_LPAREN);
+
+    /* Decide type vs expression. Built-in types, void, error, const and type
+     * variables can only begin a type. An unknown identifier followed by '['
+     * or ',' is a type (alloc(T[N] { }), alloc(T, n)); a bare one followed by
+     * ')' is parsed as an expression, and pass2 tells type names from
+     * variables. An unknown identifier followed by '<' or '.' gets a tentative
+     * type parse that backtracks when no ')', '[' or ',' follows the type. */
+    Token *first = current(p);
+    /* `alloc(const str[n] { })` allocates n slots holding read-only views,
+     * the heap twin of the `const str[N] { ... }` literal. Read as an
+     * expression it would be a nested slice literal, which needs a
+     * compile-time length. */
+    bool is_type = (first->kind == TOK_VOID || first->kind == TOK_TYPE_VAR ||
+                    first->kind == TOK_ERROR_KW || first->kind == TOK_CONST);
+    bool try_type = false;
+    int save = 0;
+
+    if (!is_type && first->kind == TOK_IDENT) {
+        if (type_from_name(first->start, first->length)) {
+            is_type = true;
+        } else {
+            Token *next = peek_at(p, 1);
+            if (next->kind == TOK_LBRACKET || next->kind == TOK_COMMA) {
+                is_type = true;
+            } else if (next->kind == TOK_DOT) {
+                /* Module-qualified name: a type (alloc(shapes.point)) or a
+                 * value (alloc(cfg.origin)), which only name resolution can
+                 * tell apart. A name followed by ')' stays an expression and
+                 * pass2 decides it against the symbol table; anything else
+                 * gets the tentative type parse. */
+                int off = 1;
+                while (peek_at(p, off)->kind == TOK_DOT &&
+                       peek_at(p, off + 1)->kind == TOK_IDENT)
+                    off += 2;
+                if (peek_at(p, off)->kind != TOK_RPAREN) {
+                    try_type = true;
+                    save = p->pos;
+                }
+            } else if (next->kind == TOK_LT) {
+                /* Generic type args or a comparison: try the type first */
+                try_type = true;
+                save = p->pos;
+            }
+        }
+    }
+
+    if (is_type || try_type) {
+        Type *ty = parse_type(p);
+        if (check(p, TOK_RPAREN)) {
+            /* alloc(T): bare type alloc */
+            advance_p(p);
+            Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+            e->alloc_expr.alloc_type = ty;
+            e->alloc_expr.size_expr = NULL;
+            e->alloc_expr.init_expr = NULL;
+            e->alloc_expr.is_stack = is_stack;
+            return e;
+        }
+        if (check(p, TOK_LBRACKET)) {
+            /* alloc(T[N] { elems }): allocate a slice */
+            advance_p(p);
+            Expr *size = parse_bracketed_expr(p, PREC_NONE + 1);
+            expect(p, TOK_RBRACKET);
+            int elem_count = 0;
+            Expr **elems = NULL;
+            if (check(p, TOK_LBRACE)) {
+                advance_p(p);
+                elems = parse_slice_elems(p, &elem_count);
+            } else {
+                /* Read on as if the empty `{ }` were there. */
+                diag_error(loc_from_token(current(p)),
+                           "expected '{' after alloc(T[N]; use alloc(T[N] { })");
+            }
+            expect(p, TOK_RPAREN);
+            /* Runtime-sized alloc: alloc(T[n] { }) where n is not a literal */
+            if (size->kind != EXPR_INT_LIT) {
+                if (elem_count > 0)
+                    diag_error(loc, "alloc with runtime size cannot have explicit elements");
+                Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+                e->alloc_expr.alloc_type = ty;
+                e->alloc_expr.size_expr = size;
+                e->alloc_expr.init_expr = NULL;
+                e->alloc_expr.is_stack = is_stack;
+                return e;
+            }
+            Expr *arr = alloc_expr(p, EXPR_ARRAY_LIT, loc);
+            arr->array_lit.elem_type = ty;
+            arr->array_lit.size_expr = size;
+            arr->array_lit.elems = elems;
+            arr->array_lit.elem_count = elem_count;
+            Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+            e->alloc_expr.alloc_type = NULL;
+            e->alloc_expr.size_expr = NULL;
+            e->alloc_expr.init_expr = arr;
+            e->alloc_expr.is_stack = is_stack;
+            return e;
+        }
+        if (check(p, TOK_COMMA)) {
+            /* alloc(T, N): raw buffer alloc */
+            advance_p(p);
+            Expr *size = parse_bracketed_expr(p, PREC_NONE + 1);
+            expect(p, TOK_RPAREN);
+            Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+            e->alloc_expr.alloc_type = ty;
+            e->alloc_expr.size_expr = size;
+            e->alloc_expr.init_expr = NULL;
+            e->alloc_expr.alloc_raw = true;
+            e->alloc_expr.is_stack = is_stack;
+            return e;
+        }
+        if (try_type) {
+            /* No type form follows: backtrack to the expression reading */
+            restore_pos(p, save);
+        } else {
+            diag_error(loc, "expected ')', '[', or ',' after type in alloc");
+            return alloc_expr_error(p, loc);
+        }
+    }
+
+    /* alloc(expr) / alloca(expr): initialized alloc. An interpolated-string
+     * init is marked `wrapped` and a plain (cstr) cast init `licensed`. Both
+     * permit an otherwise illegal runtime-sized result, which the enclosing
+     * alloc/alloca gives a home (heap or dynamic stack). */
+    Expr *init = parse_bracketed_expr(p, PREC_NONE + 1);
+    expect(p, TOK_RPAREN);
+    if (init->kind == EXPR_INTERP_STRING)
+        init->interp_string.wrapped = true;
+    else if (init->kind == EXPR_CAST && init->cast.buffer_size == 0)
+        init->cast.licensed = true;
+    Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+    e->alloc_expr.alloc_type = NULL;
+    e->alloc_expr.size_expr = NULL;
+    e->alloc_expr.init_expr = init;
+    e->alloc_expr.is_stack = is_stack;
+    return e;
+}
+
+/* An expression starting with `(`: a slice literal with a parenthesized
+ * element type, a lambda, a cast, or a parenthesized expression or
+ * sequence. */
+static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
+    /* Slice literal with a parenthesized (grouped or function) element type:
+     * `((A) -> B)[N] { e0, ... }` or `((A) -> B)[] { ptr = .., len = .. }`.
+     * Detected by the shape "( ... ) [ ... ] {": the { after ] distinguishes
+     * it from a cast or an indexed parenthesized expression, neither of which
+     * is followed by a brace here (as in the tuple-element path of the
+     * TOK_LBRACE case). */
+    if (at_slice_lit_brackets(p, skip_group(p, 0, TOK_LPAREN, TOK_RPAREN))) {
+        Type *elem_type = parse_type(p); /* parses the grouped/function type */
+        return parse_array_lit_body(p, elem_type, loc);
+    }
+
+    /* Disambiguate: function literal vs parenthesized expression */
+    /* () -> ... : empty-param function */
+    if (peek_at(p, 1)->kind == TOK_RPAREN && peek_at(p, 2)->kind == TOK_ARROW) {
+        return parse_func_literal(p);
+    }
+    /* (ident : ...) -> ... : function with params */
+    if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_COLON) {
+        return parse_func_literal(p);
+    }
+    /* (Type)expr: cast. Tried when the next token is a built-in type name, a
+     * type var, `error` or `const`, and for (IDENT* ...) and (IDENT< ...),
+     * which cover user-defined pointer and generic types. For module-qualified
+     * casts like (mod.type*)expr, scan past the dots for a type suffix
+     * (*, ?, [, !); a bare (mod.name) is a parenthesized field access.
+     * Backtracking handles false positives like (a * b). */
+    {
+    bool try_cast = false;
+    bool bang_cast = false; /* triggered only by `!`; see the guard below */
+    if (peek_at(p, 1)->kind == TOK_IDENT &&
+        (type_from_name(peek_at(p, 1)->start, peek_at(p, 1)->length) ||
+         peek_at(p, 2)->kind == TOK_STAR ||
+         peek_at(p, 2)->kind == TOK_LT)) {
+        try_cast = true;
+    } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_BANG) {
+        /* (IDENT!): result-type cast. Unlike (a*), `x!` is a complete
+         * expression (postfix unwrap), so this trigger alone is ambiguous
+         * with a parenthesized unwrap; the RPAREN guard below resolves it. */
+        try_cast = true;
+        bang_cast = true;
+    } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_DOT) {
+        /* Scan past IDENT (.IDENT)* and check for type suffix */
+        int ca = 1; /* start at first IDENT */
+        while (peek_at(p, ca)->kind == TOK_IDENT && peek_at(p, ca + 1)->kind == TOK_DOT)
+            ca += 2; /* skip IDENT . */
+        /* ca now points to the last IDENT; check what follows */
+        if (peek_at(p, ca)->kind == TOK_IDENT) {
+            TokenKind after = peek_at(p, ca + 1)->kind;
+            if (after == TOK_STAR || after == TOK_QUESTION || after == TOK_LBRACKET)
+                try_cast = true;
+            if (after == TOK_BANG) {
+                /* (mod.type!): same unwrap ambiguity as (IDENT!) above */
+                try_cast = true;
+                bang_cast = true;
+            }
+            /* A plain (mod.type) is not tried: whether the last name is a
+             * type is unknown here, and (a.b) is a field access. */
+        }
+    }
+    if (try_cast || peek_at(p, 1)->kind == TOK_TYPE_VAR ||
+        peek_at(p, 1)->kind == TOK_ERROR_KW ||
+        peek_at(p, 1)->kind == TOK_CONST ||
+        /* ((const T)[]) x: a parenthesized element type under a suffix.
+         * `const` never starts an expression, so `((const` can only be a
+         * type; every other `((` stays an expression and is not probed. */
+        (peek_at(p, 1)->kind == TOK_LPAREN && peek_at(p, 2)->kind == TOK_CONST)) {
+        /* Try to parse as cast with backtracking */
+        int save = p->pos;
+        advance_p(p); /* ( */
+        Type *target = parse_type(p);
+        /* (cstr[N]): bounded str-to-cstr cast. cstr is u8*, and with
+         * allow_fixed_array off in expression context parse_type leaves the
+         * [N] for this code to claim. */
+        int buffer_size = 0;
+        if (is_cstr_type(target) && check(p, TOK_LBRACKET) &&
+            peek_at(p, 1)->kind == TOK_INT_LIT && peek_at(p, 2)->kind == TOK_RBRACKET) {
+            advance_p(p); /* [ */
+            Token *nt = current(p);
+            bool oor = false;
+            int64_t n = parse_int_value(nt->start, nt->length, &oor);
+            if (oor || n < 1) {
+                diag_error(loc_from_token(nt),
+                           "(cstr[N]) buffer size must be a positive integer, got %lld",
+                           (long long)n);
+                n = 1;
+            }
+            advance_p(p); /* N */
+            advance_p(p); /* ] */
+            buffer_size = (int)n;
+        }
+        if (check(p, TOK_RPAREN) &&
+            !(bang_cast && !token_starts_prefix_expr(peek_at(p, 1)->kind))) {
+            /* A `!`-triggered attempt commits to the cast only when the token
+             * after `)` starts an expression; otherwise `(x!)` is a
+             * parenthesized unwrap, as in `f((x!))` or `(x!) == y`. `(x!) e`
+             * is a cast to type `x!`, meaningless when `x` isn't a type, like
+             * `(a*) b`. */
+            advance_p(p);
+            Expr *operand = parse_expr(p, PREC_PREFIX);
+            Expr *e = alloc_expr(p, EXPR_CAST, loc);
+            e->cast.target = target;
+            e->cast.operand = operand;
+            e->cast.buffer_size = buffer_size;
+            return e;
+        }
+        /* Not a cast: backtrack */
+        restore_pos(p, save);
+    }
+    } /* end try_cast block */
+    /* Parenthesized expression, optionally a `;`-sequence: `(a; b)` is a
+       sequence expression yielding the last item's value, the others
+       evaluated for effect (same as a block).  A single item is plain
+       grouping: `(a)` is `a`.  Layout is suppressed inside brackets, so `;`
+       is the only separator and `)` bounds the sequence. */
+    advance_p(p);
+    Expr **stmts = NULL;
+    int len = 0, cap = 0;
+    DA_APPEND(stmts, len, cap, parse_bracketed_expr(p, PREC_NONE + 1));
+    while (check(p, TOK_SEMICOLON)) {
+        while (check(p, TOK_SEMICOLON)) advance_p(p);
+        if (check(p, TOK_RPAREN)) break;
+        DA_APPEND(stmts, len, cap, parse_bracketed_expr(p, PREC_NONE + 1));
+    }
+    expect(p, TOK_RPAREN);
+    Expr *e = block_or_single(p, arena_copy_exprs(p, stmts, len), len, loc);
+    free(stmts);
+    return e;
+}
+
+/* An interpolated string literal: its literal text and each format segment
+ * with its expression. */
+static Expr *parse_interp_string(Parser *p, Token *t, SrcLoc loc) {
+    advance_p(p); /* consume INTERP_START / CINTERP_START */
+    InterpSegment *segs = NULL;
+    int seg_count = 0, seg_cap = 0;
+
+    /* Add leading literal text segment */
+    InterpSegment lit_seg = {0};
+    lit_seg.is_literal = true;
+    lit_seg.text = t->start;
+    lit_seg.text_length = t->length;
+    DA_APPEND(segs, seg_count, seg_cap, lit_seg);
+
+    for (;;) {
+        /* Expect FMT_SPEC */
+        Token *fmt = expect(p, TOK_FMT_SPEC);
+        InterpSegment fmt_seg = {0};
+        fmt_seg.is_literal = false;
+        fmt_seg.text = fmt->start;
+        fmt_seg.text_length = fmt->length;
+        /* Extract conversion character (last char of format spec) */
+        fmt_seg.conversion = fmt->start[fmt->length - 1];
+
+        /* Parse expression */
+        fmt_seg.expr = parse_bracketed_expr(p, PREC_NONE + 1);
+
+        DA_APPEND(segs, seg_count, seg_cap, fmt_seg);
+
+        if (check(p, TOK_INTERP_MID)) {
+            Token *mid = advance_p(p);
+            InterpSegment mid_seg = {0};
+            mid_seg.is_literal = true;
+            mid_seg.text = mid->start;
+            mid_seg.text_length = mid->length;
+            DA_APPEND(segs, seg_count, seg_cap, mid_seg);
+            continue;
+        }
+
+        if (check(p, TOK_INTERP_END)) {
+            Token *end = advance_p(p);
+            InterpSegment end_seg = {0};
+            end_seg.is_literal = true;
+            end_seg.text = end->start;
+            end_seg.text_length = end->length;
+            DA_APPEND(segs, seg_count, seg_cap, end_seg);
+            break;
+        }
+
+        diag_error(loc, "expected interpolation continuation or end, got %s",
+            token_kind_name(current(p)->kind));
+        /* Resync past the rest of the string. */
+        while (!check(p, TOK_INTERP_END) && !check(p, TOK_NEWLINE) && !at_end_p(p))
+            advance_p(p);
+        if (check(p, TOK_INTERP_END)) advance_p(p);
+        free(segs);
+        return alloc_expr_error(p, loc);
+    }
+
+    InterpSegment *arena_segs = arena_dup(p->arena, segs, seg_count, sizeof *segs);
+    free(segs);
+
+    Expr *e = alloc_expr(p, EXPR_INTERP_STRING, loc);
+    e->interp_string.segments = arena_segs;
+    e->interp_string.segment_count = seg_count;
+    e->interp_string.is_cstr = (t->kind == TOK_CINTERP_START);
+    return e;
+}
+
+/* A float literal, with its f32/f64 suffix and the overflow and underflow
+ * the value reading detects. */
+static Expr *parse_float_lit(Parser *p, Token *t, SrcLoc loc) {
+    advance_p(p);
+    Expr *e = alloc_expr(p, EXPR_FLOAT_LIT, loc);
+    /* Determine suffix length first so the strtod buffer excludes it */
+    int suffix_len = 0;
+    if (t->length >= 3 && t->start[t->length - 3] == 'f'
+        && (t->start[t->length - 2] == '3' || t->start[t->length - 2] == '6')
+        && (t->start[t->length - 1] == '2' || t->start[t->length - 1] == '4')) {
+        suffix_len = 3;
+    }
+    int num_end = t->length - suffix_len;
+    /* Sized from the token, as in parse_int_value: dropping the tail of a
+     * float is silently wrong rather than an error, since cutting
+     * `0.00...01e300` before its exponent yields 0.0 with neither ERANGE nor
+     * an out-of-range flag. */
+    char *buf = malloc((size_t)num_end + 1);
+    if (!buf) {
+        fprintf(stderr, "fcc: out of memory\n");
+        exit(1);
+    }
+    int num_len = 0;
+    bool mantissa_nonzero = false;
+    bool past_mantissa = false;
+    bool is_hex = t->length >= 2 && t->start[0] == '0' && (t->start[1] == 'x' || t->start[1] == 'X');
+    for (int i = 0; i < num_end; i++) {
+        char c = t->start[i];
+        if (c == '_') continue;
+        if (is_hex ? (c == 'p' || c == 'P') : (c == 'e' || c == 'E')) past_mantissa = true;
+        if (!past_mantissa) {
+            if (c >= '1' && c <= '9') mantissa_nonzero = true;
+            else if (is_hex && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) mantissa_nonzero = true;
+        }
+        buf[num_len++] = c;
+    }
+    buf[num_len] = '\0';
+    errno = 0;
+    double v = strtod(buf, NULL);
+    free(buf);
+    bool oor = false, underflow = false;
+    /* strtod sets ERANGE on overflow (returning +-HUGE_VAL) and may also
+     * set it on underflow even for subnormal results. Distinguish by
+     * checking the result: only +-inf is overflow; only 0 from a nonzero
+     * source is underflow; subnormals are accepted silently. */
+    if (isinf(v)) oor = true;
+    else if (v == 0.0 && mantissa_nonzero) underflow = true;
+    bool is_f32 = (suffix_len == 3 && t->start[t->length - 2] == '3');
+    if (is_f32 && !oor && !underflow) {
+        float fv = (float)v;
+        if (isinf(fv)) oor = true;
+        else if (fv == 0.0f && mantissa_nonzero) underflow = true;
+    }
+    e->float_lit.value = v;
+    e->float_lit.lit_type = is_f32 ? type_float32() : type_float64();
+    e->float_lit.out_of_range = oor;
+    e->float_lit.underflow = underflow;
+    return e;
+}
+
+/* A for loop over a range or a slice, with an index, element or
+ * destructuring binding. */
+static Expr *parse_for_expr(Parser *p, SrcLoc loc) {
+    advance_p(p);
+    const char *var = NULL;
+    Pattern *var_pattern = NULL;
+    const char *index_var = NULL;
+    SrcLoc var_loc = {0}, index_var_loc = {0};
+    /* The element binding may be a destructure pattern (`{ ... }`); the
+     * index, when present, is always a plain identifier. */
+    if (check(p, TOK_LBRACE)) {
+        var_pattern = parse_pattern(p);
+    } else {
+        Token *vt = expect(p, TOK_IDENT);
+        var = tok_intern(p, vt);
+        var_loc = tok_loc(p, vt);
+        if (check(p, TOK_COMMA)) {
+            advance_p(p);
+            /* first was index, second is element (ident or destructure) */
+            index_var = var;
+            index_var_loc = var_loc;
+            var = NULL;
+            var_loc = (SrcLoc){0};
+            if (check(p, TOK_LBRACE)) {
+                var_pattern = parse_pattern(p);
+            } else {
+                Token *vt2 = expect(p, TOK_IDENT);
+                var = tok_intern(p, vt2);
+                var_loc = tok_loc(p, vt2);
+            }
+        }
+    }
+    expect(p, TOK_IN);
+    Expr *iter = parse_expr(p, PREC_NONE + 1);
+    Expr *range_end = NULL;
+    if (check(p, TOK_DOTDOT)) {
+        advance_p(p);
+        range_end = parse_expr(p, PREC_NONE + 1);
+    }
+    /* `do` is required and marks the header/body boundary, uniformly with
+       `then`/`with`. As a block-former it admits either an indented block
+       or an inline body, so `parse_body` handles both forms. */
+    expect(p, TOK_DO);
+    int body_count;
+    Expr **body = parse_body(p, &body_count);
+    Expr *e = alloc_expr(p, EXPR_FOR, loc);
+    e->for_expr.var = var;
+    e->for_expr.var_pattern = var_pattern;
+    e->for_expr.index_var = index_var;
+    e->for_expr.var_loc = var_loc;
+    e->for_expr.index_var_loc = index_var_loc;
+    e->for_expr.iter = iter;
+    e->for_expr.range_end = range_end;
+    e->for_expr.body = body;
+    e->for_expr.body_count = body_count;
+    return e;
+}
+
+/* An expression starting with an identifier: a slice literal, a struct
+ * literal (possibly module-qualified), a raw-parts str literal, or a plain
+ * name. */
+static Expr *parse_ident_prefix(Parser *p, Token *t, SrcLoc loc) {
+    const char *name = tok_intern(p, t);
+
+    /* Slice literal: type_name[size] { ... }, for built-in, user-defined,
+     * module-qualified or generic element types alike. at_slice_literal
+     * decides the shape; parse_type parses the element type. */
+    if (at_slice_literal(p)) {
+        Type *elem_type = parse_type(p);
+        return parse_array_lit_body(p, elem_type, loc);
+    }
+
+    /* Struct literal: name { field = expr, ... }, recognized by `IDENT =` or
+     * `}` after the brace. */
+    if (at_struct_lit_brace(p, 1)) {
+        advance_p(p);  /* consume ident */
+        advance_p(p);  /* consume { */
+        /* str { ptr = expr, len = expr }: raw-parts literal of type str */
+        if (strcmp(name, "str") == 0)
+            return parse_raw_slice_fields(p, type_uint8(), loc);
+        return parse_struct_literal(p, name, loc);
+    }
+    /* Check for module-qualified struct literal: mod.name { ... }, mod.sub.name { ... }
+     * Scan ahead past (. IDENT)* to find a { that looks like a struct literal */
+    if (peek_at(p, 1)->kind == TOK_DOT && peek_at(p, 2)->kind == TOK_IDENT) {
+        int ahead = 1; /* start after first IDENT */
+        while (peek_at(p, ahead)->kind == TOK_DOT &&
+               peek_at(p, ahead + 1)->kind == TOK_IDENT) {
+            ahead += 2; /* skip . IDENT */
+        }
+        if (at_struct_lit_brace(p, ahead)) {
+            /* Build dotted name by consuming IDENT (. IDENT)* */
+            const char *dotted_name = name;
+            advance_p(p); /* consume first IDENT */
+            while (check(p, TOK_DOT) && peek_at(p, 1)->kind == TOK_IDENT) {
+                advance_p(p); /* consume . */
+                Token *seg = current(p);
+                dotted_name = intern_sprintf(p->intern, "%s.%.*s", dotted_name,
+                                             seg->length, seg->start);
+                advance_p(p); /* consume IDENT */
+            }
+            advance_p(p); /* consume { */
+            return parse_struct_literal(p, dotted_name, loc);
+        }
+    }
+    advance_p(p);
+    Expr *e = alloc_expr(p, EXPR_IDENT, loc);
+    e->ident.name = name;
+    return e;
+}
+
 static Expr *parse_prefix(Parser *p) {
     Token *t = current(p);
     SrcLoc loc = loc_from_token(t);
@@ -1748,68 +2257,13 @@ static Expr *parse_prefix(Parser *p) {
         Expr *e = alloc_expr(p, EXPR_INT_LIT, loc);
         bool int_oor = false;
         e->int_lit.value = parse_int_value(t->start, t->length, &int_oor);
-        e->int_lit.lit_type = parse_int_type_in(p, t->start, t->length);
+        e->int_lit.lit_type = int_lit_type(p, t);
         e->int_lit.out_of_range = int_oor;
         return e;
     }
 
-    case TOK_FLOAT_LIT: {
-        advance_p(p);
-        Expr *e = alloc_expr(p, EXPR_FLOAT_LIT, loc);
-        /* Determine suffix length first so the strtod buffer excludes it */
-        int suffix_len = 0;
-        if (t->length >= 3 && t->start[t->length - 3] == 'f'
-            && (t->start[t->length - 2] == '3' || t->start[t->length - 2] == '6')
-            && (t->start[t->length - 1] == '2' || t->start[t->length - 1] == '4')) {
-            suffix_len = 3;
-        }
-        int num_end = t->length - suffix_len;
-        /* Sized from the token for the same reason as parse_int_value: a fixed
-         * buffer clipped long literals, and dropping the tail of a float is
-         * silently wrong rather than an error — cutting `0.0…01e300` before its
-         * exponent yields 0.0 with neither ERANGE nor an out-of-range flag. */
-        char *buf = malloc((size_t)num_end + 1);
-        if (!buf) {
-            fprintf(stderr, "fcc: out of memory\n");
-            exit(1);
-        }
-        int num_len = 0;
-        bool mantissa_nonzero = false;
-        bool past_mantissa = false;
-        bool is_hex = t->length >= 2 && t->start[0] == '0' && (t->start[1] == 'x' || t->start[1] == 'X');
-        for (int i = 0; i < num_end; i++) {
-            char c = t->start[i];
-            if (c == '_') continue;
-            if (is_hex ? (c == 'p' || c == 'P') : (c == 'e' || c == 'E')) past_mantissa = true;
-            if (!past_mantissa) {
-                if (c >= '1' && c <= '9') mantissa_nonzero = true;
-                else if (is_hex && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) mantissa_nonzero = true;
-            }
-            buf[num_len++] = c;
-        }
-        buf[num_len] = '\0';
-        errno = 0;
-        double v = strtod(buf, NULL);
-        free(buf);
-        bool oor = false, underflow = false;
-        /* strtod sets ERANGE on overflow (returns ±HUGE_VAL) and may also
-         * set it on underflow even for subnormal results. Distinguish by
-         * checking the result: only ±inf is overflow; only 0 from a nonzero
-         * source is underflow; subnormals are accepted silently. */
-        if (isinf(v)) oor = true;
-        else if (v == 0.0 && mantissa_nonzero) underflow = true;
-        bool is_f32 = (suffix_len == 3 && t->start[t->length - 2] == '3');
-        if (is_f32 && !oor && !underflow) {
-            float fv = (float)v;
-            if (isinf(fv)) oor = true;
-            else if (fv == 0.0f && mantissa_nonzero) underflow = true;
-        }
-        e->float_lit.value = v;
-        e->float_lit.lit_type = is_f32 ? type_float32() : type_float64();
-        e->float_lit.out_of_range = oor;
-        e->float_lit.underflow = underflow;
-        return e;
-    }
+    case TOK_FLOAT_LIT:
+        return parse_float_lit(p, t, loc);
 
     case TOK_STRING_LIT: {
         advance_p(p);
@@ -1830,84 +2284,13 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_CINTERP_START:
-    case TOK_INTERP_START: {
-        advance_p(p); /* consume INTERP_START / CINTERP_START */
-        InterpSegment *segs = NULL;
-        int seg_count = 0, seg_cap = 0;
-
-        /* Add leading literal text segment */
-        InterpSegment lit_seg;
-        memset(&lit_seg, 0, sizeof(lit_seg));
-        lit_seg.is_literal = true;
-        lit_seg.text = t->start;
-        lit_seg.text_length = t->length;
-        DA_APPEND(segs, seg_count, seg_cap, lit_seg);
-
-        for (;;) {
-            /* Expect FMT_SPEC */
-            Token *fmt = expect(p, TOK_FMT_SPEC);
-            InterpSegment fmt_seg;
-            memset(&fmt_seg, 0, sizeof(fmt_seg));
-            fmt_seg.is_literal = false;
-            fmt_seg.text = fmt->start;
-            fmt_seg.text_length = fmt->length;
-            /* Extract conversion character (last char of format spec) */
-            fmt_seg.conversion = fmt->start[fmt->length - 1];
-
-            /* Parse expression */
-            fmt_seg.expr = parse_bracketed_expr(p, PREC_NONE + 1);
-
-            DA_APPEND(segs, seg_count, seg_cap, fmt_seg);
-
-            if (check(p, TOK_INTERP_MID)) {
-                Token *mid = advance_p(p);
-                InterpSegment mid_seg;
-                memset(&mid_seg, 0, sizeof(mid_seg));
-                mid_seg.is_literal = true;
-                mid_seg.text = mid->start;
-                mid_seg.text_length = mid->length;
-                DA_APPEND(segs, seg_count, seg_cap, mid_seg);
-                continue;
-            }
-
-            if (check(p, TOK_INTERP_END)) {
-                Token *end = advance_p(p);
-                InterpSegment end_seg;
-                memset(&end_seg, 0, sizeof(end_seg));
-                end_seg.is_literal = true;
-                end_seg.text = end->start;
-                end_seg.text_length = end->length;
-                DA_APPEND(segs, seg_count, seg_cap, end_seg);
-                break;
-            }
-
-            diag_error(loc, "expected interpolation continuation or end, got %s",
-                token_kind_name(current(p)->kind));
-            /* Resync past the rest of the string. */
-            while (!check(p, TOK_INTERP_END) && !check(p, TOK_NEWLINE) && !at_end_p(p))
-                advance_p(p);
-            if (check(p, TOK_INTERP_END)) advance_p(p);
-            free(segs);
-            return alloc_expr_error(p, loc);
-        }
-
-        /* Copy segments into arena */
-        InterpSegment *arena_segs = arena_alloc(p->arena,
-            sizeof(InterpSegment) * (size_t)seg_count);
-        memcpy(arena_segs, segs, sizeof(InterpSegment) * (size_t)seg_count);
-        free(segs);
-
-        Expr *e = alloc_expr(p, EXPR_INTERP_STRING, loc);
-        e->interp_string.segments = arena_segs;
-        e->interp_string.segment_count = seg_count;
-        e->interp_string.is_cstr = (t->kind == TOK_CINTERP_START);
-        return e;
-    }
+    case TOK_INTERP_START:
+        return parse_interp_string(p, t, loc);
 
     case TOK_CHAR_LIT: {
         advance_p(p);
         Expr *e = alloc_expr(p, EXPR_CHAR_LIT, loc);
-        e->char_lit.value = parse_char_value(t->start, t->length);
+        e->char_lit.value = char_lit_value(t);
         return e;
     }
 
@@ -1925,270 +2308,25 @@ static Expr *parse_prefix(Parser *p) {
         return e;
     }
 
-    case TOK_IDENT: {
-        const char *name = tok_intern(p, t);
+    case TOK_IDENT:
+        return parse_ident_prefix(p, t, loc);
 
-        /* Slice literal: type_name[size] { ... } — built-in, user-defined,
-         * module-qualified, or generic element types alike (parse_type owns the
-         * element grammar; at_slice_literal owns the shape decision). */
-        if (at_slice_literal(p)) {
-            Type *elem_type = parse_type(p);
+    case TOK_LPAREN:
+        return parse_paren_prefix(p, loc);
+
+    case TOK_LBRACE: {
+        /* Slice literal with a tuple element type: {T1, T2}[N] { ... }.
+         * Detected by the shape "{ ... } [ ... ] {": the { after ] distinguishes
+         * it from an indexed tuple literal ({a, b}[i], which is never followed
+         * by a brace). */
+        if (at_slice_lit_brackets(p, skip_group(p, 0, TOK_LBRACE, TOK_RBRACE))) {
+            Type *elem_type = parse_type(p);   /* parses the {T1, T2, ...} tuple type */
             return parse_array_lit_body(p, elem_type, loc);
         }
 
-        /* Check for struct literal: name { field = expr, ... }
-         * Disambiguate from block: peek past { for IDENT = or } */
-        if (peek_at(p, 1)->kind == TOK_LBRACE) {
-            Token *after_brace = peek_at(p, 2);
-            bool is_struct_lit = false;
-            /* Empty struct: name { } */
-            if (after_brace->kind == TOK_RBRACE) {
-                is_struct_lit = true;
-            }
-            /* Field init: name { ident = ... } */
-            if (after_brace->kind == TOK_IDENT && peek_at(p, 3)->kind == TOK_EQ) {
-                is_struct_lit = true;
-            }
-            if (is_struct_lit) {
-                /* str { ptr = expr, len = expr } — slice literal for string type */
-                if (strcmp(name, "str") == 0) {
-                    advance_p(p);  /* consume ident */
-                    advance_p(p);  /* consume { */
-                    Type *et = arena_alloc(p->arena, sizeof(Type));
-                    et->kind = TYPE_UINT8;
-                    return parse_raw_slice_fields(p, et, loc);
-                }
-                advance_p(p);  /* consume ident */
-                advance_p(p);  /* consume { */
-                return parse_struct_literal(p, name, loc);
-            }
-        }
-        /* Check for module-qualified struct literal: mod.name { ... }, mod.sub.name { ... }
-         * Scan ahead past (. IDENT)* to find a { that looks like a struct literal */
-        if (peek_at(p, 1)->kind == TOK_DOT && peek_at(p, 2)->kind == TOK_IDENT) {
-            int ahead = 1; /* start after first IDENT */
-            while (peek_at(p, ahead)->kind == TOK_DOT &&
-                   peek_at(p, ahead + 1)->kind == TOK_IDENT) {
-                ahead += 2; /* skip . IDENT */
-            }
-            /* Now peek_at(p, ahead) should be { if this is a struct literal */
-            if (peek_at(p, ahead)->kind == TOK_LBRACE) {
-                Token *after_brace = peek_at(p, ahead + 1);
-                bool is_struct_lit = false;
-                if (after_brace->kind == TOK_RBRACE) is_struct_lit = true;
-                if (after_brace->kind == TOK_IDENT && peek_at(p, ahead + 2)->kind == TOK_EQ)
-                    is_struct_lit = true;
-                if (is_struct_lit) {
-                    /* Build dotted name by consuming IDENT (. IDENT)* */
-                    const char *dotted_name = name;
-                    advance_p(p); /* consume first IDENT */
-                    while (check(p, TOK_DOT) && peek_at(p, 1)->kind == TOK_IDENT) {
-                        advance_p(p); /* consume . */
-                        Token *seg = current(p);
-                        dotted_name = intern_sprintf(p->intern, "%s.%.*s", dotted_name,
-                                                     seg->length, seg->start);
-                        advance_p(p); /* consume IDENT */
-                    }
-                    advance_p(p); /* consume { */
-                    return parse_struct_literal(p, dotted_name, loc);
-                }
-            }
-        }
-        advance_p(p);
-        Expr *e = alloc_expr(p, EXPR_IDENT, loc);
-        e->ident.name = name;
-        return e;
-    }
-
-    case TOK_LPAREN: {
-        /* Array/slice literal with a parenthesized (grouped/function) element
-         * type: `((A) -> B)[N] { e0, ... }` or `((A) -> B)[] { ptr = .., len = .. }`.
-         * Detected by the shape "( ... ) [ ... ] {" — the trailing { after ] is
-         * what distinguishes it from a cast or an indexed parenthesized
-         * expression, neither of which is ever followed by a brace here (same
-         * reasoning as the tuple-element path in the TOK_LBRACE case). */
-        {
-            int depth = 0, k = 0;
-            do {
-                TokenKind tk = peek_at(p, k)->kind;
-                if (tk == TOK_LPAREN) depth++;
-                else if (tk == TOK_RPAREN) depth--;
-                else if (tk == TOK_EOF) break;
-                k++;
-            } while (depth > 0);
-            if (peek_at(p, k)->kind == TOK_LBRACKET) {
-                int bd = 0, j = k;
-                do {
-                    TokenKind tk = peek_at(p, j)->kind;
-                    if (tk == TOK_LBRACKET) bd++;
-                    else if (tk == TOK_RBRACKET) bd--;
-                    else if (tk == TOK_EOF) break;
-                    j++;
-                } while (bd > 0);
-                if (peek_at(p, j)->kind == TOK_LBRACE) {
-                    Type *elem_type = parse_type(p); /* parses the grouped/function type */
-                    return parse_array_lit_body(p, elem_type, loc);
-                }
-            }
-        }
-
-        /* Disambiguate: function literal vs parenthesized expression */
-        /* () -> ... : empty-param function */
-        if (peek_at(p, 1)->kind == TOK_RPAREN && peek_at(p, 2)->kind == TOK_ARROW) {
-            return parse_func_literal(p);
-        }
-        /* (ident : ...) -> ... : function with params */
-        if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_COLON) {
-            return parse_func_literal(p);
-        }
-        /* (Type)expr : cast — check if next token is a type name, type var, or const.
-         * Also try when (IDENT*) pattern is seen — user-defined struct pointer casts.
-         * For module-qualified casts like (mod.type*)expr, scan past dots to find
-         * a type suffix (*, ?, []) — bare (mod.name) is parenthesized field access.
-         * Backtracking handles false positives like (a * b). */
-        {
-        bool try_cast = false;
-        bool bang_cast = false; /* triggered only by `!` — see the guard below */
-        if (peek_at(p, 1)->kind == TOK_IDENT &&
-            (is_type_name(peek_at(p, 1)->start, peek_at(p, 1)->length) ||
-             peek_at(p, 2)->kind == TOK_STAR ||
-             peek_at(p, 2)->kind == TOK_LT)) {
-            try_cast = true;
-        } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_BANG) {
-            /* (IDENT!) — result-type cast. Unlike (a*), `x!` is a complete
-             * expression (postfix unwrap), so this trigger alone is ambiguous
-             * with a parenthesized unwrap; the RPAREN guard below resolves it. */
-            try_cast = true;
-            bang_cast = true;
-        } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_DOT) {
-            /* Scan past IDENT (.IDENT)* and check for type suffix */
-            int ca = 1; /* start at first IDENT */
-            while (peek_at(p, ca)->kind == TOK_IDENT && peek_at(p, ca + 1)->kind == TOK_DOT)
-                ca += 2; /* skip IDENT . */
-            /* ca now points to the last IDENT; check what follows */
-            if (peek_at(p, ca)->kind == TOK_IDENT) {
-                TokenKind after = peek_at(p, ca + 1)->kind;
-                if (after == TOK_STAR || after == TOK_QUESTION || after == TOK_LBRACKET)
-                    try_cast = true;
-                if (after == TOK_BANG) {
-                    /* (mod.type!) — same unwrap ambiguity as (IDENT!) above */
-                    try_cast = true;
-                    bang_cast = true;
-                }
-                /* Also allow (mod.type) as cast when followed by RPAREN and the
-                 * final ident is a known type name — but we can't check that here.
-                 * Only trigger for pointer/option/slice casts to avoid (a.b) ambiguity. */
-            }
-        }
-        if (try_cast || peek_at(p, 1)->kind == TOK_TYPE_VAR ||
-            peek_at(p, 1)->kind == TOK_ERROR_KW ||
-            peek_at(p, 1)->kind == TOK_CONST ||
-            /* ((const T)[]) x — a parenthesized element type under a suffix.
-             * `const` never starts an expression, so `((const` can only be a
-             * type; every other `((` stays an expression and is not probed. */
-            (peek_at(p, 1)->kind == TOK_LPAREN && peek_at(p, 2)->kind == TOK_CONST)) {
-            /* Try to parse as cast with backtracking */
-            int save = p->pos;
-            advance_p(p); /* ( */
-            Type *target = parse_type(p);
-            /* (cstr[N]) — bounded str→cstr cast. cstr is uint8*, so allow_fixed_array
-             * (off in expression context) left the [N] unconsumed for us to claim. */
-            int buffer_size = 0;
-            if (is_cstr_type(target) && check(p, TOK_LBRACKET) &&
-                peek_at(p, 1)->kind == TOK_INT_LIT && peek_at(p, 2)->kind == TOK_RBRACKET) {
-                advance_p(p); /* [ */
-                Token *nt = current(p);
-                bool oor = false;
-                int64_t n = parse_int_value(nt->start, nt->length, &oor);
-                if (oor || n < 1) {
-                    diag_error(loc_from_token(nt),
-                               "(cstr[N]) buffer size must be a positive integer, got %lld",
-                               (long long)n);
-                    n = 1;
-                }
-                advance_p(p); /* N */
-                advance_p(p); /* ] */
-                buffer_size = (int)n;
-            }
-            if (check(p, TOK_RPAREN) &&
-                !(bang_cast && !token_starts_prefix_expr(peek_at(p, 1)->kind))) {
-                /* A `!`-triggered attempt commits to the cast only when the token
-                 * after `)` starts an expression — otherwise `(x!)` is a
-                 * parenthesized unwrap (redundant parens), e.g. `f((x!))`,
-                 * `(x!) == y`. `(x!) e` resolves as a cast to type `x!` — dead
-                 * syntax when `x` isn't a type, same class as `(a*) b`. */
-                advance_p(p);
-                Expr *operand = parse_expr(p, PREC_PREFIX);
-                Expr *e = alloc_expr(p, EXPR_CAST, loc);
-                e->cast.target = target;
-                e->cast.operand = operand;
-                e->cast.buffer_size = buffer_size;
-                return e;
-            }
-            /* Not a cast — backtrack */
-            restore_pos(p, save);
-        }
-        } /* end try_cast block */
-        /* Parenthesized expression, optionally a `;`-sequence: `(a; b)` is a
-           sequence expression yielding the last item's value, the others
-           evaluated for effect (same as a block).  A single item is plain
-           grouping: `(a)` ≡ `a`.  Layout is suppressed inside brackets, so `;`
-           is the only separator and `)` bounds the sequence. */
-        advance_p(p);
-        Expr **stmts = NULL;
-        int len = 0, cap = 0;
-        DA_APPEND(stmts, len, cap, parse_bracketed_expr(p, PREC_NONE + 1));
-        while (check(p, TOK_SEMICOLON)) {
-            while (check(p, TOK_SEMICOLON)) advance_p(p);
-            if (check(p, TOK_RPAREN)) break;
-            DA_APPEND(stmts, len, cap, parse_bracketed_expr(p, PREC_NONE + 1));
-        }
-        expect(p, TOK_RPAREN);
-        Expr *e;
-        if (len == 1) {
-            e = stmts[0];
-        } else {
-            e = alloc_expr(p, EXPR_BLOCK, loc);
-            e->block.stmts = arena_copy_exprs(p, stmts, len);
-            e->block.count = len;
-        }
-        free(stmts);
-        return e;
-    }
-
-    case TOK_LBRACE: {
-        /* Array/slice literal with a tuple element type: {T1, T2}[N] { ... }.
-         * Detected by the shape "{ ... } [ ... ] {" — the trailing { after ] is
-         * what distinguishes it from a tuple literal that is merely indexed
-         * ({a, b}[i], which is never followed by a brace). */
-        {
-            int depth = 0, k = 0;
-            do {
-                TokenKind tk = peek_at(p, k)->kind;
-                if (tk == TOK_LBRACE) depth++;
-                else if (tk == TOK_RBRACE) depth--;
-                else if (tk == TOK_EOF) break;
-                k++;
-            } while (depth > 0);
-            if (peek_at(p, k)->kind == TOK_LBRACKET) {
-                int bd = 0, j = k;
-                do {
-                    TokenKind tk = peek_at(p, j)->kind;
-                    if (tk == TOK_LBRACKET) bd++;
-                    else if (tk == TOK_RBRACKET) bd--;
-                    else if (tk == TOK_EOF) break;
-                    j++;
-                } while (bd > 0);
-                if (peek_at(p, j)->kind == TOK_LBRACE) {
-                    Type *elem_type = parse_type(p);   /* parses the {T1, T2, ...} tuple type */
-                    return parse_array_lit_body(p, elem_type, loc);
-                }
-            }
-        }
-
-        /* Bare positional braces — anonymous tuple literal { e0, e1, ... } (>= 2 elements).
-         * Struct and slice literals always carry a type prefix, so a leading { is
-         * unambiguously a tuple; blocks are indentation-based, never brace-delimited. */
+        /* Bare positional braces: anonymous tuple literal { e0, e1, ... } (>= 2
+         * elements). Struct and slice literals always carry a type prefix, so a
+         * leading { is a tuple; blocks are indentation-based, never braced. */
         advance_p(p); /* consume { */
         Expr **elems = NULL;
         int elem_count = 0, elem_cap = 0;
@@ -2230,14 +2368,10 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_NONE: {
-        /* `none(T)` is sugar for `default(T?)`: it constructs an empty option
-         * whose inner type is the parsed type.  We desugar at parse time by
-         * wrapping the type in an option and emitting an EXPR_DEFAULT node, so
-         * the two spellings produce identical ASTs and share all downstream
-         * handling (type-checking, codegen, monomorphization, escape analysis).
-         * The general `default(T?)` mechanism is retained unchanged.  A bare
-         * `none` (e.g. `x == none`) carries no type and is rejected here with a
-         * targeted message, mirroring the `void`/`void()` handling above. */
+        /* `none(T)` is sugar for `default(T?)`: it builds the same
+         * EXPR_DEFAULT node over the option type, so the two spellings share
+         * all downstream handling. A bare `none` (e.g. `x == none`) carries no
+         * type and is rejected with a targeted message, like a bare `void`. */
         advance_p(p);
         if (!check(p, TOK_LPAREN)) {
             diag_error(loc, "'none' needs a type argument; write none(T) "
@@ -2254,10 +2388,10 @@ static Expr *parse_prefix(Parser *p) {
 
     case TOK_OK: {
         advance_p(p);
-        /* Bare `ok` (no parens) constructs the payload-less void! result —
-         * the expression twin of the bare `ok` pattern (the `| empty`
-         * precedent). No void value materializes: the ok arm of void! has
-         * no payload at all. */
+        /* Bare `ok` (no parens) constructs the payload-less void! result,
+         * the expression twin of the bare `ok` pattern (written like a
+         * payload-less variant such as `| empty`). No void value
+         * materializes: the ok arm of void! has no payload. */
         if (!check(p, TOK_LPAREN)) {
             Expr *e = alloc_expr(p, EXPR_OK, loc);
             e->ok_expr.value = NULL;
@@ -2272,10 +2406,10 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_ERR: {
-        /* err(T, code) — T is the ok-payload type (the result is T!), code is
-         * the i32 error code. Type-anchored like none(T)/bitcast(T, x): FC's
-         * directional inference can't infer the payload type from the code
-         * alone. A bare `err` is rejected like a bare `none`. */
+        /* err(T, code): T is the ok-payload type (the result is T!) and code
+         * is the i32 error code. Type-anchored like none(T) and bitcast(T, x),
+         * since directional inference cannot find the payload type from the
+         * code alone. A bare `err` is rejected like a bare `none`. */
         advance_p(p);
         if (!check(p, TOK_LPAREN)) {
             diag_error(loc, "'err' needs a type and a code; write err(T, code) "
@@ -2300,9 +2434,9 @@ static Expr *parse_prefix(Parser *p) {
 
     case TOK_LOOP: {
         advance_p(p);
-        /* `loop` has no header expression to disambiguate, so it takes an
-           inline body directly (like guarded/unguarded): INDENT → block,
-           otherwise an inline `;`-separated sequence. No `do` keyword. */
+        /* `loop` has no header expression to delimit, so it takes its body
+           directly, with no `do` keyword: a block after INDENT, otherwise an
+           inline `;`-separated sequence. */
         int body_count;
         Expr **body = parse_body(p, &body_count);
         Expr *e = alloc_expr(p, EXPR_LOOP, loc);
@@ -2327,76 +2461,21 @@ static Expr *parse_prefix(Parser *p) {
         advance_p(p);
         return parse_guard(p, true, false, loc);
 
-    case TOK_FOR: {
-        advance_p(p);
-        const char *var = NULL;
-        Pattern *var_pattern = NULL;
-        const char *index_var = NULL;
-        SrcLoc var_loc = {0}, index_var_loc = {0};
-        /* The element binding may be a destructure pattern (`{ ... }`); the
-         * index, when present, is always a plain identifier. */
-        if (check(p, TOK_LBRACE)) {
-            var_pattern = parse_pattern(p);
-        } else {
-            Token *vt = expect(p, TOK_IDENT);
-            var = tok_intern(p, vt);
-            var_loc = loc_from_token(vt);
-            var_loc.filename = p->filename;
-            if (check(p, TOK_COMMA)) {
-                advance_p(p);
-                /* first was index, second is element (ident or destructure) */
-                index_var = var;
-                index_var_loc = var_loc;
-                var = NULL;
-                var_loc = (SrcLoc){0};
-                if (check(p, TOK_LBRACE)) {
-                    var_pattern = parse_pattern(p);
-                } else {
-                    Token *vt2 = expect(p, TOK_IDENT);
-                    var = tok_intern(p, vt2);
-                    var_loc = loc_from_token(vt2);
-                    var_loc.filename = p->filename;
-                }
-            }
-        }
-        expect(p, TOK_IN);
-        Expr *iter = parse_expr(p, PREC_NONE + 1);
-        Expr *range_end = NULL;
-        if (check(p, TOK_DOTDOT)) {
-            advance_p(p);
-            range_end = parse_expr(p, PREC_NONE + 1);
-        }
-        /* `do` is required and marks the header/body boundary, uniformly with
-           `then`/`with`. As a block-former it admits either an indented block
-           or an inline body, so `parse_body` handles both forms. */
-        expect(p, TOK_DO);
-        int body_count;
-        Expr **body = parse_body(p, &body_count);
-        Expr *e = alloc_expr(p, EXPR_FOR, loc);
-        e->for_expr.var = var;
-        e->for_expr.var_pattern = var_pattern;
-        e->for_expr.index_var = index_var;
-        e->for_expr.var_loc = var_loc;
-        e->for_expr.index_var_loc = index_var_loc;
-        e->for_expr.iter = iter;
-        e->for_expr.range_end = range_end;
-        e->for_expr.body = body;
-        e->for_expr.body_count = body_count;
-        return e;
-    }
+    case TOK_FOR:
+        return parse_for_expr(p, loc);
 
     case TOK_VOID: {
-        /* void![N] {...} — slice literal with the payload-less result element
-         * type, mirroring the built-in type names (error[N]{...}). */
+        /* void![N] {...}: slice literal with the payload-less result element
+         * type, like the built-in type names (error[N]{...}). */
         if (peek_at(p, 1)->kind == TOK_BANG &&
             peek_at(p, 2)->kind == TOK_LBRACKET) {
             advance_p(p); /* void */
             advance_p(p); /* ! */
             return parse_array_lit_body(p, type_result(p->arena, type_void()), loc);
         }
-        /* `void()` — the void-typed expression.  `void` alone (without the
-         * trailing `()`) is still only valid in type position, so we require
-         * the parentheses here and emit a targeted diagnostic otherwise. */
+        /* `void()` is the void-typed expression. `void` alone is valid only
+         * in type position, so the parentheses are required here, with a
+         * targeted diagnostic when they are missing. */
         advance_p(p);
         if (!check(p, TOK_LPAREN)) {
             diag_error(loc, "'void' is a type; use 'void()' to produce a void value");
@@ -2414,9 +2493,7 @@ static Expr *parse_prefix(Parser *p) {
     case TOK_SIZEOF: {
         advance_p(p);
         expect(p, TOK_LPAREN);
-        p->allow_fixed_array = true;
-        Type *ty = parse_type(p);
-        p->allow_fixed_array = false;
+        Type *ty = parse_type_allowing_fixed_array(p);
         expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_SIZEOF, loc);
         e->sizeof_expr.target = ty;
@@ -2424,7 +2501,7 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_ERROR_NAME: {
-        /* error_name(e) — str? name of a declared error code */
+        /* error_name(e): the str? name of a declared error code */
         advance_p(p);
         expect(p, TOK_LPAREN);
         Expr *code = parse_bracketed_expr(p, PREC_NONE + 1);
@@ -2435,9 +2512,9 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_ERROR_KW: {
-        /* `error` in expression position: only as the element type of an
-         * array/slice literal (error[N]{...} / error[]{...}), mirroring the
-         * built-in numeric type names. */
+        /* `error` in expression position: only as the element type of a
+         * slice literal (error[N]{...} / error[]{...}), like the built-in
+         * numeric type names. */
         if (peek_at(p, 1)->kind == TOK_LBRACKET) {
             advance_p(p);
             return parse_array_lit_body(p, type_error_code(), loc);
@@ -2451,9 +2528,7 @@ static Expr *parse_prefix(Parser *p) {
     case TOK_ALIGNOF: {
         advance_p(p);
         expect(p, TOK_LPAREN);
-        p->allow_fixed_array = true;
-        Type *ty = parse_type(p);
-        p->allow_fixed_array = false;
+        Type *ty = parse_type_allowing_fixed_array(p);
         expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_ALIGNOF, loc);
         e->alignof_expr.target = ty;
@@ -2461,7 +2536,7 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_BITCAST: {
-        /* bitcast(T, x) — a type argument (like sizeof) plus a value (like the
+        /* bitcast(T, x): a type argument (like sizeof) plus a value (like the
          * second arg of atomic_store). Reinterprets x's bytes as T. */
         advance_p(p);
         expect(p, TOK_LPAREN);
@@ -2476,8 +2551,8 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_ENUM_OF: {
-        /* enum_of(E, x) — a type argument plus a value, like bitcast. The
-         * membership-checked integer→enum conversion; yields E?. */
+        /* enum_of(E, x): a type argument plus a value, like bitcast. The
+         * membership-checked integer-to-enum conversion; yields E?. */
         advance_p(p);
         expect(p, TOK_LPAREN);
         Type *ty = parse_type(p);
@@ -2548,24 +2623,10 @@ static Expr *parse_prefix(Parser *p) {
         advance_p(p);
         int errs_before = diag_error_count();
         expect(p, TOK_LPAREN);
-        /* Capture source text of the condition expression */
         Token *cond_start = current(p);
         Expr *condition = parse_bracketed_expr(p, PREC_NONE + 1);
-        /* Expression text: from cond_start to just before current token (, or )).
-           Only valid when this construct parsed cleanly: under error recovery
-           current(p) can be a synthesized layout token whose start does not point
-           into the source buffer, making the subtraction meaningless (it produced
-           a huge bogus length). Errors gate codegen, the only consumer, so an
-           empty capture is unobservable in that case. */
-        const char *text_start = cond_start->start;
-        int text_len = 0;
-        if (diag_error_count() == errs_before) {
-            text_len = (int)(current(p)->start - text_start);
-            while (text_len > 0 && (text_start[text_len-1] == ' ' ||
-                   text_start[text_len-1] == '\n' || text_start[text_len-1] == '\r' ||
-                   text_start[text_len-1] == '\t'))
-                text_len--;
-        }
+        int text_len;
+        const char *text = source_text(p, cond_start, current(p), errs_before, &text_len);
         Expr *message = NULL;
         if (check(p, TOK_COMMA)) {
             advance_p(p);
@@ -2575,160 +2636,14 @@ static Expr *parse_prefix(Parser *p) {
         Expr *e = alloc_expr(p, EXPR_ASSERT, loc);
         e->assert_expr.condition = condition;
         e->assert_expr.message = message;
-        e->assert_expr.expr_text = arena_strdup(p->arena, text_start, text_len);
+        e->assert_expr.expr_text = text;
         e->assert_expr.expr_text_len = text_len;
         return e;
     }
 
     case TOK_ALLOC:
-    case TOK_ALLOCA: {
-        bool is_stack = (current(p)->kind == TOK_ALLOCA);
-        advance_p(p);
-        expect(p, TOK_LPAREN);
-
-        /* Decide type vs expression without backtracking.
-         * Built-in types, void, and type variables are syntactically unambiguous.
-         * Unknown identifiers followed by [ are treated as alloc(T[N]).
-         * Bare unknown identifiers (followed by )) are parsed as expressions —
-         * pass2 disambiguates type names from variables.
-         * Unknown identifiers followed by < need a tentative parse for generic
-         * type args (the <> ambiguity is inherent to the grammar). */
-        Token *first = current(p);
-        /* `const` can only begin a type — `alloc(const str[n] { })` allocates n
-         * slots holding read-only views, the heap twin of the `const str[N]
-         * { ... }` literal. Without it here the whole form fell into the
-         * expression path and was parsed as a nested slice literal, which
-         * requires a compile-time length, so the const spelling could not
-         * reach alloc's runtime-length path at all. */
-        bool is_type = (first->kind == TOK_VOID || first->kind == TOK_TYPE_VAR ||
-                        first->kind == TOK_ERROR_KW || first->kind == TOK_CONST);
-        bool try_type = false;
-        int save = 0;
-
-        if (!is_type && first->kind == TOK_IDENT) {
-            if (type_from_name(first->start, first->length)) {
-                is_type = true;
-            } else {
-                Token *next = peek_at(p, 1);
-                if (next->kind == TOK_LBRACKET || next->kind == TOK_COMMA) {
-                    is_type = true;
-                } else if (next->kind == TOK_DOT) {
-                    /* Module-qualified name: a type (alloc(shapes.point)) or a
-                     * value (alloc(cfg.origin)) — indistinguishable here, since
-                     * whether the name denotes a type is a question only name
-                     * resolution can answer.  Apply the same rule as the bare
-                     * identifier above: '[' and ',' force the type reading (no
-                     * alloc(expr) form starts that way), while a name followed
-                     * by ')' stays an expression and pass2 disambiguates it
-                     * against the real symbol table.  Committing to the type
-                     * reading here on syntax alone made alloc(m.value) emit a
-                     * zero-filled calloc and crashed alloca(m.value). */
-                    int off = 1;
-                    while (peek_at(p, off)->kind == TOK_DOT &&
-                           peek_at(p, off + 1)->kind == TOK_IDENT)
-                        off += 2;
-                    if (peek_at(p, off)->kind != TOK_RPAREN) {
-                        try_type = true;
-                        save = p->pos;
-                    }
-                } else if (next->kind == TOK_LT) {
-                    /* Could be generic type args or comparison — try type */
-                    try_type = true;
-                    save = p->pos;
-                }
-            }
-        }
-
-        if (is_type || try_type) {
-            Type *ty = parse_type(p);
-            if (check(p, TOK_RPAREN)) {
-                /* alloc(T) — bare type alloc */
-                advance_p(p);
-                Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-                e->alloc_expr.alloc_type = ty;
-                e->alloc_expr.size_expr = NULL;
-                e->alloc_expr.init_expr = NULL;
-                e->alloc_expr.is_stack = is_stack;
-                return e;
-            }
-            if (check(p, TOK_LBRACKET)) {
-                /* alloc(T[N] { elems }) — heap array allocation */
-                advance_p(p);
-                Expr *size = parse_bracketed_expr(p, PREC_NONE + 1);
-                expect(p, TOK_RBRACKET);
-                int elem_count = 0;
-                Expr **elems = NULL;
-                if (check(p, TOK_LBRACE)) {
-                    advance_p(p);
-                    elems = parse_slice_elems(p, &elem_count);
-                } else {
-                    /* Read on as if the empty `{ }` were there. */
-                    diag_error(loc_from_token(current(p)),
-                               "expected '{' after alloc(T[N] — use alloc(T[N] { })");
-                }
-                expect(p, TOK_RPAREN);
-                /* Runtime-sized alloc: alloc(T[n] { }) where n is not a literal */
-                if (size->kind != EXPR_INT_LIT) {
-                    if (elem_count > 0)
-                        diag_error(loc, "alloc with runtime size cannot have explicit elements");
-                    Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-                    e->alloc_expr.alloc_type = ty;
-                    e->alloc_expr.size_expr = size;
-                    e->alloc_expr.init_expr = NULL;
-                    e->alloc_expr.is_stack = is_stack;
-                    return e;
-                }
-                Expr *arr = alloc_expr(p, EXPR_ARRAY_LIT, loc);
-                arr->array_lit.elem_type = ty;
-                arr->array_lit.size_expr = size;
-                arr->array_lit.elems = elems;
-                arr->array_lit.elem_count = elem_count;
-                Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-                e->alloc_expr.alloc_type = NULL;
-                e->alloc_expr.size_expr = NULL;
-                e->alloc_expr.init_expr = arr;
-                e->alloc_expr.is_stack = is_stack;
-                return e;
-            }
-            if (check(p, TOK_COMMA)) {
-                /* alloc(T, N) — raw buffer alloc */
-                advance_p(p);
-                Expr *size = parse_bracketed_expr(p, PREC_NONE + 1);
-                expect(p, TOK_RPAREN);
-                Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-                e->alloc_expr.alloc_type = ty;
-                e->alloc_expr.size_expr = size;
-                e->alloc_expr.init_expr = NULL;
-                e->alloc_expr.alloc_raw = true;
-                e->alloc_expr.is_stack = is_stack;
-                return e;
-            }
-            if (try_type) {
-                /* Generic type args didn't pan out — backtrack */
-                restore_pos(p, save);
-            } else {
-                diag_error(loc, "expected ')', '[', or ',' after type in alloc");
-                return alloc_expr_error(p, loc);
-            }
-        }
-
-        /* alloc(expr) / alloca(expr) — initialized alloc. An interpolated string
-         * init is "wrapped" and a bare (cstr) cast init is "licensed": either licenses
-         * an otherwise-illegal unbounded (runtime-sized) str→cstr conversion that the
-         * wrapping alloc/alloca gives a home (heap / dynamic stack). */
-        Expr *init = parse_bracketed_expr(p, PREC_NONE + 1);
-        expect(p, TOK_RPAREN);
-        if (init->kind == EXPR_INTERP_STRING)
-            init->interp_string.wrapped = true;
-        else if (init->kind == EXPR_CAST && init->cast.buffer_size == 0)
-            init->cast.licensed = true;
-        Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-        e->alloc_expr.alloc_type = NULL;
-        e->alloc_expr.size_expr = NULL;
-        e->alloc_expr.init_expr = init;
-        e->alloc_expr.is_stack = is_stack;
-        return e;
-    }
+    case TOK_ALLOCA:
+        return parse_alloc(p, loc);
 
     /* <'a, 'b>(params) -> body : generic function literal with explicit type vars */
     case TOK_LT: {
@@ -2750,8 +2665,7 @@ static Expr *parse_prefix(Parser *p) {
         expect(p, TOK_GT);
         /* Parse the following function literal */
         Expr *func = parse_func_literal(p);
-        func->func.explicit_type_vars = arena_alloc(p->arena, sizeof(const char*) * (size_t)tv_count);
-        memcpy(func->func.explicit_type_vars, tvars, sizeof(const char*) * (size_t)tv_count);
+        func->func.explicit_type_vars = arena_dup(p->arena, tvars, tv_count, sizeof(const char*));
         func->func.explicit_type_var_count = tv_count;
         free(tvars);
         return func;
@@ -2791,11 +2705,10 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_CONST:
-        /* `const T[N] { ... }` — a slice literal over a const element type. It
+        /* `const T[N] { ... }`: a slice literal over a const element type. It
          * is the only spelling that can hold string literals (a string literal
-         * is a `const str`, which does not narrow to `str`), so without it
-         * slices of string literals would be inexpressible. A `const` anywhere
-         * else in expression position is not a value — fall through to the
+         * is a `const str`, which does not narrow to `str`). A `const`
+         * anywhere else in expression position is not a value and gets the
          * default diagnostic. */
         if (at_slice_literal(p)) {
             Type *elem_type = parse_type(p);
@@ -2816,6 +2729,106 @@ static Expr *parse_prefix(Parser *p) {
 
 /* ---- Infix parsing ---- */
 
+/* The right operand of binary operator `op` (at `loc`), after `left`. */
+static Expr *parse_binary_rhs(Parser *p, Expr *left, TokenKind op, SrcLoc loc) {
+    Expr *right = parse_expr(p, infix_prec(op) + 1);
+    Expr *e = alloc_expr(p, EXPR_BINARY, loc);
+    e->binary.op = op;
+    e->binary.left = left;
+    e->binary.right = right;
+    return e;
+}
+
+/* A `<` after `left` read as type arguments: a generic call or generic
+ * variant construction, a bare instantiation in value position, or a struct
+ * literal wrongly given type arguments. NULL when it is a comparison. */
+static Expr *parse_generic_suffix(Parser *p, Expr *left, SrcLoc loc) {
+    /* `left<Types> { ... }`: a struct literal carrying explicit type
+     * arguments, which FC does not have (the field values determine them).
+     * Diagnose the form itself, then parse the literal as if the arguments
+     * were absent so the rest of the expression still type-checks. Read as a
+     * comparison, the braces would become a tuple literal and the error would
+     * land on them. The shape is unambiguous, so it needs no generic-name
+     * gate. */
+    if (left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) {
+        const char *lit_name = struct_lit_typearg_scan(p, p->pos)
+                             ? dotted_name_of(p, left) : NULL;
+        if (lit_name) {
+            diag_error(loc, "explicit type arguments are not allowed on a "
+                            "struct literal; write '%s { ... }', since the field "
+                            "values determine the type arguments", lit_name);
+            int ignored;
+            parse_type_arg_list(p, &ignored);
+            expect_typearg_gt(p);
+            expect(p, TOK_LBRACE);
+            return parse_struct_literal(p, lit_name, left->loc);
+        }
+    }
+
+    /* A generic call left<Type, ...>(args), or variant construction
+     * left<Type, ...>.variant. The Pratt loop has consumed the '<'. The
+     * callee must name a known generic declaration (gate_generic_name), so
+     * an ordinary comparison whose operand happens to scan as a type-argument
+     * list keeps its comparison reading. */
+    if ((left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) &&
+        gate_generic_name(p, left)) {
+        if (generic_call_scan(p, p->pos)) {
+            int ta_count;
+            Type **type_args = parse_type_arg_list(p, &ta_count);
+            expect_typearg_gt(p);
+
+            if (check(p, TOK_DOT)) {
+                /* name<Types>.variant: generic union variant construction */
+                advance_p(p); /* consume '.' */
+                Token *field = expect(p, TOK_IDENT);
+                const char *vname = tok_intern(p, field);
+
+                /* The type args ride on the field for pass2 to resolve. */
+                Expr *fld = alloc_expr(p, EXPR_FIELD, loc);
+                fld->field.object = left;
+                fld->field.name = vname;
+                fld->field.name_loc = tok_loc(p, field);
+                fld->field.type_args = type_args;
+                fld->field.type_arg_count = ta_count;
+                if (!check(p, TOK_LPAREN)) return fld;  /* no payload */
+
+                /* Payload variant: name<Types>.variant(arg) */
+                advance_p(p);
+                Expr *e = alloc_expr(p, EXPR_CALL, loc);
+                e->call.func = fld;
+                e->call.args = parse_call_args(p, &e->call.arg_count);
+                expect(p, TOK_RPAREN);
+                e->call.type_args = type_args;
+                e->call.type_arg_count = ta_count;
+                return e;
+            }
+
+            /* Generic function call: name<Types>(args) */
+            expect(p, TOK_LPAREN);
+            Expr *e = alloc_expr(p, EXPR_CALL, loc);
+            e->call.func = left;
+            e->call.args = parse_call_args(p, &e->call.arg_count);
+            expect(p, TOK_RPAREN);
+            e->call.type_args = type_args;
+            e->call.type_arg_count = ta_count;
+            return e;
+        }
+        if (bare_inst_scan(p, p->pos)) {
+            /* `name<Types>` with no '(': explicit type args in value
+             * position. Consume the type args and build a marked EXPR_CALL
+             * with no arguments; pass2 rejects it with a located diagnostic
+             * (a generic function or type cannot be a value). */
+            Expr *e = alloc_expr(p, EXPR_CALL, loc);
+            e->call.func = left;
+            e->call.type_args = parse_type_arg_list(p, &e->call.type_arg_count);
+            expect_typearg_gt(p);
+            e->call.bare_inst = true;
+            return e;
+        }
+    }
+    return NULL;
+}
+
 static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
     SrcLoc loc = loc_from_token(op_tok);
     TokenKind op = op_tok->kind;
@@ -2825,26 +2838,15 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         Expr *e = alloc_expr(p, EXPR_UNARY_POSTFIX, loc);
         e->unary_postfix.op = TOK_BANG;
         e->unary_postfix.operand = left;
-        /* Capture source text of the operand expression for unwrap diagnostics.
-           Skipped when error recovery ran inside this expression: the start
-           token may then be synthesized (not in the source buffer), making the
-           subtraction meaningless. Errors gate codegen, the only consumer. */
-        const char *text_start = p->tokens[p->expr_start_pos].start;
-        int text_len = 0;
-        if (diag_error_count() == p->expr_start_errs) {
-            text_len = (int)(op_tok->start - text_start);
-            while (text_len > 0 && (text_start[text_len-1] == ' ' ||
-                   text_start[text_len-1] == '\n' || text_start[text_len-1] == '\r' ||
-                   text_start[text_len-1] == '\t'))
-                text_len--;
-        }
-        e->unary_postfix.expr_text = arena_strdup(p->arena, text_start, text_len);
-        e->unary_postfix.expr_text_len = text_len;
+        /* The operand's source text, for the unwrap failure message. */
+        e->unary_postfix.expr_text = source_text(p, &p->tokens[p->expr_start_pos], op_tok,
+                                                 p->expr_start_errs,
+                                                 &e->unary_postfix.expr_text_len);
         return e;
     }
 
     case TOK_QUESTION: {
-        /* x? — propagation: unwrap on success, early-return the failure
+        /* x?: propagation. Unwrap on success, early-return the failure
          * (err/none) from the enclosing function otherwise. No operand text
          * capture: propagation has no abort message. */
         Expr *e = alloc_expr(p, EXPR_UNARY_POSTFIX, loc);
@@ -2858,18 +2860,16 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
         Expr *e = alloc_expr(p, EXPR_FIELD, loc);
         e->field.object = left;
         e->field.name = tok_intern(p, field);
-        e->field.name_loc = loc_from_token(field);
-        e->field.name_loc.filename = p->filename;
+        e->field.name_loc = tok_loc(p, field);
         return e;
     }
 
     case TOK_ARROW: {
-        /* `->` is no longer pointer field access — `.` auto-derefs one level
-           (`p.field`). Emit a helpful error and recover by consuming the field
-           name so the rest of the expression still parses. (Match-arm and
-           lambda `->` never reach here: block_arm_arrow / the lambda-prefix
-           parser consume those before the Pratt loop calls parse_infix.) */
-        diag_error(loc, "'->' is not pointer field access in FC — use '.' (e.g. p.field)");
+        /* `->` is not member access in FC: `.` auto-derefs one level
+           (`p.field`). Report that and consume the field name so the rest of
+           the expression still parses. A match arm's or a lambda's `->` never
+           reaches here: block_arm_arrow and the lambda parser stop before it. */
+        diag_error(loc, "'->' is not pointer field access in FC; use '.' (e.g. p.field)");
         if (check(p, TOK_IDENT)) advance_p(p);
         (void)left;
         return alloc_expr_error(p, loc);
@@ -2908,24 +2908,10 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
     }
 
     case TOK_LPAREN: {
-        Expr **args = NULL;
-        int arg_count = 0, arg_cap = 0;
-        if (!check(p, TOK_RPAREN)) {
-            do {
-                Expr *arg = parse_bracketed_expr(p, PREC_NONE + 1);
-                DA_APPEND(args, arg_count, arg_cap, arg);
-                if (!check(p, TOK_COMMA)) break;
-                advance_p(p);
-            } while (1);
-        }
-        expect(p, TOK_RPAREN);
         Expr *e = alloc_expr(p, EXPR_CALL, loc);
         e->call.func = left;
-        e->call.args = arena_copy_exprs(p, args, arg_count);
-        e->call.arg_count = arg_count;
-        e->call.type_args = NULL;
-        e->call.type_arg_count = 0;
-        free(args);
+        e->call.args = parse_call_args(p, &e->call.arg_count);
+        expect(p, TOK_RPAREN);
         return e;
     }
 
@@ -2938,180 +2924,13 @@ static Expr *parse_infix(Parser *p, Expr *left, Token *op_tok) {
     }
 
     case TOK_LT: {
-        /* `left<Types> { ... }` — a struct literal carrying explicit type
-         * arguments, which FC does not have (the field values determine them).
-         * Diagnose the form itself, then parse the literal as if the arguments
-         * were absent so the rest of the expression still type-checks: without
-         * this the `<` fell through to a comparison and the braces were read as
-         * a tuple literal, reporting "tuple literal requires at least 2
-         * elements" at the brace. Checked ahead of the generic readings below —
-         * the shape is unambiguous, so it needs no generic-name gate. */
-        if (left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) {
-            const char *lit_name = struct_lit_typearg_scan(p, p->pos)
-                                 ? dotted_name_of(p, left) : NULL;
-            if (lit_name) {
-                diag_error(loc, "explicit type arguments are not allowed on a "
-                                "struct literal; write '%s { ... }' — the field "
-                                "values determine the type arguments", lit_name);
-                do {
-                    parse_type_arg(p);
-                    if (!check(p, TOK_COMMA)) break;
-                    advance_p(p);
-                } while (1);
-                expect_typearg_gt(p);
-                expect(p, TOK_LBRACE);
-                return parse_struct_literal(p, lit_name, left->loc);
-            }
-        }
-
-        /* Check if this is a generic call: left<Type, ...>(args)
-         * The '<' token has already been consumed by the Pratt loop.
-         * Scan forward to see if tokens between here and '>' are all
-         * type-compatible, and '>' is followed by '(' — and the callee names
-         * a known generic declaration (gate_generic_name), so an ordinary
-         * comparison whose operand happens to scan as a type-arg list keeps
-         * its comparison reading. */
-        if ((left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) &&
-            gate_generic_name(p, left)) {
-            if (generic_call_scan(p, p->pos)) {
-                /* Parse type args */
-                Type **type_args = NULL;
-                int ta_count = 0, ta_cap = 0;
-                do {
-                    Type *ty = parse_type_arg(p);
-                    DA_APPEND(type_args, ta_count, ta_cap, ty);
-                    if (!check(p, TOK_COMMA)) break;
-                    advance_p(p);
-                } while (1);
-                expect_typearg_gt(p);
-
-                if (check(p, TOK_DOT)) {
-                    /* name<Types>.variant — generic union variant construction */
-                    advance_p(p); /* consume '.' */
-                    Token *field = expect(p, TOK_IDENT);
-                    const char *vname = tok_intern(p, field);
-
-                    /* Store type_args on left (the union name ident) for pass2 */
-                    /* Build EXPR_FIELD: left.variant */
-                    Expr *fld = alloc_expr(p, EXPR_FIELD, loc);
-                    fld->field.object = left;
-                    fld->field.name = vname;
-                    fld->field.name_loc = loc_from_token(field);
-                    fld->field.name_loc.filename = p->filename;
-
-                    /* Store type args on the field expr for pass2 to resolve */
-                    fld->field.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
-                    memcpy(fld->field.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
-                    fld->field.type_arg_count = ta_count;
-
-                    if (check(p, TOK_LPAREN)) {
-                        /* Payload variant: name<Types>.variant(arg) */
-                        advance_p(p);
-                        Expr **args = NULL;
-                        int arg_count = 0, arg_cap = 0;
-                        if (!check(p, TOK_RPAREN)) {
-                            do {
-                                Expr *arg = parse_bracketed_expr(p, PREC_NONE + 1);
-                                DA_APPEND(args, arg_count, arg_cap, arg);
-                                if (!check(p, TOK_COMMA)) break;
-                                advance_p(p);
-                            } while (1);
-                        }
-                        expect(p, TOK_RPAREN);
-
-                        Expr *e = alloc_expr(p, EXPR_CALL, loc);
-                        e->call.func = fld;
-                        e->call.args = arena_copy_exprs(p, args, arg_count);
-                        e->call.arg_count = arg_count;
-                        e->call.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
-                        memcpy(e->call.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
-                        e->call.type_arg_count = ta_count;
-                        free(type_args);
-                        free(args);
-                        return e;
-                    }
-                    /* No-payload variant: name<Types>.variant */
-                    /* Store type args on the field expr for pass2 to pick up */
-                    fld->field.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
-                    memcpy(fld->field.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
-                    fld->field.type_arg_count = ta_count;
-                    free(type_args);
-                    return fld;
-                }
-
-                /* Generic function call: name<Types>(args) */
-                expect(p, TOK_LPAREN);
-
-                /* Parse call arguments */
-                Expr **args = NULL;
-                int arg_count = 0, arg_cap = 0;
-                if (!check(p, TOK_RPAREN)) {
-                    do {
-                        Expr *arg = parse_bracketed_expr(p, PREC_NONE + 1);
-                        DA_APPEND(args, arg_count, arg_cap, arg);
-                        if (!check(p, TOK_COMMA)) break;
-                        advance_p(p);
-                    } while (1);
-                }
-                expect(p, TOK_RPAREN);
-
-                Expr *e = alloc_expr(p, EXPR_CALL, loc);
-                e->call.func = left;
-                e->call.args = arena_copy_exprs(p, args, arg_count);
-                e->call.arg_count = arg_count;
-                e->call.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
-                memcpy(e->call.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
-                e->call.type_arg_count = ta_count;
-                free(type_args);
-                free(args);
-                return e;
-            }
-            if (bare_inst_scan(p, p->pos)) {
-                /* `name<Types>` with no '(' — explicit type args in value
-                 * position. Parse the type args so they are consumed, then build
-                 * a marked EXPR_CALL with no arguments; pass2 rejects it with a
-                 * located diagnostic (a generic function/type cannot be a value). */
-                Type **type_args = NULL;
-                int ta_count = 0, ta_cap = 0;
-                do {
-                    Type *ty = parse_type_arg(p);
-                    DA_APPEND(type_args, ta_count, ta_cap, ty);
-                    if (!check(p, TOK_COMMA)) break;
-                    advance_p(p);
-                } while (1);
-                expect_typearg_gt(p);
-
-                Expr *e = alloc_expr(p, EXPR_CALL, loc);
-                e->call.func = left;
-                e->call.args = NULL;
-                e->call.arg_count = 0;
-                e->call.type_args = arena_alloc(p->arena, sizeof(Type*) * (size_t)ta_count);
-                memcpy(e->call.type_args, type_args, sizeof(Type*) * (size_t)ta_count);
-                e->call.type_arg_count = ta_count;
-                e->call.bare_inst = true;
-                free(type_args);
-                return e;
-            }
-        }
-        /* Not a generic call — fall through to comparison */
-        Prec prec = infix_prec(op);
-        Expr *right = parse_expr(p, prec + 1);
-        Expr *e = alloc_expr(p, EXPR_BINARY, loc);
-        e->binary.op = op;
-        e->binary.left = left;
-        e->binary.right = right;
-        return e;
+        Expr *generic = parse_generic_suffix(p, left, loc);
+        if (generic) return generic;
+        return parse_binary_rhs(p, left, op, loc);
     }
 
-    default: {
-        Prec prec = infix_prec(op);
-        Expr *right = parse_expr(p, prec + 1);
-        Expr *e = alloc_expr(p, EXPR_BINARY, loc);
-        e->binary.op = op;
-        e->binary.left = left;
-        e->binary.right = right;
-        return e;
-    }
+    default:
+        return parse_binary_rhs(p, left, op, loc);
     }
 }
 
@@ -3123,16 +2942,15 @@ static Expr *parse_expr(Parser *p, Prec min_prec) {
     Expr *left = parse_prefix(p);
     for (;;) {
         Token *t = current(p);
-        /* Inside a `when` guard, treat top-level `->` as the arm-body separator
-           rather than as a pointer-field postfix. Bracketed sub-expressions
-           clear this flag so pointer-field access still works when wrapped. */
+        /* Inside a `when` guard, a top-level `->` ends the guard: it separates
+           the arm's body. */
         if (p->block_arm_arrow && t->kind == TOK_ARROW) break;
         Prec prec = infix_prec(t->kind);
         /* A generic call name<T,...>(args) is a call, so its '<' binds at
-         * call precedence — not comparison. Without the bump the callee gets
-         * absorbed as an operand of any tighter-binding operator on its left
-         * (`1 + size_of<int32>()`, `!is_big<int32>()`) and the '<' is never
-         * reached with the bare name as `left`. */
+         * call precedence, not comparison precedence. Otherwise the callee
+         * would be taken as the operand of a tighter-binding operator on its
+         * left (`1 + size_of<i32>()`, `!is_big<i32>()`) and the '<' would
+         * never be reached with the bare name as `left`. */
         if (t->kind == TOK_LT &&
             (left->kind == EXPR_IDENT || left->kind == EXPR_FIELD) &&
             gate_generic_name(p, left) &&
@@ -3153,15 +2971,14 @@ static Pattern *parse_pattern(Parser *p);
 
 static Pattern *parse_pattern_atom(Parser *p) {
     Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
-    pat->loc = loc_from_token(current(p));
-    pat->loc.filename = p->filename;
+    pat->loc = tok_loc(p, current(p));
 
     /* Negative integer pattern: -42 */
     if (check(p, TOK_MINUS) && peek_at(p, 1)->kind == TOK_INT_LIT) {
         SrcLoc loc = loc_from_token(current(p));
         advance_p(p); /* consume - */
         Token *t = advance_p(p);
-        Type *lt = parse_int_type(t->start, t->length);
+        Type *lt = int_lit_type(p, t);
         if (type_is_unsigned(lt))
             diag_error(loc, "cannot negate unsigned integer literal");
         pat->kind = PAT_INT_LIT;
@@ -3178,7 +2995,7 @@ static Pattern *parse_pattern_atom(Parser *p) {
         pat->kind = PAT_INT_LIT;
         bool pat_oor = false;
         pat->int_lit.value = parse_int_value(t->start, t->length, &pat_oor);
-        pat->int_lit.lit_type = parse_int_type(t->start, t->length);
+        pat->int_lit.lit_type = int_lit_type(p, t);
         pat->int_lit.out_of_range = pat_oor;
         return pat;
     }
@@ -3200,7 +3017,7 @@ static Pattern *parse_pattern_atom(Parser *p) {
     if (check(p, TOK_CHAR_LIT)) {
         Token *t2 = advance_p(p);
         pat->kind = PAT_CHAR_LIT;
-        pat->char_lit.value = parse_char_value(t2->start, t2->length);
+        pat->char_lit.value = char_lit_value(t2);
         return pat;
     }
 
@@ -3235,7 +3052,7 @@ static Pattern *parse_pattern_atom(Parser *p) {
             pat->some_pat.inner = parse_pattern(p);
             expect(p, TOK_RPAREN);
         } else {
-            /* Bare `ok` — matches the payload-less ok of a void! result
+            /* Bare `ok` matches the payload-less ok of a void! result
              * (pass2 rejects it on non-void results, and ok(<pat>) on void!). */
             pat->some_pat.inner = NULL;
         }
@@ -3243,7 +3060,7 @@ static Pattern *parse_pattern_atom(Parser *p) {
     }
 
     if (check(p, TOK_ERR)) {
-        /* err(<pat>) — the inner pattern matches the i32 code (a literal,
+        /* err(<pat>): the inner pattern matches the i32 code (a literal,
          * binding, or wildcard). */
         advance_p(p);
         expect(p, TOK_LPAREN);
@@ -3282,8 +3099,7 @@ static Pattern *parse_pattern_atom(Parser *p) {
             }
             skip_newlines(p);
             expect(p, TOK_RBRACE);
-            pat->struc.fields = arena_alloc(p->arena, sizeof(FieldPattern) * (count > 0 ? (size_t)count : 1));
-            memcpy(pat->struc.fields, fields, sizeof(FieldPattern) * (size_t)count);
+            pat->struc.fields = arena_dup(p->arena, fields, count, sizeof(FieldPattern));
             pat->struc.field_count = count;
             free(fields);
             return pat;
@@ -3301,8 +3117,7 @@ static Pattern *parse_pattern_atom(Parser *p) {
         } while (!check(p, TOK_RBRACE));
         skip_newlines(p);
         expect(p, TOK_RBRACE);
-        pat->tuple_pat.patterns = arena_alloc(p->arena, sizeof(Pattern*) * (count > 0 ? (size_t)count : 1));
-        memcpy(pat->tuple_pat.patterns, pats, sizeof(Pattern*) * (size_t)count);
+        pat->tuple_pat.patterns = arena_dup(p->arena, pats, count, sizeof(Pattern*));
         pat->tuple_pat.pattern_count = count;
         pat->tuple_pat.resolved_types = NULL;
         free(pats);
@@ -3320,10 +3135,10 @@ static Pattern *parse_pattern_atom(Parser *p) {
             return pat;
         }
 
-        /* Qualified constant path: group.member / mod.group.member — a declared
-         * error constant. Qualification is mandatory (a bare member name would be
-         * indistinguishable from a binding); pass2 resolves the path and rewrites
-         * the node to PAT_INT_LIT with the assigned code. */
+        /* Qualified constant path, group.member or mod.group.member: a
+         * declared error constant. Qualification is required (a bare member
+         * name would be indistinguishable from a binding); pass2 resolves the
+         * path and rewrites the node to PAT_INT_LIT with the assigned code. */
         if (peek_at(p, 1)->kind == TOK_DOT && peek_at(p, 2)->kind == TOK_IDENT) {
             const char **parts = NULL;
             int count = 0, cap = 0;
@@ -3335,8 +3150,7 @@ static Pattern *parse_pattern_atom(Parser *p) {
                 advance_p(p); /* consume ident */
             }
             pat->kind = PAT_CONST_PATH;
-            pat->const_path.parts = arena_alloc(p->arena, sizeof(const char*) * (size_t)count);
-            memcpy(pat->const_path.parts, parts, sizeof(const char*) * (size_t)count);
+            pat->const_path.parts = arena_dup(p->arena, parts, count, sizeof(const char*));
             pat->const_path.part_count = count;
             free(parts);
             return pat;
@@ -3366,85 +3180,64 @@ static Pattern *parse_pattern_atom(Parser *p) {
     return alloc_pat_error(p, loc);
 }
 
-/* parse_pattern handles or-patterns by collecting alternatives joined by `|`.
-   Nested ORs are flattened: (a | b) | c parses as a single 3-alt PAT_OR. */
+typedef struct {
+    Pattern **items;
+    int count;
+    int cap;
+} PatList;
+
+/* Add an or-pattern alternative, splicing in the alternatives of a nested
+ * or-pattern so the result stays flat: (a | b) | c has three. */
+static void add_alt(PatList *alts, Pattern *alt) {
+    if (alt->kind == PAT_OR) {
+        for (int i = 0; i < alt->or_pat.alt_count; i++)
+            DA_APPEND(alts->items, alts->count, alts->cap, alt->or_pat.alts[i]);
+    } else {
+        DA_APPEND(alts->items, alts->count, alts->cap, alt);
+    }
+}
+
+static Pattern *make_or_pattern(Parser *p, PatList *alts, SrcLoc loc) {
+    Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
+    pat->kind = PAT_OR;
+    pat->loc = loc;
+    pat->or_pat.alts = arena_dup(p->arena, alts->items, alts->count, sizeof(Pattern *));
+    pat->or_pat.alt_count = alts->count;
+    free(alts->items);
+    return pat;
+}
+
+/* A pattern, or an or-pattern of alternatives joined by `|`. */
 static Pattern *parse_pattern(Parser *p) {
     Pattern *first = parse_pattern_atom(p);
     if (!check(p, TOK_PIPE)) return first;
-
-    /* Accumulate alternatives, flattening any inner PAT_OR. */
-    Pattern **alts = NULL;
-    int count = 0, cap = 0;
-    if (first->kind == PAT_OR) {
-        for (int i = 0; i < first->or_pat.alt_count; i++)
-            DA_APPEND(alts, count, cap, first->or_pat.alts[i]);
-    } else {
-        DA_APPEND(alts, count, cap, first);
-    }
-    SrcLoc or_loc = first->loc;
-
+    PatList alts = {0};
+    add_alt(&alts, first);
     while (check(p, TOK_PIPE)) {
         advance_p(p); /* consume | */
-        Pattern *alt = parse_pattern_atom(p);
-        if (alt->kind == PAT_OR) {
-            for (int i = 0; i < alt->or_pat.alt_count; i++)
-                DA_APPEND(alts, count, cap, alt->or_pat.alts[i]);
-        } else {
-            DA_APPEND(alts, count, cap, alt);
-        }
+        add_alt(&alts, parse_pattern_atom(p));
     }
-
-    Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
-    pat->kind = PAT_OR;
-    pat->loc = or_loc;
-    pat->or_pat.alts = arena_alloc(p->arena, sizeof(Pattern *) * (size_t)count);
-    memcpy(pat->or_pat.alts, alts, sizeof(Pattern *) * (size_t)count);
-    pat->or_pat.alt_count = count;
-    free(alts);
-    return pat;
+    return make_or_pattern(p, &alts, first->loc);
 }
 
 /* ---- Match expression parsing ---- */
 
-/* Combine a list of buffered body-less or-alternatives with the current arm's
-   pattern, producing a flattened PAT_OR. The buffered patterns are stored
-   pre-flattened (each is either a non-OR pattern or a PAT_OR whose alts are
-   already flat). */
+/* The or-pattern of a run of body-less arms (`| a` `| b`) and the arm with the
+ * body that ends the run. */
 static Pattern *or_prepend(Parser *p, Pattern **buffered, int buf_count, Pattern *tail) {
-    Pattern **alts = NULL;
-    int count = 0, cap = 0;
-    for (int i = 0; i < buf_count; i++) {
-        Pattern *b = buffered[i];
-        if (b->kind == PAT_OR) {
-            for (int j = 0; j < b->or_pat.alt_count; j++)
-                DA_APPEND(alts, count, cap, b->or_pat.alts[j]);
-        } else {
-            DA_APPEND(alts, count, cap, b);
-        }
-    }
-    if (tail->kind == PAT_OR) {
-        for (int j = 0; j < tail->or_pat.alt_count; j++)
-            DA_APPEND(alts, count, cap, tail->or_pat.alts[j]);
-    } else {
-        DA_APPEND(alts, count, cap, tail);
-    }
-    Pattern *pat = arena_alloc(p->arena, sizeof(Pattern));
-    pat->kind = PAT_OR;
-    pat->loc = buffered[0]->loc;
-    pat->or_pat.alts = arena_alloc(p->arena, sizeof(Pattern *) * (size_t)count);
-    memcpy(pat->or_pat.alts, alts, sizeof(Pattern *) * (size_t)count);
-    pat->or_pat.alt_count = count;
-    free(alts);
-    return pat;
+    PatList alts = {0};
+    for (int i = 0; i < buf_count; i++) add_alt(&alts, buffered[i]);
+    add_alt(&alts, tail);
+    return make_or_pattern(p, &alts, buffered[0]->loc);
 }
 
 static Expr *parse_match_expr(Parser *p) {
     SrcLoc loc = loc_from_token(current(p));
     expect(p, TOK_MATCH);
 
-    /* Save the outer `block_arm_arrow` state: a match nested inside another
-       match's guard must still be able to parse its own subject / guards /
-       arm bodies without the outer guard's `->`-blocker interfering. */
+    /* Clear the outer `block_arm_arrow` for the duration: a match nested in
+       another match's guard parses its own subject, guards and arm bodies,
+       whose `->` must not end the outer guard. */
     bool saved_block = p->block_arm_arrow;
     p->block_arm_arrow = false;
 
@@ -3474,14 +3267,13 @@ static Expr *parse_match_expr(Parser *p) {
         int guard = p->pos;
         expect(p, TOK_PIPE);
         MatchArm arm;
-        arm.loc = loc_from_token(current(p));
-        arm.loc.filename = p->filename;
+        arm.loc = tok_loc(p, current(p));
         arm.pattern = parse_pattern(p);
         arm.guard = NULL;
 
         if (arm.pattern->kind == PAT_ERROR) {
-            /* Malformed pattern: do NOT buffer it (that would corrupt the or-chain)
-               and do NOT add an arm — resync to the next arm and carry on. */
+            /* Malformed pattern: neither buffer it (that would corrupt the
+               or-chain) nor add an arm; resync to the next arm. */
             recover_to(p, arm_sync, 1);
             recover_progress(p, guard);
             continue;
@@ -3506,7 +3298,7 @@ static Expr *parse_match_expr(Parser *p) {
         }
 
         if (!check(p, TOK_ARROW)) {
-            /* Body-less arm — buffer as or-alternative for the next arm. */
+            /* Body-less arm: buffer as an or-alternative for the next arm. */
             last_body_less_loc = arm.loc;
             DA_APPEND(buffered, buf_count, buf_cap, arm.pattern);
             recover_progress(p, guard);
@@ -3520,19 +3312,18 @@ static Expr *parse_match_expr(Parser *p) {
 
         advance_p(p); /* consume -> */
 
-        /* Parse arm body. (An empty body after `->` was briefly supported as
-           a no-op arm and rolled back 2026-07-08: `void()` is the one no-op
-           spelling — see result-type-design.md §Post-migration review.) */
+        /* Parse arm body. An empty body after `->` is an error; `void()` is
+           the no-op arm's spelling. */
         int body_errs = diag_error_count();
         arm.body = parse_body(p, &arm.body_count);
 
-        /* An inline arm body goes through parse_inline_seq, which — unlike
-           parse_block — does not enforce a separator between juxtaposed
-           statements. Without this check, `| 3 -> n = 1 n = 2` leaves `n = 2`
-           unclaimed and the arm loop reports it as a 3-error "expected '|'"
-           cascade. Report the same clean separator error a block would, then
-           resync to the next arm. Skipped if the body itself failed (its
-           leftovers are that error's debris, not a second diagnosis). */
+        /* An inline arm body goes through parse_inline_seq, which, unlike
+           parse_block, does not require a separator between juxtaposed
+           statements. In `| 3 -> n = 1 n = 2` the `n = 2` is left unclaimed,
+           and the arm loop would report it as a cascade of "expected '|'"
+           errors. Report the separator error a block would, then resync to
+           the next arm. Skipped if the body itself failed (its leftovers are
+           that error's debris). */
         if (diag_error_count() == body_errs && !at_stmt_terminator(p)) {
             diag_error(loc_from_token(current(p)),
                 "expected a newline or ';' between statements, got %s",
@@ -3558,18 +3349,15 @@ static Expr *parse_match_expr(Parser *p) {
     Expr *e = alloc_expr(p, EXPR_MATCH, loc);
     e->match_expr.subject = subject;
     e->match_expr.arm_count = arm_count;
-    if (arm_count > 0) {
-        e->match_expr.arms = arena_alloc(p->arena, sizeof(MatchArm) * (size_t)arm_count);
-        memcpy(e->match_expr.arms, arms, sizeof(MatchArm) * (size_t)arm_count);
-        free(arms);
-    }
+    e->match_expr.arms = arena_dup(p->arena, arms, arm_count, sizeof(MatchArm));
+    free(arms);
     return e;
 }
 
 /* ---- Struct literal parsing ---- */
 
 static Expr *parse_struct_literal(Parser *p, const char *type_name, SrcLoc loc) {
-    /* We already consumed IDENT and LBRACE */
+    /* The caller has consumed the type name and the '{' */
     FieldInit *fields = NULL;
     int field_count = 0, field_cap = 0;
 
@@ -3589,21 +3377,41 @@ static Expr *parse_struct_literal(Parser *p, const char *type_name, SrcLoc loc) 
     Expr *e = alloc_expr(p, EXPR_STRUCT_LIT, loc);
     e->struct_lit.type_name = type_name;
     e->struct_lit.field_count = field_count;
-    if (field_count > 0) {
-        e->struct_lit.fields = arena_alloc(p->arena, sizeof(FieldInit) * (size_t)field_count);
-        memcpy(e->struct_lit.fields, fields, sizeof(FieldInit) * (size_t)field_count);
-        free(fields);
-    }
+    e->struct_lit.fields = arena_dup(p->arena, fields, field_count, sizeof(FieldInit));
+    free(fields);
     return e;
 }
 
 /* ---- Top-level declaration parsing ---- */
 
-static Decl *parse_decl(Parser *p);
+typedef struct {
+    Decl **items;
+    int count;
+    int cap;
+} DeclList;
+
+static Decl *parse_decl(Parser *p, DeclList *out);
+
+static Decl *decl_list_add(DeclList *l, Decl *d) {
+    DA_APPEND(l->items, l->count, l->cap, d);
+    return d;
+}
+
+/* Append a parsed declaration unless it is the error node standing in for a
+ * malformed one. */
+static Decl *add_parsed(DeclList *l, Decl *d) {
+    return d->kind == DECL_ERROR ? d : decl_list_add(l, d);
+}
+
+/* Move a finished list into the arena (NULL when empty). */
+static Decl **decl_list_finish(Parser *p, DeclList *l) {
+    Decl **decls = arena_dup(p->arena, l->items, l->count, sizeof(Decl*));
+    free(l->items);
+    return decls;
+}
 
 static Decl *parse_let_decl(Parser *p) {
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
+    SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_LET);
 
     bool is_mut = false;
@@ -3620,13 +3428,7 @@ static Decl *parse_let_decl(Parser *p) {
         /* Block body for let binding */
         int count;
         Expr **body = parse_block(p, &count);
-        if (count == 1) {
-            init = body[0];
-        } else {
-            init = alloc_expr(p, EXPR_BLOCK, loc);
-            init->block.stmts = body;
-            init->block.count = count;
-        }
+        init = block_or_single(p, body, count, loc);
     } else {
         init = parse_expr(p, PREC_NONE + 1);
     }
@@ -3640,14 +3442,13 @@ static Decl *parse_let_decl(Parser *p) {
     return d;
 }
 
-/* Parse `static_assert(cond, "message")` — the message must be a string
+/* Parse `static_assert(cond, "message")`. The message must be a string
  * literal (no computation on the failure path). Returns false if the leading
  * keyword is absent. Used in struct/union bodies (collected as instantiation
  * predicates) and via parse_prefix in statement position. */
 static bool parse_static_assert_line(Parser *p, Expr **out_cond, const char **out_msg, SrcLoc *out_loc) {
     if (!check(p, TOK_STATIC_ASSERT)) return false;
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
+    SrcLoc loc = tok_loc(p, current(p));
     advance_p(p);
     expect(p, TOK_LPAREN);
     Expr *cond = parse_bracketed_expr(p, PREC_NONE + 1);
@@ -3673,12 +3474,12 @@ static bool parse_static_assert_line(Parser *p, Expr **out_cond, const char **ou
     return true;
 }
 
-/* A struct/union/error body must open with its own indented block. When the
-   header is followed straight by a newline (an empty body), the member loop
-   would otherwise chew through the *next* declaration and emit a 9–25-error
-   cascade. Report one clean diagnostic (suppressed if the header already
-   failed) and signal the caller to bail with a DECL_ERROR. Returns true when a
-   body is present. */
+/* A struct/union/enum/error body must open with its own indented block. When
+   the header is followed straight by a newline (an empty body), the member
+   loop would run on into the next declaration and produce a cascade of
+   errors. Report one diagnostic (suppressed if the header already failed) and
+   return false so the caller returns a DECL_ERROR. Returns true when a body is
+   present. */
 static bool decl_body_present(Parser *p, const char *kind, const char *name,
                               const char *item, SrcLoc loc, int errs0) {
     if (check(p, TOK_INDENT)) return true;
@@ -3687,94 +3488,69 @@ static bool decl_body_present(Parser *p, const char *kind, const char *name,
     return false;
 }
 
-/* Placeholder for a malformed type declaration — skipped by pass1/pass2, never
-   reaches codegen (it only exists while diag_error_count() > 0). */
-static Decl *decl_error_node(Parser *p, SrcLoc loc) {
-    Decl *d = arena_alloc(p->arena, sizeof(Decl));
-    d->kind = DECL_ERROR;
-    d->loc = loc;
-    return d;
-}
-
-static Decl *parse_struct_decl(Parser *p) {
-    int errs0 = diag_error_count();
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
-    expect(p, TOK_STRUCT);
-    const char *name = tok_intern(p, expect(p, TOK_IDENT));
-    expect(p, TOK_EQ);
-
-    /* Expect INDENT then field: type lines */
-    if (!decl_body_present(p, "struct", name, "field", loc, errs0))
-        return decl_error_node(p, loc);
-    expect(p, TOK_INDENT);
-
+/* The `name: type` lines of a struct body, after its INDENT and through its
+ * DEDENT. An FC struct (not an extern one) may also hold static_assert lines. */
+static void parse_struct_body(Parser *p, Decl *d, bool allow_static_assert) {
     StructField *fields = NULL;
     int field_count = 0, field_cap = 0;
     StaticAssert *sasserts = NULL;
     int sassert_count = 0, sassert_cap = 0;
-
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
-
         int guard = p->pos;
-        {
-            Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
-            if (parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
-                StaticAssert sa = { sa_cond, sa_msg, sa_loc, name, false };
-                DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
-                recover_progress(p, guard);
-                skip_newlines(p);
-                continue;
-            }
+        Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
+        if (allow_static_assert && parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
+            StaticAssert sa = { sa_cond, sa_msg, sa_loc, d->struc.name, false };
+            DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
+        } else {
+            Token *ftok = expect(p, TOK_IDENT);
+            StructField f = { .name = tok_intern(p, ftok), .loc = tok_loc(p, ftok) };
+            expect(p, TOK_COLON);
+            f.type = parse_type_allowing_fixed_array(p);
+            DA_APPEND(fields, field_count, field_cap, f);
         }
-        Token *ftok = expect(p, TOK_IDENT);
-        const char *fname = tok_intern(p, ftok);
-        SrcLoc floc = loc_from_token(ftok);
-        floc.filename = p->filename;
-        expect(p, TOK_COLON);
-        p->allow_fixed_array = true;
-        Type *ftype = parse_type(p);
-        p->allow_fixed_array = false;
-
-        StructField f = { .name = fname, .type = ftype, .loc = floc };
-        DA_APPEND(fields, field_count, field_cap, f);
-        recover_progress(p, guard);  /* a fully malformed field line consumes nothing */
+        recover_progress(p, guard);  /* a fully malformed line consumes nothing */
         skip_newlines(p);
     }
     expect(p, TOK_DEDENT);
+    d->struc.field_count = field_count;
+    d->struc.fields = arena_dup(p->arena, fields, field_count, sizeof(StructField));
+    free(fields);
+    d->struc.static_assert_count = sassert_count;
+    d->struc.static_asserts = arena_dup(p->arena, sasserts, sassert_count, sizeof(StaticAssert));
+    free(sasserts);
+}
+
+static Decl *parse_struct_decl(Parser *p) {
+    int errs0 = diag_error_count();
+    SrcLoc loc = tok_loc(p, current(p));
+    expect(p, TOK_STRUCT);
+    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    expect(p, TOK_EQ);
+
+    if (!decl_body_present(p, "struct", name, "field", loc, errs0))
+        return alloc_decl_error(p, loc);
+    expect(p, TOK_INDENT);
 
     Decl *d = arena_alloc(p->arena, sizeof(Decl));
     d->kind = DECL_STRUCT;
     d->loc = loc;
     d->struc.name = name;
-    d->struc.field_count = field_count;
-    if (field_count > 0) {
-        d->struc.fields = arena_alloc(p->arena, sizeof(StructField) * (size_t)field_count);
-        memcpy(d->struc.fields, fields, sizeof(StructField) * (size_t)field_count);
-        free(fields);
-    }
-    d->struc.static_assert_count = sassert_count;
-    if (sassert_count > 0) {
-        d->struc.static_asserts = arena_alloc(p->arena, sizeof(StaticAssert) * (size_t)sassert_count);
-        memcpy(d->struc.static_asserts, sasserts, sizeof(StaticAssert) * (size_t)sassert_count);
-        free(sasserts);
-    }
+    parse_struct_body(p, d, true);
     return d;
 }
 
 static Decl *parse_union_decl(Parser *p) {
     int errs0 = diag_error_count();
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
+    SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_UNION);
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
     expect(p, TOK_EQ);
 
     /* Expect INDENT then | variant(type) lines */
     if (!decl_body_present(p, "union", name, "variant", loc, errs0))
-        return decl_error_node(p, loc);
+        return alloc_decl_error(p, loc);
     expect(p, TOK_INDENT);
 
     UnionVariant *variants = NULL;
@@ -3800,8 +3576,7 @@ static Decl *parse_union_decl(Parser *p) {
         expect(p, TOK_PIPE);
         Token *vtok = expect(p, TOK_IDENT);
         const char *vname = tok_intern(p, vtok);
-        SrcLoc vloc = loc_from_token(vtok);
-        vloc.filename = p->filename;
+        SrcLoc vloc = tok_loc(p, vtok);
         Type *payload = NULL;
         if (check(p, TOK_LPAREN)) {
             advance_p(p);
@@ -3821,17 +3596,11 @@ static Decl *parse_union_decl(Parser *p) {
     d->loc = loc;
     d->unio.name = name;
     d->unio.variant_count = variant_count;
-    if (variant_count > 0) {
-        d->unio.variants = arena_alloc(p->arena, sizeof(UnionVariant) * (size_t)variant_count);
-        memcpy(d->unio.variants, variants, sizeof(UnionVariant) * (size_t)variant_count);
-        free(variants);
-    }
+    d->unio.variants = arena_dup(p->arena, variants, variant_count, sizeof(UnionVariant));
+    free(variants);
     d->unio.static_assert_count = sassert_count;
-    if (sassert_count > 0) {
-        d->unio.static_asserts = arena_alloc(p->arena, sizeof(StaticAssert) * (size_t)sassert_count);
-        memcpy(d->unio.static_asserts, sasserts, sizeof(StaticAssert) * (size_t)sassert_count);
-        free(sasserts);
-    }
+    d->unio.static_asserts = arena_dup(p->arena, sasserts, sassert_count, sizeof(StaticAssert));
+    free(sasserts);
     return d;
 }
 
@@ -3846,8 +3615,7 @@ static Decl *parse_union_decl(Parser *p) {
  * values (repr fit, duplicates, mandatory zero variant). */
 static Decl *parse_enum_decl(Parser *p) {
     int errs0 = diag_error_count();
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
+    SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_ENUM);
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
 
@@ -3874,7 +3642,7 @@ static Decl *parse_enum_decl(Parser *p) {
 
     expect(p, TOK_EQ);
     if (!decl_body_present(p, "enum", name, "variant", loc, errs0))
-        return decl_error_node(p, loc);
+        return alloc_decl_error(p, loc);
     expect(p, TOK_INDENT);
 
     EnumVariant *variants = NULL;
@@ -3888,11 +3656,10 @@ static Decl *parse_enum_decl(Parser *p) {
         expect(p, TOK_PIPE);
         Token *vtok = expect(p, TOK_IDENT);
         const char *vname = tok_intern(p, vtok);
-        SrcLoc vloc = loc_from_token(vtok);
-        vloc.filename = p->filename;
+        SrcLoc vloc = tok_loc(p, vtok);
         if (check(p, TOK_LPAREN)) {
             diag_error(loc_from_token(current(p)),
-                "enum variants carry no payload — use a union for variants with data");
+                "enum variants carry no payload; use a union for variants with data");
             /* Consume the (type) so recovery doesn't cascade a second error. */
             advance_p(p);
             parse_type(p);
@@ -3912,7 +3679,7 @@ static Decl *parse_enum_decl(Parser *p) {
                 for (int i = 0; i < nt->length; i++) {
                     if (nt->start[i] == 'i' || nt->start[i] == 'u') {
                         diag_error(loc_from_token(nt),
-                            "enum values take no type suffix — the enum declares its repr");
+                            "enum values take no type suffix; the enum declares its repr");
                         break;
                     }
                 }
@@ -3934,11 +3701,8 @@ static Decl *parse_enum_decl(Parser *p) {
     d->enu.name = name;
     d->enu.repr = repr;
     d->enu.variant_count = variant_count;
-    if (variant_count > 0) {
-        d->enu.variants = arena_alloc(p->arena, sizeof(EnumVariant) * (size_t)variant_count);
-        memcpy(d->enu.variants, variants, sizeof(EnumVariant) * (size_t)variant_count);
-        free(variants);
-    }
+    d->enu.variants = arena_dup(p->arena, variants, variant_count, sizeof(EnumVariant));
+    free(variants);
     return d;
 }
 
@@ -3948,22 +3712,21 @@ static Decl *parse_enum_decl(Parser *p) {
  *
  * Error-group declaration. Desugared here to a DECL_MODULE flagged
  * is_error_group whose members are synthesized immutable i32-const lets, so
- * the whole pipeline (pass1 registration, imports, member access, privacy,
- * LSP hover/completion/go-to-def, codegen) rides the module machinery
- * unchanged. Each member's init is an EXPR_INT_LIT placeholder whose value
- * pass1 assigns deterministically (sorted fully-qualified names, numbered
- * from 65536) once the whole program has been collected. */
+ * pass1 registration, imports, member access, privacy, the LSP features and
+ * codegen all reuse the module machinery. Each member's init is an
+ * EXPR_INT_LIT placeholder whose value pass1 assigns once the whole program
+ * has been collected (sorted fully-qualified names, numbered from
+ * FC_ERROR_CODE_BASE). */
 static Decl *parse_error_decl(Parser *p) {
     int errs0 = diag_error_count();
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
+    SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_ERROR_KW);
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
     expect(p, TOK_EQ);
 
     /* Expect INDENT then | member lines (union-style layout, no payloads) */
     if (!decl_body_present(p, "error group", name, "member", loc, errs0))
-        return decl_error_node(p, loc);
+        return alloc_decl_error(p, loc);
     expect(p, TOK_INDENT);
 
     Decl **members = NULL;
@@ -3977,11 +3740,10 @@ static Decl *parse_error_decl(Parser *p) {
         expect(p, TOK_PIPE);
         Token *mtok = expect(p, TOK_IDENT);
         const char *mname = tok_intern(p, mtok);
-        SrcLoc mloc = loc_from_token(mtok);
-        mloc.filename = p->filename;
+        SrcLoc mloc = tok_loc(p, mtok);
         if (check(p, TOK_LPAREN)) {
             diag_error(loc_from_token(current(p)),
-                "error members carry no payload — the assigned code itself is the value");
+                "error members carry no payload; the assigned code itself is the value");
         }
 
         Expr *init = alloc_expr(p, EXPR_INT_LIT, mloc);
@@ -4005,24 +3767,20 @@ static Decl *parse_error_decl(Parser *p) {
     d->module.name = name;
     d->module.is_error_group = true;
     d->module.decl_count = count;
-    if (count > 0) {
-        d->module.decls = arena_alloc(p->arena, sizeof(Decl*) * (size_t)count);
-        memcpy(d->module.decls, members, sizeof(Decl*) * (size_t)count);
-        free(members);
-    }
+    d->module.decls = arena_dup(p->arena, members, count, sizeof(Decl*));
+    free(members);
     return d;
 }
 
 static Decl *parse_module_decl(Parser *p) {
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
+    SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_MODULE);
     const char *name = tok_intern(p, expect(p, TOK_IDENT));
 
-    /* Optional from "lib" clause. `expect` is non-fatal (error recovery):
-     * on a mismatch it reports and returns the offending token WITHOUT
-     * consuming, so gate the quote-stripping slice on the token kind —
-     * slicing a 1-char token by length-2 underflows the intern length. */
+    /* Optional from "lib" clause. On a mismatch `expect` returns the
+     * offending token unconsumed, so strip quotes only from a real string
+     * token: slicing a 1-char token by length-2 would underflow the intern
+     * length. */
     const char *from_lib = NULL;
     if (check(p, TOK_FROM)) {
         advance_p(p);
@@ -4051,24 +3809,15 @@ static Decl *parse_module_decl(Parser *p) {
     /* Parse body: INDENT { decl } DEDENT */
     expect(p, TOK_INDENT);
 
-    Decl **decls = NULL;
-    int count = 0, cap = 0;
-
+    DeclList members = {0};
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
         int guard = p->pos;
-        Decl *child = parse_decl(p);
-        if (child->kind == DECL_ERROR) {
+        if (parse_decl(p, &members)->kind == DECL_ERROR) {
             /* Sync to the next module-member declaration; recover_to stops at the
                module's DEDENT, so recovery cannot escape this module body. */
             recover_to(p, DECL_START, (int)(sizeof DECL_START / sizeof *DECL_START));
-        } else {
-            DA_APPEND(decls, count, cap, child);
-            /* Drain any pending decls from multi-symbol imports */
-            while (p->pending_count > 0) {
-                DA_APPEND(decls, count, cap, p->pending_decls[--p->pending_count]);
-            }
         }
         recover_progress(p, guard);
         skip_newlines(p);
@@ -4084,22 +3833,9 @@ static Decl *parse_module_decl(Parser *p) {
     d->module.from_lib = from_lib;
     d->module.define_macro = define_macro;
     d->module.define_value = define_value;
-    d->module.decl_count = count;
-    if (count > 0) {
-        d->module.decls = arena_alloc(p->arena, sizeof(Decl*) * (size_t)count);
-        memcpy(d->module.decls, decls, sizeof(Decl*) * (size_t)count);
-        free(decls);
-    } else {
-        d->module.decls = NULL;
-    }
+    d->module.decl_count = members.count;
+    d->module.decls = decl_list_finish(p, &members);
     return d;
-}
-
-/* Source location of a token, tagged with the file being parsed. */
-static SrcLoc tok_loc(Parser *p, const Token *t) {
-    SrcLoc l = loc_from_token(t);
-    l.filename = p->filename;
-    return l;
 }
 
 /* What a `from` clause names: an optional namespace, the head module, and the
@@ -4125,20 +3861,17 @@ static void parse_from_route(Parser *p, FromClause *fc) {
         ImportRouteSeg seg = { tok_intern(p, t), tok_loc(p, t), NULL };
         DA_APPEND(segs, count, cap, seg);
     }
-    if (count > 0) {
-        fc->route = arena_alloc(p->arena, (size_t)count * sizeof(ImportRouteSeg));
-        memcpy(fc->route, segs, (size_t)count * sizeof(ImportRouteSeg));
-        fc->route_count = count;
-    }
+    fc->route = arena_dup(p->arena, segs, count, sizeof *segs);
+    fc->route_count = count;
     free(segs);
 }
 
 /* Parse a from clause: from [namespace::path::]module[.module...] */
 static void parse_from_clause(Parser *p, FromClause *fc) {
     /* Parse IDENT [:: IDENT [:: ...]]
-     * If path ends with ::, last part is namespace; the head is the next IDENT
-     * (or NULL for a bare ns). If the path does NOT end with ::, the last IDENT
-     * is the head module. Either way a `.` route may follow the head. */
+     * The IDENT that is not followed by :: is the head module and everything
+     * before it the namespace; a path ending in :: is a bare namespace (no
+     * head). A `.` route may follow the head. */
     memset(fc, 0, sizeof *fc);
     Token *first_tok = expect(p, TOK_IDENT);
     const char *first = tok_intern(p, first_tok);
@@ -4160,15 +3893,16 @@ static void parse_from_clause(Parser *p, FromClause *fc) {
             Token *part_tok = expect(p, TOK_IDENT);
             const char *part = tok_intern(p, part_tok);
             if (!check(p, TOK_COLONCOLON)) {
-                /* This IDENT is NOT followed by ::, so it's the head module */
+                /* This IDENT is not followed by ::, so it's the head module */
                 fc->ns = ns;
                 fc->mod = part;
                 fc->mod_loc = tok_loc(p, part_tok);
                 parse_from_route(p, fc);
                 return;
             }
-            /* More :: follows — this is still namespace.
-             * Use __ to separate segments so foo::bar != foo_bar. */
+            /* More :: follows, so this is still namespace. Segments are
+             * joined with __ (which no identifier contains), so foo::bar
+             * and foo_bar stay distinct. */
             ns = intern_sprintf(p->intern, "%s__%s", ns, part);
         } else {
             /* Bare namespace ending: from acme:: or from acme::graphics:: */
@@ -4177,13 +3911,13 @@ static void parse_from_clause(Parser *p, FromClause *fc) {
         }
     }
 
-    /* Shouldn't reach here, but just in case */
+    /* Not reached: every path through the loop returns */
     fc->ns = ns;
 }
 
 /* The optional `as ALIAS` tail of an import item. Returns NULL (leaving
- * *out_loc zeroed) when there is no alias. Both forms that name a single
- * imported thing share this — a lone `name` and a comma-list item. */
+ * *out_loc zeroed) when there is no alias. Shared by both forms that name a
+ * single imported thing: a lone `name` and a comma-list item. */
 static const char *parse_import_alias(Parser *p, SrcLoc *out_loc) {
     memset(out_loc, 0, sizeof *out_loc);
     if (!check(p, TOK_AS)) return NULL;
@@ -4193,17 +3927,17 @@ static const char *parse_import_alias(Parser *p, SrcLoc *out_loc) {
     return tok_intern(p, t);
 }
 
-/* An import statement is `import <names> from [<ns>::]<route>`: it always has a
- * `from`, and only its right side is a path. The right side is a route to one
- * module, so its segments are dotted like the same navigation in expression
- * position; the left side is the list of names being bound, where a dot would
- * give each item in the list a different source and put routing where a binding
- * name belongs. `import a.b` is therefore an error — it names the module `a`'s
- * member `b` on the side that binds names, and means `import b from a`.
+/* An import statement is `import <names> from [<ns>::]<route>`: it always has
+ * a `from`, and only its right side is a path. The right side is a route to
+ * one module, dotted like the same navigation in expression position; the
+ * left side lists the names being bound, where a dot would give each item a
+ * different source and put routing where a binding name belongs. So
+ * `import a.b` is an error: it names module `a`'s member `b` on the side that
+ * binds names, and means `import b from a`.
  *
- * The rejection consumes the whole statement — the dotted run, an `as` alias,
- * and any `from` clause — so a malformed left side yields exactly one
- * diagnostic rather than one per segment plus a cascade from the tail. */
+ * The rejection consumes the whole statement (the dotted run, an `as` alias
+ * and any `from` clause), so a malformed left side yields one diagnostic
+ * rather than one per segment plus a cascade from the tail. */
 static void reject_dotted_import(Parser *p, SrcLoc loc, const char *head) {
     const char *first = NULL;
     int dots = 0;
@@ -4222,8 +3956,8 @@ static void reject_dotted_import(Parser *p, SrcLoc loc, const char *head) {
         parse_from_clause(p, &fc);
     }
     /* `import a.b` has one unambiguous rewrite, so quote it. With a `from`
-     * already present the fix is to extend *its* route, and the head written
-     * here need not be reachable on its own — so name the rule instead of
+     * already present the fix is to extend that route, and the head written
+     * here need not be reachable on its own, so name the rule instead of
      * inventing a path that may not resolve. */
     if (dots == 1 && !had_from) {
         diag_error(loc, "'.' is not allowed on the left of 'from'; "
@@ -4234,9 +3968,31 @@ static void reject_dotted_import(Parser *p, SrcLoc loc, const char *head) {
     }
 }
 
-static Decl *parse_import_decl(Parser *p) {
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
+/* One DECL_IMPORT. `name` is NULL for `import *`. */
+static Decl *import_decl(Parser *p, SrcLoc loc, const char *name, SrcLoc name_loc,
+                         const char *alias, SrcLoc alias_loc, const FromClause *fc) {
+    Decl *d = arena_alloc(p->arena, sizeof(Decl));
+    d->kind = DECL_IMPORT;
+    d->loc = loc;
+    d->import.name = name;
+    d->import.alias = alias;
+    d->import.from_module = fc->mod;
+    d->import.from_namespace = fc->ns;
+    d->import.is_wildcard = name == NULL;
+    d->import.name_loc = name_loc;
+    d->import.alias_loc = alias_loc;
+    d->import.module_loc = fc->mod_loc;
+    d->import.route = fc->route;
+    d->import.route_count = fc->route_count;
+    return d;
+}
+
+/* An import statement. A comma list (`import a, b as c from m`) declares one
+ * DECL_IMPORT per name, in order, all sharing the one `from` clause: pass1
+ * resolves the shared route the same way for each. */
+static Decl *parse_import_decl(Parser *p, DeclList *out) {
+    SrcLoc loc = tok_loc(p, current(p));
+    const SrcLoc none = {0};
     expect(p, TOK_IMPORT);
 
     /* import * from [ns::]MODULE[.MODULE...] */
@@ -4245,26 +4001,13 @@ static Decl *parse_import_decl(Parser *p) {
         expect(p, TOK_FROM);
         FromClause fc;
         parse_from_clause(p, &fc);
-        Decl *d = arena_alloc(p->arena, sizeof(Decl));
-        d->kind = DECL_IMPORT;
-        d->loc = loc;
-        d->is_private = false;
-        d->import.name = NULL;
-        d->import.alias = NULL;
-        d->import.from_module = fc.mod;
-        d->import.from_namespace = fc.ns;
-        d->import.is_wildcard = true;
-        d->import.module_loc = fc.mod_loc;
-        d->import.route = fc.route;
-        d->import.route_count = fc.route_count;
-        return d;
+        return decl_list_add(out, import_decl(p, loc, NULL, none, NULL, none, &fc));
     }
 
     /* Parse first name [as alias] */
     Token *name_tok = expect(p, TOK_IDENT);
     const char *name = tok_intern(p, name_tok);
     SrcLoc name_loc = tok_loc(p, name_tok);
-    const char *alias = NULL;
     SrcLoc alias_loc = {0};
 
     if (check(p, TOK_DOT)) {
@@ -4272,104 +4015,46 @@ static Decl *parse_import_decl(Parser *p) {
         parse_import_alias(p, &alias_loc); /* swallow a trailing `as A` too */
         return alloc_decl_error(p, loc);
     }
+    const char *alias = parse_import_alias(p, &alias_loc);
 
-    alias = parse_import_alias(p, &alias_loc);
-
-    /* Check for multi-symbol import: name1 [as a1], name2 [as a2], ... from mod */
-    if (check(p, TOK_COMMA)) {
-        /* Collect all name/alias pairs */
-        typedef struct { const char *n; const char *a; SrcLoc nl, al; } ImportItem;
-        ImportItem *items = NULL;
-        int item_count = 0, item_cap = 0;
-
-        ImportItem first = { name, alias, name_loc, alias_loc };
-        DA_APPEND(items, item_count, item_cap, first);
-
-        while (check(p, TOK_COMMA)) {
+    if (!check(p, TOK_COMMA)) {
+        /* Single import with optional from clause */
+        FromClause fc = {0};
+        if (check(p, TOK_FROM)) {
             advance_p(p);
-            Token *n_tok = expect(p, TOK_IDENT);
-            const char *n = tok_intern(p, n_tok);
-            SrcLoc al;
-            const char *a = parse_import_alias(p, &al);
-            ImportItem it = { n, a, tok_loc(p, n_tok), al };
-            DA_APPEND(items, item_count, item_cap, it);
+            parse_from_clause(p, &fc);
         }
-
-        expect(p, TOK_FROM);
-        FromClause fc;
-        parse_from_clause(p, &fc);
-
-        /* Create import decl for item 0 (returned), push rest to pending.
-         * Each item keeps its own name/alias token locs; they share the one
-         * `from` clause, so every decl carries the same module_loc and route.
-         * The route array is shared, not copied: pass1 stamps each segment's
-         * symbol with the same resolution for every item, so one walk's result
-         * is what all of them would independently produce. */
-        for (int i = 1; i < item_count; i++) {
-            Decl *extra = arena_alloc(p->arena, sizeof(Decl));
-            extra->kind = DECL_IMPORT;
-            extra->loc = loc;
-            extra->is_private = false;
-            extra->import.name = items[i].n;
-            extra->import.alias = items[i].a;
-            extra->import.from_module = fc.mod;
-            extra->import.from_namespace = fc.ns;
-            extra->import.is_wildcard = false;
-            extra->import.name_loc = items[i].nl;
-            extra->import.alias_loc = items[i].al;
-            extra->import.module_loc = fc.mod_loc;
-            extra->import.route = fc.route;
-            extra->import.route_count = fc.route_count;
-            DA_APPEND(p->pending_decls, p->pending_count, p->pending_cap, extra);
-        }
-
-        Decl *d = arena_alloc(p->arena, sizeof(Decl));
-        d->kind = DECL_IMPORT;
-        d->loc = loc;
-        d->is_private = false;
-        d->import.name = items[0].n;
-        d->import.alias = items[0].a;
-        d->import.from_module = fc.mod;
-        d->import.from_namespace = fc.ns;
-        d->import.is_wildcard = false;
-        d->import.name_loc = items[0].nl;
-        d->import.alias_loc = items[0].al;
-        d->import.module_loc = fc.mod_loc;
-        d->import.route = fc.route;
-        d->import.route_count = fc.route_count;
-        free(items);
-        return d;
+        return decl_list_add(out, import_decl(p, loc, name, name_loc, alias, alias_loc, &fc));
     }
 
-    /* Single import with optional from clause */
-    FromClause fc;
-    memset(&fc, 0, sizeof fc);
-
-    if (check(p, TOK_FROM)) {
+    /* name1 [as a1], name2 [as a2], ... from mod */
+    typedef struct { const char *n; const char *a; SrcLoc nl, al; } ImportItem;
+    ImportItem *items = NULL;
+    int item_count = 0, item_cap = 0;
+    ImportItem first = { name, alias, name_loc, alias_loc };
+    DA_APPEND(items, item_count, item_cap, first);
+    while (check(p, TOK_COMMA)) {
         advance_p(p);
-        parse_from_clause(p, &fc);
+        Token *n_tok = expect(p, TOK_IDENT);
+        ImportItem it = { tok_intern(p, n_tok), NULL, tok_loc(p, n_tok), {0} };
+        it.a = parse_import_alias(p, &it.al);
+        DA_APPEND(items, item_count, item_cap, it);
     }
-
-    Decl *d = arena_alloc(p->arena, sizeof(Decl));
-    d->kind = DECL_IMPORT;
-    d->loc = loc;
-    d->is_private = false;
-    d->import.name = name;
-    d->import.alias = alias;
-    d->import.from_module = fc.mod;
-    d->import.from_namespace = fc.ns;
-    d->import.is_wildcard = false;
-    d->import.name_loc = name_loc;
-    d->import.alias_loc = alias_loc;
-    d->import.module_loc = fc.mod_loc;
-    d->import.route = fc.route;
-    d->import.route_count = fc.route_count;
-    return d;
+    expect(p, TOK_FROM);
+    FromClause fc;
+    parse_from_clause(p, &fc);
+    Decl *head = NULL;
+    for (int i = 0; i < item_count; i++) {
+        Decl *d = decl_list_add(out, import_decl(p, loc, items[i].n, items[i].nl,
+                                                 items[i].a, items[i].al, &fc));
+        if (!head) head = d;
+    }
+    free(items);
+    return head;
 }
 
 static Decl *parse_namespace_decl(Parser *p) {
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
+    SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_NAMESPACE);
 
     /* namespace IDENT :: [IDENT ::] ... */
@@ -4393,13 +4078,12 @@ static Decl *parse_namespace_decl(Parser *p) {
 
 /* Parse the error-protocol tail of an extern declaration: `from <protocol>`.
  * The sentinel tokens (-1 / null / 0) are protocol-local syntax, not
- * expressions — `null` in particular exists only here and does not introduce
- * a null literal to the language. Returns EXT_PROTO_ERROR after reporting a
- * malformed clause so pass1 skips the agreement checks (no cascade). */
+ * expressions; `null` exists only here and is not a null literal in the
+ * language. Returns EXT_PROTO_ERROR after reporting a malformed clause, so
+ * pass1 skips the agreement checks (no cascade). */
 static ExternProtocol parse_extern_protocol(Parser *p) {
     Token *t = current(p);
-    SrcLoc loc = loc_from_token(t);
-    loc.filename = p->filename;
+    SrcLoc loc = tok_loc(p, t);
     if (t->kind != TOK_IDENT) {
         diag_error(loc, "expected error protocol name after 'from' "
             "(errno(-1), errno(null), status, neg_errno, hresult, "
@@ -4479,26 +4163,24 @@ static ExternProtocol parse_extern_protocol(Parser *p) {
 /* Reject an extern C name under `fc__`, the reserved root every FC
  * declaration's emitted name lives under (mangle_root, pass1.c). Nothing a
  * header can legitimately export starts with `fc__`, so such an extern could
- * only alias a compiler-emitted symbol — and for names that exist only after
- * monomorphization (`fc__pair__3_i32`), it would do so *silently*, past the
- * end-of-pass1 collision backstop. The ban closes that door outright; the
- * backstop still covers extern-vs-declaration as defense in depth. Returns
- * true when it reported. */
+ * only alias a compiler-emitted symbol. For names that exist only after
+ * monomorphization (`fc__pair__3_i32`) it would do so silently, since
+ * pass1's check_c_name_collisions never sees them. Returns true when it
+ * reported. */
 static bool extern_c_name_in_reserved_root(SrcLoc loc, const char *c_name) {
     if (!is_mangled_root_name(c_name)) return false;
     diag_error(loc, "extern C name '%s' starts with 'fc__', the reserved root "
-        "every FC declaration is emitted under — it could only alias a "
+        "every FC declaration is emitted under, so it could only alias a "
         "compiler-emitted symbol; refer to the FC declaration directly instead",
         c_name);
     return true;
 }
 
 static Decl *parse_extern_decl(Parser *p) {
-    SrcLoc loc = loc_from_token(current(p));
-    loc.filename = p->filename;
+    SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_EXTERN);
 
-    /* extern struct/union — C struct or union layout import */
+    /* extern struct/union: C struct or union layout import */
     bool is_c_union = check(p, TOK_UNION);
     if (check(p, TOK_STRUCT) || is_c_union) {
         advance_p(p);
@@ -4520,45 +4202,14 @@ static Decl *parse_extern_decl(Parser *p) {
         }
         expect(p, TOK_EQ);
         expect(p, TOK_INDENT);
-        StructField *fields = NULL;
-        int field_count = 0, field_cap = 0;
-        while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
-            skip_newlines(p);
-            if (check(p, TOK_DEDENT)) break;
-            int guard = p->pos;
-            Token *ftok = expect(p, TOK_IDENT);
-            const char *fname = tok_intern(p, ftok);
-            SrcLoc floc = loc_from_token(ftok);
-            floc.filename = p->filename;
-            expect(p, TOK_COLON);
-            p->allow_fixed_array = true;
-            Type *ftype = parse_type(p);
-            p->allow_fixed_array = false;
-            StructField f = { .name = fname, .type = ftype, .loc = floc };
-            DA_APPEND(fields, field_count, field_cap, f);
-            recover_progress(p, guard);  /* a fully malformed field line consumes nothing */
-            skip_newlines(p);
-        }
-        expect(p, TOK_DEDENT);
         Decl *d = arena_alloc(p->arena, sizeof(Decl));
         d->kind = DECL_STRUCT;
         d->loc = loc;
-        d->is_private = false;
         d->struc.name = fc_name;
         d->struc.c_name = c_name;
         d->struc.is_extern = true;
         d->struc.is_c_union = is_c_union;
-        d->struc.is_generic = false;
-        d->struc.type_params = NULL;
-        d->struc.type_param_count = 0;
-        d->struc.field_count = field_count;
-        if (field_count > 0) {
-            d->struc.fields = arena_alloc(p->arena, sizeof(StructField) * (size_t)field_count);
-            memcpy(d->struc.fields, fields, sizeof(StructField) * (size_t)field_count);
-            free(fields);
-        } else {
-            d->struc.fields = NULL;
-        }
+        parse_struct_body(p, d, false);
         return d;
     }
 
@@ -4580,16 +4231,16 @@ static Decl *parse_extern_decl(Parser *p) {
             "unreferenceable; give it an alias: `extern %s as <name>: ...`", name, name);
     }
     /* A C name containing '__' (implementation-reserved namespace, e.g.
-     * __errno_location) is emitted verbatim, but the FC-visible name must stay
-     * clean of the mangling separator — require an alias. */
+     * __errno_location) is emitted verbatim, but the FC-visible name must not
+     * contain the mangling separator, so require an alias. */
     if (!in_reserved_root && !alias && strstr(name, "__") != NULL) {
         diag_error(loc, "extern C name '%s' contains '__', which is reserved in FC "
             "names; give it an alias: `extern %s as <name>: ...`", name, name);
     }
     expect(p, TOK_COLON);
     Type *type = parse_type(p);
-    /* Optional error-protocol tail — required (checked in pass1) exactly when
-     * the declared return type is a result. */
+    /* Optional error-protocol tail, required (checked in pass1) if and only
+     * if the declared return type is a result. */
     ExternProtocol proto = EXT_PROTO_NONE;
     if (check(p, TOK_FROM)) {
         advance_p(p);
@@ -4606,43 +4257,47 @@ static Decl *parse_extern_decl(Parser *p) {
     return d;
 }
 
-static Decl *parse_decl(Parser *p) {
+/* Parse one declaration and append what it declares to `out`; a comma-list
+ * import appends several. Returns the first appended, or a DECL_ERROR node
+ * (not appended) after a syntax error. */
+static Decl *parse_decl(Parser *p, DeclList *out) {
     skip_newlines(p);
 
     /* private modifier */
     if (check(p, TOK_PRIVATE)) {
         advance_p(p);
-        Decl *d = parse_decl(p);
-        d->is_private = true;
+        int first = out->count;
+        Decl *d = parse_decl(p, out);
+        for (int i = first; i < out->count; i++) out->items[i]->is_private = true;
         return d;
     }
 
-    if (check(p, TOK_LET)) return parse_let_decl(p);
-    if (check(p, TOK_STRUCT)) return parse_struct_decl(p);
-    if (check(p, TOK_UNION)) return parse_union_decl(p);
-    if (check(p, TOK_ENUM)) return parse_enum_decl(p);
-    if (check(p, TOK_ERROR_KW)) return parse_error_decl(p);
-    if (check(p, TOK_MODULE)) return parse_module_decl(p);
-    if (check(p, TOK_IMPORT)) return parse_import_decl(p);
-    if (check(p, TOK_NAMESPACE)) return parse_namespace_decl(p);
-    if (check(p, TOK_EXTERN)) return parse_extern_decl(p);
+    if (check(p, TOK_LET)) return add_parsed(out, parse_let_decl(p));
+    if (check(p, TOK_STRUCT)) return add_parsed(out, parse_struct_decl(p));
+    if (check(p, TOK_UNION)) return add_parsed(out, parse_union_decl(p));
+    if (check(p, TOK_ENUM)) return add_parsed(out, parse_enum_decl(p));
+    if (check(p, TOK_ERROR_KW)) return add_parsed(out, parse_error_decl(p));
+    if (check(p, TOK_MODULE)) return add_parsed(out, parse_module_decl(p));
+    if (check(p, TOK_IMPORT)) return parse_import_decl(p, out);
+    if (check(p, TOK_NAMESPACE)) return add_parsed(out, parse_namespace_decl(p));
+    if (check(p, TOK_EXTERN)) return add_parsed(out, parse_extern_decl(p));
 
     SrcLoc loc = loc_from_token(current(p));
     diag_error(loc, "expected declaration, got %s",
         token_kind_name(current(p)->kind));
-    /* No leaf-bump here: the parse_program / parse_module_decl loop recovers to the
-       next DECL_START anchor (and runs the watchdog) — keeps any stray block intact. */
+    /* No leaf-bump here: the parse_program / parse_module_decl loop recovers to
+       the next DECL_START anchor (and runs the watchdog), which keeps any stray
+       block intact. */
     return alloc_decl_error(p, loc);
 }
 
-Program *parse_program(Parser *p) {
-    Decl **decls = NULL;
-    int count = 0, cap = 0;
+static Program *parse_program(Parser *p) {
+    DeclList decls = {0};
     bool seen_non_ns = false;
     skip_newlines(p);
     while (!at_end_p(p)) {
         int guard = p->pos;
-        Decl *d = parse_decl(p);
+        Decl *d = parse_decl(p, &decls);
         if (d->kind == DECL_ERROR) {
             /* Sync to the next top-level declaration so one malformed line doesn't
                swallow the rest of the file. The error node is not appended (later
@@ -4653,11 +4308,6 @@ Program *parse_program(Parser *p) {
                 diag_error(d->loc, "namespace declaration must be the first line of the file");
             }
             if (d->kind != DECL_NAMESPACE) seen_non_ns = true;
-            DA_APPEND(decls, count, cap, d);
-            /* Drain any pending decls from multi-symbol imports */
-            while (p->pending_count > 0) {
-                DA_APPEND(decls, count, cap, p->pending_decls[--p->pending_count]);
-            }
         }
         /* Watchdog: this loop ends only at EOF, so force progress unconditionally
            (a stray DEDENT here is not a terminator). */
@@ -4665,17 +4315,24 @@ Program *parse_program(Parser *p) {
         skip_newlines(p);
     }
     Program *prog = arena_alloc(p->arena, sizeof(Program));
-    if (count > 0) {
-        prog->decls = arena_alloc(p->arena, sizeof(Decl*) * (size_t)count);
-        memcpy(prog->decls, decls, sizeof(Decl*) * (size_t)count);
-    }
-    prog->decl_count = count;
-    free(decls);
-    /* The pending queue is drained as it is filled, but its backing array
-     * outlives every drain — freeing it here is what keeps a comma-list import
-     * from costing the long-running server one allocation per analysis. */
-    free(p->pending_decls);
-    p->pending_decls = NULL;
-    p->pending_count = p->pending_cap = 0;
+    prog->decl_count = decls.count;
+    prog->decls = decl_list_finish(p, &decls);
     return prog;
+}
+
+Program *parse_file(Token *tokens, int count, const char *filename,
+                    const char **generic_names, int generic_name_count,
+                    Arena *arena, InternTable *intern) {
+    diag_set_filename(filename);
+    Parser p = {
+        .tokens = tokens,
+        .token_count = count,
+        .arena = arena,
+        .intern = intern,
+        .filename = filename,
+        .half_gt_pos = -1,
+        .generic_names = generic_names,
+        .generic_name_count = generic_name_count,
+    };
+    return parse_program(&p);
 }

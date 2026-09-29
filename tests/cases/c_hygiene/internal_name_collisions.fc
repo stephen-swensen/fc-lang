@@ -1,12 +1,9 @@
-// BUG (bugsearch 2026-07-18): params, for-vars, and match bindings are
-// emitted with their source spelling and collide with codegen-internal
-// temporaries. Worst shapes are SILENT: a param named _sg0_0 used in
-// interpolation emits `int32_t _sg0_0 = _sg0_0;` (self-init, C11 6.2.1p7 —
-// compiles clean under -Wall -Werror, formats garbage); a binding named
-// _match1 shadows the match result var (result stays uninitialized). Others
-// are invalid C: `for _fe0 in 0..n` emits a self-compared loop bound;
-// binding _subj0 collides with the subject temp. Locals get unique
-// _l_name_N names — params/for-vars/pattern bindings don't.
+// A parameter, for-loop variable or match binding named like a codegen
+// temporary (`_sg0_0`, `_fe0`, `_subj0`) does not collide with it.
+// Regression: these binding forms used to be emitted with their source
+// spelling, so the parameter _sg0_0 used in interpolation emitted the
+// self-initializing `int32_t _sg0_0 = _sg0_0;` (clean under -Werror, formats
+// garbage), and the other two produced invalid C.
 let f = (_sg0_0: i32) ->
     let s = "v=%d{_sg0_0}"
     if s == "v=42" then 1 else 0

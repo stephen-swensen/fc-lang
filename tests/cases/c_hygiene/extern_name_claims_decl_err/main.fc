@@ -1,8 +1,7 @@
-// An extern C name is emitted verbatim, so before the reserved-root ban this
-// extern and module member `m.counter` silently referred to one C object (the
-// original §5 silent-merge, through the extern door). Now the parser rejects
-// any extern C name under `fc__` outright — nothing a header can legitimately
-// export lives there.
+// An extern C name is emitted verbatim, so without the reserved-root ban this
+// extern and module member `m.counter` would silently name one C object. The
+// parser rejects any extern C name starting with `fc__`; nothing a header can
+// legitimately export lives there.
 module libc from "stdlib.h" =
     extern fc__m__counter as ext_counter: i32
 

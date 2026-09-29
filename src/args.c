@@ -23,16 +23,6 @@
 
 /* ---- small helpers ---- */
 
-/* malloc'd formatted message (caller frees). */
-#define msgf str_sprintf
-
-static char *dupn(const char *s, int n) {
-    char *r = malloc((size_t)n + 1);
-    memcpy(r, s, (size_t)n);
-    r[n] = '\0';
-    return r;
-}
-
 static bool path_is_abs(const char *p) {
     return p[0] == '/';
 }
@@ -41,9 +31,9 @@ static bool path_is_abs(const char *p) {
  * "." when there is no '/', "/" for a root-level path like "/foo". */
 static char *path_dir(const char *path) {
     const char *slash = strrchr(path, '/');
-    if (!slash) return dupn(".", 1);
-    if (slash == path) return dupn("/", 1);
-    return dupn(path, (int)(slash - path));
+    if (!slash) return str_dup(".");
+    if (slash == path) return str_dup("/");
+    return str_ndup(path, (size_t)(slash - path));
 }
 
 /* "dir/rel", malloc'd. */
@@ -55,20 +45,6 @@ static char *path_join(const char *dir, const char *rel) {
     memcpy(p + dn + 1, rel, rn);
     p[dn + 1 + rn] = '\0';
     return p;
-}
-
-static char *read_file_or_null(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (size < 0) { fclose(f); return NULL; }
-    char *buf = malloc((size_t)size + 1);
-    size_t rd = fread(buf, 1, (size_t)size, f);
-    buf[rd] = '\0';
-    fclose(f);
-    return buf;
 }
 
 /* ---- expansion ---- */
@@ -92,27 +68,27 @@ typedef struct { char **v; int n, cap; } PathStack;
 static bool expand_file(ExpandedArgs *out, const char *rsp_path,
                         PathStack *stack, int depth, char **err) {
     if (depth > ARGS_MAX_DEPTH) {
-        *err = msgf("response files nested too deeply at '%s'", rsp_path);
+        *err = str_sprintf("response files nested too deeply at '%s'", rsp_path);
         return false;
     }
 
     /* Cycle detection: a file that is already on the active stack would loop. */
     char *canon = platform_realpath(rsp_path);
     if (!canon) {
-        *err = msgf("cannot open response file '%s'", rsp_path);
+        *err = str_sprintf("cannot open response file '%s'", rsp_path);
         return false;
     }
     for (int i = 0; i < stack->n; i++) {
         if (strcmp(stack->v[i], canon) == 0) {
-            *err = msgf("recursive response file '%s'", rsp_path);
+            *err = str_sprintf("recursive response file '%s'", rsp_path);
             free(canon);
             return false;
         }
     }
 
-    char *buf = read_file_or_null(rsp_path);
+    char *buf = read_file(rsp_path, NULL);
     if (!buf) {
-        *err = msgf("cannot open response file '%s'", rsp_path);
+        *err = str_sprintf("cannot open response file '%s'", rsp_path);
         free(canon);
         return false;
     }
@@ -133,14 +109,14 @@ static bool expand_file(ExpandedArgs *out, const char *rsp_path,
         int len = (int)(p - s);
 
         if (s[0] == '@' && len > 1) {                      /* nested rsp */
-            char *child = dupn(s + 1, len - 1);
+            char *child = str_ndup(s + 1, (size_t)(len - 1));
             char *cpath = path_is_abs(child) ? child : path_join(srcdir, child);
             if (cpath != child) free(child);
             ok = expand_file(out, cpath, stack, depth + 1, err);
             free(cpath);
             if (!ok) break;
         } else {
-            emit(out, dupn(s, len), dupn(srcdir, (int)strlen(srcdir)));
+            emit(out, str_ndup(s, (size_t)len), str_dup(srcdir));
         }
     }
 
@@ -162,7 +138,7 @@ bool args_expand(int argc, char **argv, ExpandedArgs *out, char **err) {
         if (t[0] == '@' && t[1] != '\0') {                 /* top-level rsp: cwd-relative */
             if (!expand_file(out, t + 1, &stack, 0, err)) { ok = false; break; }
         } else {
-            emit(out, dupn(t, (int)strlen(t)), NULL);      /* directly typed: verbatim */
+            emit(out, str_dup(t), NULL);      /* directly typed: verbatim */
         }
     }
 
@@ -189,16 +165,16 @@ void args_expand_free(ExpandedArgs *e) {
  * only the narrow slice it uses: GLOB_NOCHECK expansion of a forward-slash
  * input pattern into matching paths, with the pattern passed through verbatim
  * when nothing matches (the bash default). We provide a compatible glob_t /
- * glob() / globfree() over the Win32 directory API so the call site below stays
- * byte-for-byte identical across platforms.
+ * glob() / globfree() over the Win32 directory API so the call site below is the
+ * same on every platform.
  *
  * Wildcards are matched by our own wc_match (not Win32's quirky DOS matcher,
  * which folds short names and case) for POSIX-consistent semantics: '*' (any
  * run, never crossing '/'), '?' (one char), and '[...]' classes with ranges and
  * leading '!'/'^' negation. Wildcards may appear in any path component. MSYS
  * mount paths ('/c/...') are not understood by the native Win32 API, so they
- * simply won't match and fall through literally — the same limitation the rest
- * of the native binary already has with such paths. */
+ * won't match and pass through literally, the same limitation the rest of the
+ * native binary has with such paths. */
 #if defined(_WIN32)
 
 typedef struct { size_t gl_pathc; char **gl_pathv; } glob_t;
@@ -254,7 +230,7 @@ typedef struct { char **v; int n, cap; } GlobList;
 
 /* "base/comp", or just "comp" when base is empty (caller frees). */
 static char *glob_join(const char *base, const char *comp) {
-    return base[0] ? path_join(base, comp) : dupn(comp, (int)strlen(comp));
+    return base[0] ? path_join(base, comp) : str_dup(comp);
 }
 
 /* Match `comp[i..n)` under directory `base`, appending full paths to `out`.
@@ -278,7 +254,7 @@ static void glob_walk(const char *base, char **comp, int n, int i, GlobList *out
         return;
     }
 
-    char *spec = base[0] ? path_join(base, "*") : dupn("*", 1);
+    char *spec = base[0] ? path_join(base, "*") : str_dup("*");
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(spec, &fd);
     free(spec);
@@ -313,7 +289,7 @@ static int glob(const char *pattern, int flags, void *errfunc, glob_t *pg) {
     const char *start = pattern;
     for (const char *q = pattern; ; q++) {
         if (*q == '/' || !*q) {
-            comp[k++] = dupn(start, (int)(q - start));
+            comp[k++] = str_ndup(start, (size_t)(q - start));
             start = q + 1;
             if (!*q) break;
         }
@@ -327,7 +303,7 @@ static int glob(const char *pattern, int flags, void *errfunc, glob_t *pg) {
 
     /* GLOB_NOCHECK: nothing matched -> yield the pattern verbatim. */
     if (list.n == 0)
-        DA_APPEND(list.v, list.n, list.cap, dupn(pattern, (int)strlen(pattern)));
+        DA_APPEND(list.v, list.n, list.cap, str_dup(pattern));
 
     pg->gl_pathc = (size_t)list.n;
     pg->gl_pathv = list.v;
@@ -352,20 +328,20 @@ static void globfree(glob_t *pg) {
  * surfaces later as a clear "cannot open" rather than vanishing. */
 static bool add_inputs(CompileArgs *out, const char *tok, const char *dir) {
     if (!dir) {
-        DA_APPEND(out->inputs, out->input_count, out->input_cap, dupn(tok, (int)strlen(tok)));
+        DA_APPEND(out->inputs, out->input_count, out->input_cap, str_dup(tok));
         return true;
     }
-    char *pat = path_is_abs(tok) ? dupn(tok, (int)strlen(tok)) : path_join(dir, tok);
+    char *pat = path_is_abs(tok) ? str_dup(tok) : path_join(dir, tok);
     glob_t g;
     int rc = glob(pat, GLOB_NOCHECK, NULL, &g);
     if (rc != 0) {                                          /* NOSPACE / ABORTED */
-        out->error = msgf("cannot expand input pattern '%s'", pat);
+        out->error = str_sprintf("cannot expand input pattern '%s'", pat);
         free(pat);
         return false;
     }
     for (size_t k = 0; k < g.gl_pathc; k++) {
         const char *m = g.gl_pathv[k];
-        DA_APPEND(out->inputs, out->input_count, out->input_cap, dupn(m, (int)strlen(m)));
+        DA_APPEND(out->inputs, out->input_count, out->input_cap, str_dup(m));
     }
     globfree(&g);
     free(pat);
@@ -376,8 +352,8 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
     memset(out, 0, sizeof *out);
     out->len_repr = 64;
 
-    /* Auto-detect host flags unless suppressed (matches the historical CLI
-     * default); later --flag entries override by name. */
+    /* Auto-detect host flags unless suppressed; later --flag entries override
+     * by name. */
     bool auto_detect = true;
     for (int i = 1; i < e->count; i++)
         if (strcmp(e->tokens[i], "--no-auto-detect") == 0) auto_detect = false;
@@ -393,12 +369,12 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
             const char *vdir = e->dirs[i];
             free(out->output);
             out->output = (vdir && !path_is_abs(val)) ? path_join(vdir, val)
-                                                       : dupn(val, (int)strlen(val));
+                                                       : str_dup(val);
         } else if (strcmp(a, "--no-auto-detect") == 0) {
             /* handled above */
         } else if (strcmp(a, "--len-repr") == 0) {
             if (i + 1 >= e->count) {
-                out->error = msgf("--len-repr requires a value (16, 32, or 64)");
+                out->error = str_sprintf("--len-repr requires a value (16, 32, or 64)");
                 return false;
             }
             const char *val = e->tokens[++i];
@@ -406,7 +382,7 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
             else if (strcmp(val, "32") == 0) out->len_repr = 32;
             else if (strcmp(val, "64") == 0) out->len_repr = 64;
             else {
-                out->error = msgf("invalid --len-repr '%s' (expected 16, 32, or 64)", val);
+                out->error = str_sprintf("invalid --len-repr '%s' (expected 16, 32, or 64)", val);
                 return false;
             }
         } else if (strcmp(a, "--backtraces") == 0) {
@@ -416,13 +392,13 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
             const char *eq = strchr(arg, '=');
             Flag f = {0};
             if (eq) {
-                if (eq == arg) { out->error = msgf("--flag requires a name before '='"); return false; }
-                if (*(eq + 1) == '\0') { out->error = msgf("--flag '%s' has empty value after '='", arg); return false; }
+                if (eq == arg) { out->error = str_sprintf("--flag requires a name before '='"); return false; }
+                if (*(eq + 1) == '\0') { out->error = str_sprintf("--flag '%s' has empty value after '='", arg); return false; }
                 f.name = arg;
                 f.name_len = (int)(eq - arg);
                 f.value = eq + 1;
             } else {
-                if (*arg == '\0') { out->error = msgf("--flag requires a name"); return false; }
+                if (*arg == '\0') { out->error = str_sprintf("--flag requires a name"); return false; }
                 f.name = arg;
                 f.name_len = (int)strlen(arg);
                 f.value = NULL;
@@ -440,13 +416,13 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
         } else if (a[0] != '-') {
             if (!add_inputs(out, a, e->dirs[i])) return false;
         } else {
-            out->error = msgf("unknown option '%s'", a);
+            out->error = str_sprintf("unknown option '%s'", a);
             return false;
         }
     }
 
     if (out->input_count == 0) {
-        out->error = msgf("no input file");
+        out->error = str_sprintf("no input file");
         return false;
     }
     return true;

@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): the tag-enum typedef for union U is named
-// fc__<U>_tag — a single underscore inside the user-reachable fc__<name>
-// space — so a user struct literally named shape_tag collides: "conflicting
-// types for 'fc__shape_tag'". Derived names must live in a reserved space.
+// A user struct named `<union>_tag` (here shape_tag) does not collide with the
+// tag enum the compiler derives for union `shape`. Regression: the tag enum
+// used to be named fc__<union>_tag, inside the user declaration namespace, so
+// C reported "conflicting types for 'fc__shape_tag'".
 union shape =
     | circle(i32)
     | square

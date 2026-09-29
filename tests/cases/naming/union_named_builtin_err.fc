@@ -1,4 +1,4 @@
-// §7.8: a union named after a built-in type name is rejected.
+// A union named after a built-in type name is rejected.
 union bool =
     | yes
     | no

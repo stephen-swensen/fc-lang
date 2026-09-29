@@ -11,10 +11,10 @@ typedef struct Lexer {
     int line;
     int col;
     int start_col;          /* column at start of current token */
-    int start_line;         /* line at start of current token — a token's loc must be
-                               where it BEGINS; l->line has already advanced past a
-                               consumed '\n', so a newline token would otherwise get
-                               the next line paired with its start column */
+    int start_line;         /* line at start of current token. A token's loc is
+                               where it begins; l->line has already advanced past
+                               a consumed '\n', so a newline token would otherwise
+                               pair the next line with its start column */
     InternTable *intern;
 
     /* String interpolation state */
@@ -31,10 +31,10 @@ typedef struct Lexer {
     int flag_count;
 
     /* Last two significant token kinds emitted (raw scan order). Lets
-     * scan_identifier recognize the extern C-name position — `extern NAME`
-     * / `extern struct|union NAME` — where a C symbol may legitimately
-     * contain '__' (the C implementation-reserved namespace, e.g.
-     * __errno_location). Everywhere else '__' stays a lex error. */
+     * scan_identifier recognize the extern C-name position (`extern NAME`
+     * or `extern struct|union NAME`), where a C symbol may contain '__'
+     * (the C implementation-reserved namespace, e.g. __errno_location).
+     * Everywhere else '__' is a lex error. */
     TokenKind prev_kind;
     TokenKind prev_prev_kind;
 
@@ -49,9 +49,9 @@ typedef struct Lexer {
 
 /* A conditional compilation flag. value is NULL for bare (valueless) flags. */
 typedef struct Flag {
-    const char *name;    /* pointer into argv (NOT null-terminated — use name_len) */
+    const char *name;    /* points into the argument text; not NUL-terminated, use name_len */
     int name_len;
-    const char *value;   /* NULL if bare; else null-terminated pointer into argv */
+    const char *value;   /* NULL if bare; else NUL-terminated, into the argument text */
 } Flag;
 
 void lexer_init(Lexer *l, const char *source, InternTable *intern,

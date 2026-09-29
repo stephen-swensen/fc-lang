@@ -1,0 +1,12 @@
+// The companion rule is the same for an enum: one module may share its name,
+// a second may not.
+module geo =
+    enum dir of u8 =
+        | north
+        | south
+    module dir =
+        let first = dir.north
+    module dir =
+        let last = dir.south
+
+let main = (args: str[]) -> 0

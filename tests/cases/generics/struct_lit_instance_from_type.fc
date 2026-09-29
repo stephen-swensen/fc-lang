@@ -1,0 +1,36 @@
+// A generic struct literal makes the instance its own type names. Here the
+// literal's type is holder<'n * 2>: at 'n = 5 that is holder<10>, and no
+// holder<5> is made to fail holder's static_assert.
+struct wide =
+    limbs: u8['n]
+
+struct holder =
+    w: wide<'m>
+    static_assert('m > 8, "holder too small")
+
+let dbl = (a: wide<'n>) ->
+    default(wide<'n * 2>)
+
+let wrap = (a: wide<'n>) ->
+    holder { w = dbl(a) }
+
+// Reached through another generic, the same instance comes out.
+let wrap_twice = (a: wide<'n>) ->
+    wrap(a)
+
+struct box =
+    v: 'a
+
+let boxed_opt = (x: 'a) ->
+    box { v = some(x) }
+
+let main = (args: str[]) ->
+    let h = wrap(default(wide<5>))
+    assert(h.w.limbs.len == 10)
+    let h2 = wrap_twice(default(wide<6>))
+    assert(h2.w.limbs.len == 12)
+    let b = boxed_opt(7)
+    match b.v with
+    | some(n) -> assert(n == 7)
+    | none -> assert(false)
+    0

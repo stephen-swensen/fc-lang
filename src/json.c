@@ -7,7 +7,7 @@
 /* Arena-grown dynamic arrays                                               */
 /* The arena cannot realloc in place, so growth allocates a fresh, larger    */
 /* block and copies. Old blocks are reclaimed wholesale when the per-message */
-/* arena is reset — fine for short-lived LSP messages.                       */
+/* arena is reset, which is acceptable for short-lived LSP messages.         */
 /* ======================================================================== */
 
 static void *arena_grow(Arena *a, void *items, int count, int *cap, size_t elem) {
@@ -156,7 +156,7 @@ static int hex4(Parse *ps) {
  * escapes (incl. \uXXXX surrogate pairs) into a fresh, NUL-terminated arena
  * buffer. */
 static JsonValue *parse_string(Parse *ps) {
-    /* Worst case the decoded form is no longer than the source span. */
+    /* The decoded form is never longer than the source span. */
     size_t maxn = (size_t)(ps->end - ps->p) + 1;
     char *buf = arena_alloc(ps->a, maxn);
     int n = 0;
@@ -260,7 +260,7 @@ static JsonValue *parse_object(Parse *ps) {
         if (ps->p >= ps->end || *ps->p++ != ':') { ps->error = true; return NULL; }
         JsonValue *val = parse_value(ps);
         if (ps->error) return NULL;
-        /* reuse the slot; key is already arena-owned + NUL-terminated */
+        /* store the key uncopied; it is already arena-owned + NUL-terminated */
         obj->obj.members = arena_grow(ps->a, obj->obj.members, obj->obj.count,
                                       &obj->obj.cap, sizeof(JsonMember));
         obj->obj.members[obj->obj.count].key = key->str.s;

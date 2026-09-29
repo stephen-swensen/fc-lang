@@ -1,9 +1,8 @@
-// BUG (bugsearch 2026-07-18): a module (or namespace) named `fc` collides
-// with the compiler's fc__ top-level mangling prefix. Members of module fc
-// emit as fc__<name> — the same spelling as top-level decls — so the two
-// counters here silently merge into one C global (compiles clean, runs
-// wrong; struct twins produce invalid C via redefinition). The two mangling
-// schemes must be disjoint.
+// A module named `fc` keeps its members distinct from top-level declarations
+// of the same name: `fc.counter` and the top-level `counter` are two globals.
+// Regression: members of module fc used to be emitted as fc__<name>, the same
+// spelling as top-level declarations, so the two counters silently merged
+// into one C global (and struct twins produced a C redefinition).
 module fc =
     let counter = 111
 

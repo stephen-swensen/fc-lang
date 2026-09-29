@@ -17,59 +17,41 @@ static void collect_sink(SrcLoc loc, const char *msg, void *ud) {
     DA_APPEND(r->diags, r->diag_count, r->diag_cap, d);
 }
 
-/* ---- one source: lex into an r-owned token array ---- */
+/* ---- lexing ---- */
 
-static Token *lex_one(AnalysisResult *r, const char *text, const char *filename,
-                      const Flag *flags, int flag_count, int *out_count) {
+/* Lex one source. The lexer's in-progress arrays are exposed through r so that
+ * a layout error, which longjmps out of the lexer, leaves them for analyze() to
+ * free rather than leaking them (see lexer.h). */
+static Token *lex_source(AnalysisResult *r, const char *text, const char *filename,
+                         const Flag *flags, int flag_count, int *out_count) {
     diag_set_filename(filename);
-
-    /* Expose the lexer's in-progress arrays so an abort during lexing frees
-     * them rather than leaking (see lexer.h / analyze() abort handler). */
     r->lex_raw = NULL;
     r->lex_layout = NULL;
-
     Lexer lexer = {0};
     lexer_init(&lexer, text, &r->intern, flags, flag_count);
     lexer.abort_slot_raw = &r->lex_raw;
     lexer.abort_slot_layout = &r->lex_layout;
-
     Token *tokens = lexer_tokenize(&lexer, out_count);
-
-    /* Tokenize succeeded: the pre-filter array was freed internally and the
-     * returned array is `tokens`. Clear the in-progress slots and track the
-     * returned array for cleanup. */
     r->lex_raw = NULL;
     r->lex_layout = NULL;
+    return tokens;
+}
+
+/* Lex a source into a token array the analysis owns. */
+static Token *lex_one(AnalysisResult *r, const char *text, const char *filename,
+                      const Flag *flags, int flag_count, int *out_count) {
+    Token *tokens = lex_source(r, text, filename, flags, flag_count, out_count);
     DA_APPEND(r->token_arrays, r->token_array_count, r->token_array_cap, tokens);
     return tokens;
 }
 
-/* ---- one source: parse pre-lexed tokens into an arena-owned Program ---- */
-
-static Program *parse_one(AnalysisResult *r, Token *tokens, int token_count,
-                          const char *filename,
-                          const char **generic_names, int generic_name_count) {
-    diag_set_filename(filename);
-    Parser parser = {0};
-    parser_init(&parser, tokens, token_count, &r->arena, &r->intern);
-    parser.filename = filename;
-    parser.generic_names = generic_names;
-    parser.generic_name_count = generic_name_count;
-    parser.generic_gate = true;
-    Program *prog = parse_program(&parser);
-    /* pending_decls is malloc'd scratch the parser never frees (one-shot CLI
-     * relies on process exit); the AST itself lives in the arena. */
-    free(parser.pending_decls);
-    return prog;
-}
-
 /* ---- lex cache ----
  *
- * Feed sources (stdlib + sibling/lsp.rsp files) are stable across most edits, so
- * their token arrays are cached per path and reused, skipping the dominant lexing
- * cost. Re-parsing cached tokens is identical to re-lexing: the parser only reads
- * tokens, and tokenization never interns (it just records `start`/`length` slices
- * of the source), so the cache carries no interner dependency. */
+ * Feed sources (stdlib and sibling/lsp.rsp files) rarely change between edits, so
+ * their token arrays are cached per path and reused. Re-parsing cached tokens
+ * gives the same result as re-lexing: the parser only reads tokens, and
+ * tokenization never interns (it records `start`/`length` slices of the source),
+ * so the cache has no interner dependency. */
 
 static uint64_t fnv64(const void *data, size_t n) {
     const unsigned char *p = data;
@@ -98,22 +80,21 @@ static LexCacheEntry *lexcache_slot(LexCache *c, const char *path) {
     return NULL;
 }
 
-/* Feed source via the lex cache: reuse cached tokens on a content+flags match,
- * else lex and (re)populate the slot. The tokens are owned by the cache (NOT
- * appended to r->token_arrays, so analysis_free never frees them). */
+/* Lex a feed source through the cache: reuse cached tokens on a content+flags
+ * match, else lex and (re)populate the slot. The cache owns the tokens; they are
+ * not appended to r->token_arrays, so analysis_free never frees them. */
 static Token *lex_feed_cached(AnalysisResult *r, LexCache *cache,
                               const AnalysisSource *src, const char *fn,
                               const Flag *flags, int flag_count,
                               uint64_t flags_sig, int *out_count) {
     LexCacheEntry *e = lexcache_slot(cache, src->filename);
 
-    /* A slot hits only when a same-length candidate's CONTENT matches (hash as a
-     * fast reject, memcmp to confirm). We deliberately do NOT trust pointer
-     * identity as a fast path: an open sibling's buffer is freed and re-malloc'd
-     * on every edit, and the allocator routinely hands back the just-freed address
-     * for a new same-length buffer — so a stale pointer can equal a live one that
-     * holds DIFFERENT content (e.g. `double` edited to `triple`), which would serve
-     * stale tokens and break cross-file diagnostic cascade. */
+    /* A slot hits only when the content matches (hash as a fast reject, memcmp
+     * to confirm). Pointer identity is not a usable shortcut: an open sibling's
+     * buffer is freed and re-malloc'd on every edit, and the allocator often
+     * returns the just-freed address for a new same-length buffer holding
+     * different text (`double` edited to `triple`), which would serve stale
+     * tokens. */
     bool hit = e && e->flags_sig == flags_sig && e->len == src->len &&
                e->hash == fnv64(src->text, (size_t)src->len) &&
                memcmp(e->text, src->text, (size_t)src->len) == 0;
@@ -124,28 +105,14 @@ static Token *lex_feed_cached(AnalysisResult *r, LexCache *cache,
         tokens = e->tokens;
         tc = e->token_count;
     } else {
-        /* MISS: lex with the same abort slots as lex_one so a feed layout
-         * error still longjmps cleanly (the dup below runs only after success, so
-         * the abort path has nothing extra to clean up). */
-        diag_set_filename(fn);
-        r->lex_raw = NULL;
-        r->lex_layout = NULL;
-        Lexer lexer = {0};
-        lexer_init(&lexer, src->text, &r->intern, flags, flag_count);
-        lexer.abort_slot_raw = &r->lex_raw;
-        lexer.abort_slot_layout = &r->lex_layout;
-        tokens = lexer_tokenize(&lexer, &tc);
-        r->lex_raw = NULL;
-        r->lex_layout = NULL;
+        tokens = lex_source(r, src->text, fn, flags, flag_count, &tc);
 
         /* Own a stable copy of the text and rebase token `start` pointers into it,
          * so the cached tokens (and the AST literals parsed from them later) stay
          * valid across analyses, independent of the caller's per-analysis buffer.
          * The in-range guard leaves any synthetic/NULL-start token untouched (the
          * parser never dereferences those). */
-        char *owned = malloc((size_t)src->len + 1);
-        memcpy(owned, src->text, (size_t)src->len);
-        owned[src->len] = '\0';
+        char *owned = str_ndup(src->text, (size_t)src->len);
         for (int j = 0; j < tc; j++) {
             const char *s = tokens[j].start;
             if (s >= src->text && s <= src->text + src->len)
@@ -156,16 +123,13 @@ static Token *lex_feed_cached(AnalysisResult *r, LexCache *cache,
             LexCacheEntry blank = {0};
             DA_APPEND(cache->entries, cache->count, cache->cap, blank);
             e = &cache->entries[cache->count - 1];
-            size_t pn = strlen(src->filename);
-            e->path = malloc(pn + 1);
-            memcpy(e->path, src->filename, pn + 1);
+            e->path = str_dup(src->filename);
         } else {
-            /* Replace: free the superseded copy + tokens. The old `text` may still
-             * be referenced by a retained last_good's feed-literal pointers, but
-             * those bytes are never read by any LSP query (see the query handlers
-             * in lsp.c) — identical to the disk_bufs already freed post-analyze.
-             * The old tokens are referenced by nothing (the AST holds no token
-             * pointers), so freeing them is unconditionally safe. */
+            /* Replace: free the superseded text and tokens. A retained last_good
+             * AST may still point into the old `text` for feed literals, but no
+             * LSP query reads those bytes (the same holds for the disk_bufs lsp.c
+             * frees after each analysis). Nothing references the old tokens; the
+             * AST holds no token pointers. */
             free(e->text);
             free(e->tokens);
         }
@@ -192,25 +156,20 @@ void lexcache_free(LexCache *c) {
     c->count = c->cap = 0;
 }
 
-/* ---- deep free of pass1/pass2's malloc'd symbol metadata ----
- *
- * Module member tables and import tables are malloc'd by pass1; a long-running
- * server must reclaim them per analysis (the CLI does the same walk once at
- * exit). The walk lives in pass1.c as symtab_free_nested. */
-
 /* ---- public entry ---- */
 
 AnalysisResult *analyze(const char *source, int source_len, const char *filename,
                         const AnalysisSource *extra, int extra_count,
-                        const Flag *flags, int flag_count, LexCache *cache) {
+                        const Flag *flags, int flag_count, int len_repr,
+                        LexCache *cache) {
+    int saved_len_repr = g_len_repr;
+    g_len_repr = len_repr;
     AnalysisResult *r = calloc(1, sizeof *r);
     arena_init(&r->arena);
     intern_init(&r->intern, &r->arena);
     symtab_init(&r->symtab);
 
-    r->source = malloc((size_t)source_len + 1);
-    memcpy(r->source, source, (size_t)source_len);
-    r->source[source_len] = '\0';
+    r->source = str_ndup(source, (size_t)source_len);
     r->source_len = source_len;
     r->filename = arena_strdup(&r->arena, filename, (int)strlen(filename));
 
@@ -256,36 +215,10 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
                                          &generic_names, &gn_count, &gn_cap);
 
         for (int i = 0; i < nsrc; i++)
-            programs[i] = parse_one(r, toks[i], tcs[i], fns[i],
-                                    generic_names, gn_count);
+            programs[i] = parse_file(toks[i], tcs[i], fns[i], generic_names, gn_count,
+                                     &r->arena, &r->intern);
         free(generic_names);
-
-        /* Merge programs, mirroring main.c: inject a global-namespace reset
-         * sentinel before any file that does not begin with a namespace decl. */
-        if (nsrc == 1) {
-            r->program = programs[0];
-        } else {
-            int total = 0;
-            for (int i = 0; i < nsrc; i++) total += programs[i]->decl_count + 1;
-            Program *prog = arena_alloc(&r->arena, sizeof(Program));
-            prog->decls = arena_alloc(&r->arena, sizeof(Decl *) * (size_t)total);
-            prog->decl_count = 0;
-            for (int i = 0; i < nsrc; i++) {
-                bool has_ns = (programs[i]->decl_count > 0 &&
-                               programs[i]->decls[0]->kind == DECL_NAMESPACE);
-                if (!has_ns) {
-                    Decl *sentinel = arena_alloc(&r->arena, sizeof(Decl));
-                    sentinel->kind = DECL_NAMESPACE;
-                    sentinel->loc = (SrcLoc){0};
-                    sentinel->is_private = false;
-                    sentinel->ns.name = NULL;
-                    prog->decls[prog->decl_count++] = sentinel;
-                }
-                for (int j = 0; j < programs[i]->decl_count; j++)
-                    prog->decls[prog->decl_count++] = programs[i]->decls[j];
-            }
-            r->program = prog;
-        }
+        r->program = program_merge(&r->arena, programs, nsrc);
 
         /* After the merge, diagnostics with no per-node filename default to the
          * primary document (stdlib is presumed clean and is filtered out). */
@@ -295,14 +228,12 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
          * a stdlib module), so the missing-`main` diagnostic is suppressed. */
         pass1_collect(r->program, &r->symtab, &r->intern, &r->file_scopes,
                       /*require_main=*/false);
-        /* Run pass2 even when the parser or pass1 reported recoverable errors, so
-           type-aware queries (hover, definition, lenses) stay live on the parts of
-           the file that are still well formed — instead of blanking the whole file
-           because of one bad line or a duplicate name in a merged sibling. pass2
-           already accumulates with diag_error and poisons subtrees with TYPE_ERROR,
-           so it tolerates a partial program; a parse error leaves EXPR_ERROR/poison
-           nodes that pass2 types silently. (The lexer's longjmp backstop still aborts
-           the whole analysis on an unrecoverable layout error — the else branch.) */
+        /* Run pass2 even when the parser or pass1 reported errors, so type-aware
+           queries (hover, definition, lenses) keep working on the well-formed
+           parts of the file rather than going blank because of one bad line or a
+           duplicate name in a merged sibling. pass2 poisons what it cannot type
+           with TYPE_ERROR and types parse-error nodes silently. A lexer layout
+           error still aborts the whole analysis (the else branch). */
         pass2_check(r->program, &r->symtab, &r->intern, &r->mono, &r->file_scopes,
                     &r->arena);
         pass2_ran = true;
@@ -314,24 +245,20 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
         if (r->lex_layout) { free(r->lex_layout); r->lex_layout = NULL; }
     }
 
-    /* Safety net against silent blanking. pass2 now runs past recoverable parse/pass1
-     * errors (see above), so this only triggers when the analysis HARD-aborted — i.e.
-     * the lexer hit an unrecoverable layout error (tab, unterminated string/comment,
-     * inconsistent indentation) and longjmp'd, leaving pass2_ran false and r->aborted
-     * true. In that case every node's resolved type is NULL, so the OPEN document's
-     * hover / definition / CodeLens go empty; if the abort was in a *merged* sibling,
-     * nothing on the open document itself explains why. Surface one file-level
-     * diagnostic on the open document naming the first offending file so the dead
-     * overlays are explained, not a silently dead editor. (Project-wide publishing
-     * still shows the sibling's own error on the sibling — this is about the open
-     * document.) */
+    /* pass2 did not run only when the lexer hit an unrecoverable layout error
+     * (tab, unterminated string/comment, inconsistent indentation). Every node's
+     * type is then NULL, so the open document's hover, definition and CodeLens go
+     * empty, and if the abort was in a merged sibling nothing on the open
+     * document says why. Add one file-level diagnostic on the open document
+     * naming the offending file. (Project-wide publishing shows the sibling's own
+     * error on the sibling.) */
     if (!pass2_ran) {
         bool open_has_diag = false;
         const char *other = NULL;
         for (int i = 0; i < r->diag_count; i++) {
             const char *fn = r->diags[i].loc.filename;
-            /* A NULL filename defaults to the open document, so it already explains
-             * the silence — treat as open. */
+            /* A NULL filename means the open document, which then already has a
+             * diagnostic explaining the missing overlays. */
             if (!fn || strcmp(fn, r->filename) == 0) { open_has_diag = true; break; }
             if (!other) other = fn;
         }
@@ -341,14 +268,12 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
                 const char *slash = strrchr(base, '/');
                 if (slash) base = slash + 1;
             }
-            /* Sized to fit: the prose alone nearly filled the old 256-byte
-             * buffer, so a long filename clipped the sentence that names it. */
             const char *msg = base
                 ? arena_sprintf(&r->arena,
                          "analysis incomplete: an error in an included file (%s) "
-                         "halted type checking — hover, definition, and lenses are "
+                         "halted type checking; hover, definition, and lenses are "
                          "unavailable for this file until it is resolved", base)
-                : "analysis incomplete: type checking did not run — hover, "
+                : "analysis incomplete: type checking did not run; hover, "
                   "definition, and lenses are unavailable for this file";
             Diagnostic d;
             d.loc = (SrcLoc){ .filename = r->filename, .line = 1, .col = 1 };
@@ -361,27 +286,24 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
 
     diag_set_abort_jmp(NULL);
     diag_set_sink(NULL, NULL);
+    g_len_repr = saved_len_repr;
     return r;
 }
 
-/* Reclaim everything an analysis allocated. The arena (r->arena) holds the AST,
- * interned strings, and — since the leak fix — pass1's referenced Type nodes and
- * generic type_params arrays and pass2's self-recursion placeholder, so freeing
- * the arena reclaims them. The malloc'd side tables (token arrays, the nested
- * symtab/import trees, mono entries, diags, source) are freed explicitly below.
- * A 40-edit ASan session importing std:: reports zero leaks. */
+/* Reclaim everything an analysis allocated. The arena holds the AST, interned
+ * strings, pass1's referenced Type nodes and generic type_params arrays, and
+ * pass2's self-recursion placeholder. The malloc'd side tables (token arrays,
+ * the nested symtab/import trees, mono entries, diags, source) are freed
+ * explicitly. */
 void analysis_free(AnalysisResult *r) {
     if (!r) return;
     for (int i = 0; i < r->token_array_count; i++) free(r->token_arrays[i]);
     free(r->token_arrays);
-    if (r->lex_raw)    free(r->lex_raw);
-    if (r->lex_layout) free(r->lex_layout);
+    free(r->lex_raw);
+    free(r->lex_layout);
 
-    symtab_free_nested(&r->symtab);
-    free(r->symtab.symbols);
-    for (int i = 0; i < r->file_scopes.count; i++)
-        free(r->file_scopes.scopes[i].imports.entries);
-    free(r->file_scopes.scopes);
+    symtab_free(&r->symtab);
+    file_scopes_free(&r->file_scopes);
     free(r->mono.entries);
 
     free(r->diags);

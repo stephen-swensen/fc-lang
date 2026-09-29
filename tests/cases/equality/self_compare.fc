@@ -1,8 +1,7 @@
-// BUG (bugsearch 2026-07-18): comparing a variable with itself emits
-// `_l_x_0 == _l_x_0` and trips gcc/clang -Werror=tautological-compare. The
-// spec's no-op rule covers only self-ASSIGNMENT; self-comparison is legal FC
-// (and floats already pass — compilers exempt the NaN idiom). Integer/bool
-// self-compares must produce warning-clean C.
+// Comparing a variable with itself (`x == x`, `x <= x`) is legal FC (only
+// self-assignment is rejected) and compiles to warning-clean C. Regression:
+// integer self-compares used to be emitted as `_l_x_0 == _l_x_0`, which trips
+// gcc/clang -Werror=tautological-compare.
 let main = (args: str[]) ->
     let x = 5
     assert(x == x)

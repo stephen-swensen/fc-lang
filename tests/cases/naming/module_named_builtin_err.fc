@@ -1,4 +1,4 @@
-// §7.8: a module named after a built-in type name is rejected — `i32.member`
+// A module named after a built-in type name is rejected: `i32.member`
 // resolves to type-property lookup, so the module would be unreachable.
 module i32 =
     let helper = () -> 3

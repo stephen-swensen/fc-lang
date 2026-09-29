@@ -1,8 +1,7 @@
-// BUG (bugsearch 2026-07-18): in a static (segment-free) string literal, %%
-// is NOT collapsed in the emitted bytes but .len IS computed as if it were:
-// "50%% off" emits ((fc_str){"50%% off", 7}) — 8 bytes of content, len 7 —
-// yielding "50%% of". Spec escape rules: "100%%" → "100%". Only strings with
-// an interpolation segment go through the snprintf path that collapses %%.
+// `%%` is a single `%` in a string literal with no interpolation segment too:
+// "50%% off" is the 7 bytes "50% off". Regression: the emitted bytes kept
+// both `%` while .len counted one (`((fc_str){"50%% off", 7})`), so the
+// string read as "50%% of".
 let main = (args: str[]) ->
     let s = "50%% off"
     assert(s.len == 7)

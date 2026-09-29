@@ -1,8 +1,8 @@
-// BUG (bugsearch 2026-07-18): the for-loop element binding launders stack
-// provenance — `for p in ptrs do return p` escapes the frame (ASan:
-// stack-use-after-return) while the indexed twin `return ptrs[0]` IS caught
-// (escape/return_indexed_stack_ptr_err). The element var is registered with
-// plain scope_add → PROV_UNKNOWN.
+// A for-loop element binding keeps the provenance of the slice's elements,
+// so `for p in ptrs do return p` is rejected like `return ptrs[0]`
+// (escape/return_indexed_stack_ptr_err). Regression: the element variable
+// used to get unknown provenance, letting a stack pointer escape the frame
+// (ASan: stack-use-after-return).
 let bad = () ->
     let mut a = 41
     a = a + 1

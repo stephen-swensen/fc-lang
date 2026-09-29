@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): a loop's break value loses stack provenance —
-// `break &x` then returning the loop value escapes the frame (ASan:
-// stack-use-after-return). if/match value joins propagate provenance; loop
-// is the third value-producing control expression and doesn't.
+// A loop's value carries the provenance of its break values, as if and match
+// values do, so returning a loop that does `break &x` is a compile error.
+// Regression: the break value used to lose its stack provenance, so the
+// pointer escaped the frame (ASan: stack-use-after-return).
 let bad = () ->
     let p = loop
         let mut x = 41

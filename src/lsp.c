@@ -36,12 +36,12 @@ typedef struct {
     char           *path;       /* owned: filesystem path decoded from uri */
     char           *real;       /* owned: canonical `path` (see canon_path), so this
                                  * document is recognized under any spelling another
-                                 * file uses for it — an lsp.rsp route like
-                                 * `../shared/sdl2.fc`, a symlink. Refreshed each
-                                 * flush (the file may not have existed at didOpen). */
+                                 * file uses for it (an lsp.rsp route like
+                                 * `../shared/lib.fc`, a symlink). Refreshed each
+                                 * flush, since the file may not have existed at
+                                 * didOpen. */
     char           *text;       /* owned: current full document text (UTF-8) */
     int             text_len;
-    long            version;
     bool            dirty;      /* text changed since last analysis. didOpen/didChange
                                  * only set this; analysis is deferred so a burst of
                                  * keystrokes coalesces into one analyze (see lsp_main). */
@@ -57,36 +57,38 @@ typedef struct {
 } LspDocStore;
 
 /* One shared analysis per compilation unit. Every open document whose unit_key
- * matches is served from this single result, so a unit is analyzed ONCE per flush
- * regardless of how many of its files are open (the analysis already merges every
- * open doc's live buffer). Owns its analyses; keyed by unit_key(). */
+ * matches is served from this single result, so a unit is analyzed once per flush
+ * however many of its files are open (the analysis already merges every open
+ * doc's live buffer). Owns its analyses; keyed by unit_key(). */
 typedef struct {
     char           *key;        /* owned: the unit identity (see unit_key()) */
     char          **files;      /* owned: canonical path of every source the last
                                  * analysis merged (primary + lsp.rsp inputs /
-                                 * siblings / stdlib feed). A doc may be a MEMBER of
-                                 * a unit without bearing its key — an lsp.rsp reaches
-                                 * across directories — so this is what tells
-                                 * flush_dirty that editing that doc invalidates this
-                                 * unit. Rebuilt by each analyze_unit. */
+                                 * siblings / stdlib feed). An lsp.rsp reaches
+                                 * across directories, so a doc can be a member of
+                                 * a unit without bearing its key; this list is how
+                                 * flush_dirty knows that editing that doc
+                                 * invalidates this unit. Rebuilt by each
+                                 * analyze_unit. */
     int             file_count, file_cap;
     AnalysisResult *result;     /* latest analysis; NULL until first analyze */
     AnalysisResult *last_good;  /* most recent analysis that type-checked (result
-                                 * itself when fresh is good), retained so a
-                                 * transient parse/pass1 failure mid-typing does
-                                 * not blank type-aware queries. May alias result.
-                                 * NULL until the first good analysis. */
+                                 * itself when fresh is good), retained so a lexer
+                                 * abort mid-typing (a stray tab, an unterminated
+                                 * string) does not blank type-aware queries. May
+                                 * alias result. NULL until the first good
+                                 * analysis. */
 } UnitEntry;
 
 typedef struct {
     LspDocStore store;
-    bool initialized;
     bool shutdown_requested;
     Arena msg_arena;            /* reset per message: holds request + response */
 
-    /* stdlib sources, read once at startup and merged into every analysis so
-     * `import ... from std::...` resolves. Each entry's `text`/`filename` are
-     * owned here (malloc'd) and live for the whole session. */
+    /* stdlib sources, read once at startup and merged into every analysis that
+     * has no lsp.rsp, so `import ... from std::...` resolves. Each entry's
+     * `text`/`filename` are owned here (malloc'd) and live for the whole
+     * session. */
     AnalysisSource *stdlib;
     int             stdlib_count, stdlib_cap;
 
@@ -95,21 +97,21 @@ typedef struct {
     LexCache        lex_cache;
 
     /* One analysis per compilation unit, shared by all its open documents (see
-     * UnitEntry). Editing any file re-analyzes only its unit, once — not once per
-     * open tab. */
+     * UnitEntry). Editing a file re-analyzes each unit it belongs to, once per
+     * flush rather than once per open tab. */
     UnitEntry      *units;
     int             unit_count, unit_cap;
 
-    /* URIs we last published NON-EMPTY diagnostics to (owned). A project file that
-     * later goes clean, drops out of the unit, or is closed must be cleared with an
-     * explicit empty publish; this set is what we diff against each cycle to know
-     * which URIs need clearing. Open documents are always (re)published each cycle
-     * regardless, so they don't rely on this. */
+    /* URIs we last published non-empty diagnostics to (owned). A project file
+     * that later goes clean, drops out of the unit, or is closed must be cleared
+     * with an explicit empty publish; each cycle diffs against this set to find
+     * the URIs that need clearing. Open documents are republished every cycle
+     * regardless. */
     char          **pub_uris;
     int             pub_count, pub_cap;
 } LspServer;
 
-static char *canon_path(const char *path);      /* defined below */
+static char *canon_path(const char *path);
 
 static LspDoc *store_find(LspDocStore *s, const char *uri) {
     for (int i = 0; i < s->count; i++)
@@ -117,14 +119,12 @@ static LspDoc *store_find(LspDocStore *s, const char *uri) {
     return NULL;
 }
 
-/* The open document for `path`, under WHATEVER spelling names it. The exact
- * string is tried first, then canonical paths (each doc caches its own): a
- * unit's files come from an lsp.rsp, which spells them file-relative
- * (`../shared/sdl2.fc`), while the editor opens that same file by its resolved
- * path. A raw strcmp misses, and every "is this file open?" question then
- * answers no — feeding the analysis the file's *saved* copy instead of the live
- * buffer, and publishing its diagnostics to a synthesized URI beside the real
- * document's. */
+/* The open document for `path`, under whatever spelling names it. The exact
+ * string is tried first, then canonical paths (each doc caches its own): an
+ * lsp.rsp spells a unit's files file-relative (`../shared/lib.fc`), while the
+ * editor opens the same file by its resolved path. Without the canonical match
+ * the analysis would read the file's saved copy instead of the live buffer, and
+ * its diagnostics would go to a synthesized URI beside the real document's. */
 static LspDoc *store_find_by_path(LspDocStore *s, const char *path) {
     if (!path) return NULL;
     for (int i = 0; i < s->count; i++)
@@ -145,14 +145,14 @@ static UnitEntry *unit_find(LspServer *S, const char *key) {
 }
 
 /* The analysis that answers type-aware queries (hover, definition, completion,
- * CodeLens) for `doc`: its unit's fresh result whenever it actually type-checked,
- * otherwise the last one that did. This keeps overlays stable while you type
- * through a transient broken state (`let r2 = `, `... problem_01.`) instead of
- * blanking everything every other keystroke. Diagnostics deliberately do NOT use
- * this — they always come from the fresh `result`, so squiggles stay live. The
- * stale AST carries positions from an earlier revision; consumers locate by
- * current coordinates, so a line you have not touched still resolves while the
- * line under edit may simply miss (the same as a blank, never a crash). May
+ * CodeLens) for `doc`: its unit's fresh result whenever it type-checked,
+ * otherwise the last one that did. The fresh result fails to type-check only
+ * when the lexer aborted (a stray tab, an unterminated string); serving the
+ * older result keeps overlays from blanking while the user types through that
+ * state. Diagnostics do not use this; they always come from the fresh
+ * `result`, so squiggles stay live. The stale AST carries positions from an
+ * earlier revision and consumers locate by current coordinates, so an
+ * untouched line still resolves while the line under edit may miss. May
  * return NULL before the first good analysis. */
 static AnalysisResult *query_result(LspServer *S, LspDoc *doc) {
     UnitEntry *u = unit_find(S, doc->unit_key);
@@ -190,31 +190,18 @@ static bool unit_has_file(const UnitEntry *u, const char *real) {
 /* URI <-> path                                                             */
 /* ======================================================================== */
 
-static char *read_whole_file(const char *path, int *out_len);   /* defined below */
-
-/* Local strdup (POSIX strdup is unavailable under -std=c11 -Wpedantic). */
-static char *dup_cstr(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = malloc(n);
-    memcpy(p, s, n);
-    return p;
-}
 
 /* Canonical absolute path (resolves symlinks, `..`, and relative spellings) so
- * two paths to the SAME on-disk file compare equal. Falls back to a plain copy
+ * two paths to the same on-disk file compare equal. Falls back to a plain copy
  * when the path can't be resolved (e.g. an unsaved/virtual document). Caller
  * frees. */
 static char *canon_path(const char *path) {
     char *rp = platform_realpath(path);
-    return rp ? rp : dup_cstr(path);
+    return rp ? rp : str_dup(path);
 }
 
-static int hexval(int c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
+/* A character that can continue an identifier. */
+static bool id_char(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
 /* file:///home/x%20y.fc -> /home/x y.fc  (caller frees) */
 static char *uri_to_path(const char *uri) {
@@ -231,8 +218,9 @@ static char *uri_to_path(const char *uri) {
     char *out = malloc((size_t)n + 1);
     int j = 0;
     for (int i = 0; i < n; i++) {
-        if (p[i] == '%' && i + 2 < n && hexval(p[i + 1]) >= 0 && hexval(p[i + 2]) >= 0) {
-            out[j++] = (char)((hexval(p[i + 1]) << 4) | hexval(p[i + 2]));
+        if (p[i] == '%' && i + 2 < n && hex_digit_val(p[i + 1]) >= 0 &&
+            hex_digit_val(p[i + 2]) >= 0) {
+            out[j++] = (char)((hex_digit_val(p[i + 1]) << 4) | hex_digit_val(p[i + 2]));
             i += 2;
         } else {
             out[j++] = p[i];
@@ -243,8 +231,8 @@ static char *uri_to_path(const char *uri) {
 }
 
 /* /home/x y.fc -> file:///home/x%20y.fc  (caller frees). Percent-encodes bytes
- * outside the unreserved set (keeping '/'), mirroring uri_to_path's decode, so a
- * URI we synthesize for a project file that is NOT open still matches the one the
+ * outside the unreserved set (keeping '/'), the inverse of uri_to_path's decode,
+ * so a URI synthesized for a project file that is not open matches the one the
  * editor uses for it. */
 static char *path_to_uri(const char *path) {
     static const char hex[] = "0123456789ABCDEF";
@@ -270,7 +258,7 @@ static char *path_to_uri(const char *path) {
  * file, not a second document for the route. Returns malloc'd memory. */
 static char *uri_for_path(LspDocStore *s, const char *path) {
     LspDoc *open = store_find_by_path(s, path);
-    if (open) return dup_cstr(open->uri);
+    if (open) return str_dup(open->uri);
     char *real = canon_path(path);
     char *uri = path_to_uri(real);
     free(real);
@@ -429,17 +417,16 @@ static JsonValue *mk_range(Arena *a, int l0, int c0, int l1, int c1) {
 }
 
 /* ======================================================================== */
-/* Type rendering (type_name uses rotating static buffers — copy at once)   */
+/* Type rendering                                                           */
 /* ======================================================================== */
 
 /* Snapshot a type's spelling into the message arena. type_name() hands back a
  * rotating slot that a later call reclaims, so any caller holding more than one
- * spelling — or holding one across further type_name() calls — needs its own
- * copy. Sized to the spelling rather than a fixed `char tn[512]`: a type name
- * is unbounded (nested generics, long qualified names), and a clipped one is
- * shown to the user as if it were the type. */
+ * spelling, or holding one across further type_name() calls, needs its own
+ * copy. Sized to the spelling: a type name is unbounded (nested generics, long
+ * qualified names), and a clipped one would be shown to the user as the type. */
 static const char *dup_type_name(Arena *a, Type *t) {
-    const char *tn = type_name(t);   /* rotating static buffer */
+    const char *tn = type_name(t);   /* rotating slot */
     return arena_sprintf(a, "%s", tn ? tn : "?");
 }
 
@@ -451,151 +438,15 @@ static const char *dup_type_name(Arena *a, Type *t) {
  * globals (stdin/stdout/stderr) are not user declarations, so there is no
  * decl/doc-comment to surface on hover. This static table provides one. `sig`
  * is a generic signature shown in a code fence; `doc` is the markdown body.
- * The keyword/identifier as written in source is the lookup key — this lets
+ * The keyword or identifier as written in source is the lookup key, which lets
  * `none` and `default` (both EXPR_DEFAULT nodes) carry distinct docs. */
 typedef struct {
-    const char *name;   /* exact spelling in source */
+    const char *name;   /* spelling in source */
     const char *sig;    /* generic signature for the code fence */
     const char *doc;    /* markdown body: summary + details (no leading/trailing blank) */
 } BuiltinDoc;
 
-static const BuiltinDoc BUILTIN_DOCS[] = {
-    { "alloc", "alloc(T) -> T*?",
-      "Allocates `T` on the **heap**, zero-initialized, and returns an option that is "
-      "`none` when the OS allocation fails — so a successful pointer is checked, not assumed.\n\n"
-      "Forms:\n"
-      "- `alloc(T)` → `T*?` — one zeroed `T`\n"
-      "- `alloc(T[n])` → `T[]?` — a slice of `n` zeroed elements\n"
-      "- `alloc(T, n)` → `T*?` — a raw buffer of `n` elements\n"
-      "- `alloc(expr)` → `T?` — a heap copy of a struct/union/string value\n\n"
-      "Unwrap with `!` once checked, and release with `free` (commonly `defer free(p)`). "
-      "Lowers to C `calloc`/`malloc`." },
-
-    { "alloca", "alloca(T) -> T*",
-      "Allocates `T` on the **dynamic stack** (`__builtin_alloca`), zero-initialized. "
-      "Unlike `alloc` it cannot fail, returns the value directly (no option), and is "
-      "reclaimed automatically when the enclosing function returns — never `free` it.\n\n"
-      "Forms:\n"
-      "- `alloca(T)` → `T*`\n"
-      "- `alloca(T[n])` → `T[]`\n"
-      "- `alloca(T, n)` → `T*` — a raw buffer\n\n"
-      "The result has stack provenance: escape analysis forbids returning it or storing it "
-      "in heap/static memory. **Beware loops** — each iteration grows the frame; promote a "
-      "buffer that must persist or repeat to the heap with `alloc(...)`." },
-
-    { "free", "free(p: T*) -> void",
-      "Releases heap memory obtained from `alloc` (lowers to C `free`; for a slice it frees "
-      "the backing `.ptr`).\n\n"
-      "Only heap pointers may be freed: escape analysis rejects freeing stack (`alloca`, "
-      "`&local`), static (string-literal), or `const` memory. After freeing, the pointer is "
-      "dangling — don't read it again. Pairs naturally with `defer free(p)`." },
-
-    { "default", "default(T) -> T",
-      "Produces the **zero value** of any type `T`, with no initializer to spell out:\n"
-      "- numbers → `0` / `0.0`\n"
-      "- booleans → `false`\n"
-      "- pointers and options → null / `none`\n"
-      "- structs, unions, slices, tuples → every field zeroed\n\n"
-      "Useful for an explicit empty or initial value. `none(T)` is shorthand for `default(T?)`." },
-
-    { "some", "some(x: T) -> T?",
-      "Wraps a present value in an option, yielding a `T?` that holds `x`.\n\n"
-      "For a pointer option (`T*?`, which uses null as its empty sentinel) a value known to be "
-      "non-null is stored directly; an unprovable one is null-checked at runtime and aborts if "
-      "null. Pair with `none(T)` for the empty case, and read the value back with `!` or `match`." },
-
-    { "none", "none(T) -> T?",
-      "The **empty** option of inner type `T` — a `T?` holding no value. Exactly equivalent to "
-      "`default(T?)`.\n\n"
-      "The type argument is required so the element type is known: write `none(i32)`, not a bare "
-      "`none`. Build the present case with `some(x)`, and test for empty with a `none` match arm "
-      "(or `.is_none`)." },
-
-    { "ok", "ok(x: T) -> T!",
-      "Wraps a success value in a result, yielding a `T!` that holds `x` with error code 0.\n\n"
-      "A result is `ok(T) | err(i32)` — repr `{ err: i32, value: T }` where `err == 0` means ok "
-      "(C's \"0 on success\"). Pair with `err(T, code)` for the failure case, and read the value "
-      "back with `match` or `!` (which aborts with the code on `err`)." },
-
-    { "err", "err(T, code: i32) -> T!",
-      "The **failure** result of payload type `T`, carrying a non-zero `i32` error code.\n\n"
-      "The type argument is required so the success type is known: write `err(i32, 2)`, not a "
-      "bare `err`. Code 0 is the ok tag and therefore unrepresentable — a provably-zero code is "
-      "a compile error, an unprovable one is checked at runtime and aborts if zero. Build the "
-      "success case with `ok(x)`, match failure with an `err(e)` arm (literal codes like "
-      "`err(2)` work too), or test with `.is_err`." },
-
-    { "error_name", "error_name(e: i32) -> str?",
-      "The fully-qualified name of a declared error code — `some(\"file_io.not_found\")` for a "
-      "constant declared in an `error` group, `none` for anything else (reserved-range platform "
-      "passthrough codes like errno/Win32, and negative codes).\n\n"
-      "Backed by a static name table emitted only when `error_name` is used (or unconditionally "
-      "under `--backtraces`, where unwrap aborts also print the name) — a static cost, no runtime "
-      "machinery. Format the numeric fallback yourself: codes below 65536 belong to the platform." },
-
-    { "sizeof", "sizeof(T) -> i64",
-      "The size of type `T` in bytes, as an `i64` (lowers to `(int64_t)sizeof(T)`). Works on any "
-      "type — primitives, pointers, slices, structs, unions. Computed by the C compiler, so it "
-      "reflects the target's real layout and padding." },
-
-    { "alignof", "alignof(T) -> i64",
-      "The alignment requirement of type `T` in bytes, as an `i64` (lowers to "
-      "`(int64_t)_Alignof(T)`). The address of any `T` value is a multiple of this." },
-
-    { "bitcast", "bitcast(T, x) -> T",
-      "Reinterprets the raw bytes of `x` as type `T` — e.g. inspect an `f32`'s bits as a "
-      "`u32` for hashing or serialization (`bitcast(u32, x)`), or vice versa.\n\n"
-      "`T` and `x`'s type must both be **equal-size fixed-width scalars** (a fixed-width "
-      "integer, float, or `char`); a size mismatch is a compile error, and `isize`/`usize` "
-      "(target-defined width) and `bool` are not accepted. Unlike the value cast `(T) x`, no "
-      "conversion happens — the bits are unchanged. Every bit pattern is a valid result, so "
-      "there is no runtime failure (no `checked`/`unguarded` variant). Lowers to a C11 union "
-      "type-pun that compilers fold to a register move (zero cost); it is *not* the "
-      "strict-aliasing UB of a pointer-cast reinterpret." },
-
-    { "enum_of", "enum_of(E, x) -> E?",
-      "The membership-checked integer\u2192enum conversion \u2014 and the **only** one: a plain "
-      "cast `(E) x` is a compile error. Accepts any integer type for `x` and yields `E?`: "
-      "`some` of the matching variant when `x` equals a declared value, `none` otherwise.\n\n"
-      "This is the boundary operation for C-shaped input (bytes from a data file, an int from "
-      "an extern call): the check happens once at the edge, so every value of an enum type is "
-      "a declared variant and matches over enums stay exhaustive without `_`. Lowers to a "
-      "small static `switch` over the declared values (a range check when they are "
-      "contiguous)." },
-
-    { "assert", "assert(cond: bool[, msg: str]) -> void",
-      "Checks `cond` at runtime; if it is false, prints the source file, line, and the failing "
-      "condition text (plus the optional `msg`) to stderr and calls `abort()`.\n\n"
-      "Forms:\n"
-      "- `assert(cond)`\n"
-      "- `assert(cond, \"message\")`\n\n"
-      "For invariants that must hold — a violated assert ends the program. Always active; there "
-      "is no disable switch." },
-
-    { "atomic_load_acquire", "atomic_load_acquire(p: T*) -> T",
-      "Atomically reads `*p` with **acquire** ordering: writes another thread released before "
-      "storing to `*p` become visible afterward. `T` must be a lock-free integer or `bool` "
-      "(enforced by a `_Static_assert`). Lowers to `__atomic_load_n(p, __ATOMIC_ACQUIRE)`.\n\n"
-      "Pair with `atomic_store_release` to hand data between threads without a lock." },
-
-    { "atomic_store_release", "atomic_store_release(p: T*, v: T) -> void",
-      "Atomically writes `v` into `*p` with **release** ordering: writes this thread made before "
-      "it are visible to any thread that later acquire-loads `*p`. `T` must be a lock-free integer "
-      "or `bool`. Lowers to `__atomic_store_n(p, v, __ATOMIC_RELEASE)`.\n\n"
-      "The reading side uses `atomic_load_acquire`." },
-
-    { "stdin", "stdin: any*",
-      "The process's standard input stream as an opaque `any*` (a C `FILE*`). Pass it to extern C "
-      "I/O functions that expect a `FILE*`; it cannot be dereferenced in FC." },
-
-    { "stdout", "stdout: any*",
-      "The process's standard output stream as an opaque `any*` (a C `FILE*`). Pass it to extern C "
-      "I/O functions that expect a `FILE*`; it cannot be dereferenced in FC." },
-
-    { "stderr", "stderr: any*",
-      "The process's standard error stream as an opaque `any*` (a C `FILE*`). Pass it to extern C "
-      "I/O functions that expect a `FILE*`; it cannot be dereferenced in FC." },
-};
+#include "builtin_docs.inc"
 
 static const BuiltinDoc *builtin_doc_lookup(const char *name) {
     if (!name) return NULL;
@@ -632,15 +483,15 @@ typedef struct {
                                        variant line. */
     bool doc_is_field;              /* doc_loc is a struct/union field/variant line
                                        (enables trailing-comment extraction) */
-    bool no_doc;                    /* suppress the hover doc scan entirely — the winning
-                                       node keeps its def_loc (for go-to-def) but has no doc
-                                       of its own. Set for function parameters, whose line
-                                       above holds the function decl, not the param's doc.
+    bool no_doc;                    /* suppress the hover doc scan: the winning node keeps
+                                       its def_loc (for go-to-def) but has no doc of its
+                                       own. Set for function parameters, whose line above
+                                       holds the function decl, not the param's doc.
                                        Cleared by every consider() win. */
     const BuiltinDoc *builtin;      /* set when the winning node is a built-in intrinsic
                                        (alloc/some/.../stdin); hover renders its doc instead
                                        of a `name: type` line. Cleared by every consider() win. */
-    Symbol *type_ref_sym;           /* set when the winning token names a TYPE or MODULE
+    Symbol *type_ref_sym;           /* set when the winning token names a type or module
                                        (struct/union/enum/module reference); hover renders a
                                        declaration-form header (`enum dir of i32`) instead of
                                        `name: type`. Cleared by every consider() win. */
@@ -648,16 +499,16 @@ typedef struct {
                                        ident.companion_module); hover appends its doc as a
                                        labeled second section. Cleared by every consider() win. */
     Decl   *decl_site;              /* set when the winning token is a declaration-site
-                                       NAME (struct/union/enum/module header line); carries
+                                       name (struct/union/enum/module header line); carries
                                        kind + repr for the header when there is no Symbol.
                                        Cleared by every consider() win. */
 
-    /* Member-completion hook: the operator (`.`) position of an in-progress
-     * member access. During the walk, the EXPR_FIELD/EXPR_DEREF_FIELD node whose
-     * loc matches is captured in op_field — its `field.object` carries the object
-     * expression's type for ANY object shape (`dict[i]`, `f()`, nested), which a
-     * position lookup on the object's last character can't reach when that char is
-     * a `]`/`)`. Zero op_line disables the hook. */
+    /* Member-completion hook: the position of the `.` of an in-progress member
+     * access. During the walk, the EXPR_FIELD/EXPR_DEREF_FIELD node whose loc
+     * matches is captured in op_field. Its `field.object` carries the object's
+     * type for any object shape (`dict[i]`, `f()`, nested), which a position
+     * lookup on the object's last character can't reach when that character is
+     * a `]` or `)`. Zero op_line disables the hook. */
     int   op_line, op_col;
     Expr *op_field;
 } FindCtx;
@@ -666,12 +517,16 @@ static Type *peel_to_aggregate(Type *t);   /* defined in the completion section 
 
 static const SrcLoc NO_LOC = {0};
 
-static void consider(FindCtx *c, int line, int col, int span, Type *type,
+/* Offer a token as the hit: it wins when it covers the target position and is
+ * no wider than the current winner (the innermost token wins). Returns whether
+ * it won, so the caller can add what only it knows (a doc flag, the Symbol a
+ * type reference names). */
+static bool consider(FindCtx *c, int line, int col, int span, Type *type,
                      const char *name, Symbol *sym, SrcLoc def_loc,
                      SrcLoc doc_loc, bool doc_is_field) {
-    if (line != c->target_line) return;
-    if (c->target_col < col || c->target_col >= col + span) return;
-    if (c->found && span > c->best_span) return;   /* keep the innermost (smallest) */
+    if (line != c->target_line) return false;
+    if (c->target_col < col || c->target_col >= col + span) return false;
+    if (c->found && span > c->best_span) return false;
     c->found = true;
     c->best_span = span;
     c->start_line = line;
@@ -687,12 +542,31 @@ static void consider(FindCtx *c, int line, int col, int span, Type *type,
     c->type_ref_sym = NULL;   /* post-set by the EXPR_IDENT/EXPR_FIELD/decl-site winners */
     c->companion = NULL;
     c->decl_site = NULL;
+    return true;
+}
+
+static bool is_type_sym(const Symbol *s) {
+    return s && (s->kind == DECL_STRUCT || s->kind == DECL_UNION || s->kind == DECL_ENUM);
+}
+
+/* A struct, union, enum or module: a symbol that hovers with a declaration-form
+ * header rather than `name: type`. */
+static bool is_type_or_module_sym(const Symbol *s) {
+    return is_type_sym(s) || (s && s->kind == DECL_MODULE);
+}
+
+/* Whether `d` was written in `file` (every file when `file` is NULL). The merged
+ * program mixes several files' decls, with overlapping line numbers, and
+ * synthetic decls that have no file (a namespace reset between files); a
+ * synthetic decl is in no file. */
+static bool decl_in_file(const Decl *d, const char *file) {
+    return !file || (d->loc.filename && strcmp(d->loc.filename, file) == 0);
 }
 
 /* Reads the contiguous identifier/keyword token at `loc` from source into `buf`,
- * returning its length (0 if `loc` is out of range). Used to recover the exact
- * keyword a built-in node was spelled with — e.g. to tell `none` from `default`,
- * which share the EXPR_DEFAULT node kind. */
+ * returning its length (0 if `loc` is out of range). Recovers the keyword a
+ * built-in node was spelled with, e.g. to tell `none` from `default`, which
+ * share the EXPR_DEFAULT node kind. */
 static int read_ident_at(const FindCtx *c, SrcLoc loc, char *buf, size_t bufsz) {
     buf[0] = '\0';
     if (loc.line < 1 || loc.line > c->idx->count) return 0;
@@ -701,9 +575,7 @@ static int read_ident_at(const FindCtx *c, SrcLoc loc, char *buf, size_t bufsz) 
     size_t n = 0;
     while (off >= 0 && off < end && n + 1 < bufsz) {
         char ch = c->src[off];
-        bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                  (ch >= '0' && ch <= '9') || ch == '_';
-        if (!ok) break;
+        if (!id_char(ch)) break;
         buf[n++] = ch;
         off++;
     }
@@ -713,45 +585,33 @@ static int read_ident_at(const FindCtx *c, SrcLoc loc, char *buf, size_t bufsz) 
 
 /* If `e` is a keyword-builtin node whose keyword is under the cursor, register
  * it as the hit (innermost-wins, like consider()). The keyword span is read from
- * source so the highlight covers exactly the keyword, and so `none`/`default`
+ * source so the highlight covers just the keyword, and so `none`/`default`
  * resolve to their own docs. */
 static void consider_builtin(FindCtx *c, const Expr *e) {
     char kw[32];
     int span = read_ident_at(c, e->loc, kw, sizeof kw);
     if (span <= 0) return;
     const BuiltinDoc *bd = builtin_doc_lookup(kw);
-    if (!bd) return;
-    if (e->loc.line != c->target_line) return;
-    if (c->target_col < e->loc.col || c->target_col >= e->loc.col + span) return;
-    if (c->found && span > c->best_span) return;   /* keep the innermost (smallest) */
-    c->found = true;
-    c->best_span = span;
-    c->start_line = e->loc.line;
-    c->start_col = e->loc.col;
-    c->type = e->type;
-    c->name = bd->name;
-    c->sym = NULL;
-    c->def_loc = NO_LOC;
-    c->doc_loc = NO_LOC;
-    c->doc_is_field = false;
-    c->no_doc = false;
-    c->builtin = bd;
+    if (bd && consider(c, e->loc.line, e->loc.col, span, e->type, bd->name, NULL,
+                       NO_LOC, NO_LOC, false))
+        c->builtin = bd;
 }
 
 /* Column (1-based) of the binding name in a `let [mut] name ...` whose `let`
- * keyword is at (line1, let_col1). Scans the source past the keyword(s). */
-static int let_name_col(const FindCtx *c, int let_line, int let_col, bool is_mut) {
-    int off = c->idx->starts[let_line - 1] + (let_col - 1);
-    int end = c->idx->len;
+ * keyword is at (let_line, let_col). Scans the source past the keyword(s). */
+static int let_name_col(const LineIndex *idx, const char *src, int let_line, int let_col,
+                        bool is_mut) {
+    int off = idx->starts[let_line - 1] + (let_col - 1);
+    int end = idx->len;
     int i = off;
     /* skip "let" */
     i += 3;
-    while (i < end && (c->src[i] == ' ' || c->src[i] == '\t')) i++;
+    while (i < end && (src[i] == ' ' || src[i] == '\t')) i++;
     if (is_mut) {
         i += 3; /* "mut" */
-        while (i < end && (c->src[i] == ' ' || c->src[i] == '\t')) i++;
+        while (i < end && (src[i] == ' ' || src[i] == '\t')) i++;
     }
-    return (i - c->idx->starts[let_line - 1]) + 1;
+    return (i - idx->starts[let_line - 1]) + 1;
 }
 
 static const char *unmangled_name(const char *n);   /* defined with the decl-site helpers */
@@ -789,20 +649,19 @@ static void consider_type_annotation(FindCtx *c, Type *t, int line, int col) {
     } else if (t->kind == TYPE_STUB && c->symtab) {
         /* Struct-field/variant-payload annotations referencing a type outside
          * their own module keep their parse-time stub in the Decl tree (only
-         * use-site copies get resolved). Types are dual-registered in the
-         * global symtab under source and mangled names, so the stub's own
-         * name (canonicalized by pass1 where needed) resolves either way. */
+         * use-site copies get resolved). The global symtab holds every type
+         * under its mangled name, and top-level types under their source name
+         * too, so the stub's own name (canonicalized by pass1 where needed)
+         * resolves either way. */
         qn = t->stub.qualified_name ? t->stub.qualified_name : t->stub.name;
-        sym = symtab_lookup_kind(c->symtab, t->stub.name, DECL_STRUCT);
-        if (!sym) sym = symtab_lookup_kind(c->symtab, t->stub.name, DECL_UNION);
-        if (!sym) sym = symtab_lookup_kind(c->symtab, t->stub.name, DECL_ENUM);
+        sym = symtab_lookup_type(c->symtab, t->stub.name);
     } else {
         return;   /* primitives/functions/type-vars: nothing to link */
     }
     if (!qn || !sym) return;
     /* Base name token = last path component of the qualified name
      * (m.point -> point, std::io.file -> file), unmangled to its source
-     * spelling (a canonicalized stub may read m__point). */
+     * spelling (a canonicalized stub may read fc__m__point). */
     const char *base = qn;
     for (const char *p = qn; *p; p++)
         if (*p == '.' || *p == ':') base = p + 1;
@@ -820,26 +679,73 @@ static void consider_type_annotation(FindCtx *c, Type *t, int line, int col) {
         if (ch == '/' && off + 1 < end &&
             (c->src[off + 1] == '/' || c->src[off + 1] == '*'))
             return;
-        bool ident0 = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                      ch == '_';
-        if (!ident0) { off++; continue; }
+        if (!id_char(ch) || isdigit((unsigned char)ch)) { off++; continue; }
         int tok_start = off;
-        while (off < end) {
-            char tc = c->src[off];
-            bool identc = (tc >= 'a' && tc <= 'z') || (tc >= 'A' && tc <= 'Z') ||
-                          (tc >= '0' && tc <= '9') || tc == '_';
-            if (!identc) break;
-            off++;
-        }
+        while (off < end && id_char(c->src[off])) off++;
         if (off - tok_start == blen &&
             strncmp(c->src + tok_start, base, (size_t)blen) == 0) {
             int tok_col = (tok_start - c->idx->starts[line - 1]) + 1;
-            consider(c, line, tok_col, blen, t, base, sym, NO_LOC, NO_LOC, false);
-            if (c->found && c->start_line == line && c->start_col == tok_col)
+            if (consider(c, line, tok_col, blen, t, base, sym, NO_LOC, NO_LOC, false))
                 c->type_ref_sym = sym;
             return;   /* first matching token is the annotation's */
         }
     }
+}
+
+/* The declaration site of variant `name` of union or enum type `t`. */
+static SrcLoc variant_decl_loc(const Type *t, const char *name) {
+    if (t->kind == TYPE_UNION) {
+        for (int i = 0; i < t->unio.variant_count; i++)
+            if (t->unio.variants[i].name == name) return t->unio.variants[i].loc;
+    } else if (t->kind == TYPE_ENUM) {
+        for (int i = 0; i < t->enu.variant_count; i++)
+            if (t->enu.variants[i].name == name) return t->enu.variants[i].loc;
+    }
+    return NO_LOC;
+}
+
+/* The field-name token of a field access. Its exact source loc is recorded by
+ * the parser, so hover and definition target the name itself whatever the
+ * object's shape (a.b, a.b.c, s . field) or spacing. Go-to-definition
+ * resolves module members (mod.member -> the member decl) and variant
+ * constructors (shape.circle -> the union or enum decl) through a Symbol,
+ * and a plain struct field (s.field) through the field's recorded loc. */
+static void consider_field_name(FindCtx *c, Expr *e) {
+    if (e->field.name_loc.line <= 0) return;
+    Symbol *def = e->field.resolved_member;
+    SrcLoc doc_loc = NO_LOC;
+    bool doc_is_field = false;
+    if (!def && e->field.is_variant_constructor && e->type &&
+        (e->type->kind == TYPE_UNION || e->type->kind == TYPE_ENUM)) {
+        /* Go-to-def lands on the type's decl, but the doc comment is read from
+         * the variant's own line. */
+        def = e->type->kind == TYPE_UNION ? e->type->unio.resolved_sym
+                                          : e->type->enu.resolved_sym;
+        doc_loc = variant_decl_loc(e->type, e->field.name);
+        doc_is_field = doc_loc.line > 0;
+    }
+    SrcLoc field_def = NO_LOC;
+    if (!def && e->field.object) {
+        Type *ot = peel_to_aggregate(e->field.object->type);
+        if (ot && ot->kind == TYPE_STRUCT)
+            for (int i = 0; i < ot->struc.field_count; i++)
+                if (ot->struc.fields[i].name == e->field.name) {
+                    field_def = ot->struc.fields[i].loc;
+                    doc_loc = field_def;       /* plain field: def == doc site */
+                    doc_is_field = true;
+                    break;
+                }
+    }
+    /* Module-member type reference (m.point, gfx.mode): the member itself is
+     * a type or module, not a value, so it gets the declaration-form header.
+     * Variant constructors and type properties keep their value hover (their
+     * `def` may be the enum or union symbol, so gate on the flags). */
+    if (consider(c, e->field.name_loc.line, e->field.name_loc.col,
+                 (int)strlen(e->field.name), e->type, e->field.name,
+                 def, field_def, doc_loc, doc_is_field) &&
+        !e->field.is_variant_constructor && !e->field.is_type_property &&
+        is_type_or_module_sym(def))
+        c->type_ref_sym = def;
 }
 
 /* Offer each token of e that hover and go-to-definition can land on (names,
@@ -850,36 +756,27 @@ static void find_in_expr(Expr *e, void *find_ctx) {
     FindCtx *c = find_ctx;
     switch (e->kind) {
         case EXPR_IDENT: {
-            consider(c, e->loc.line, e->loc.col, (int)strlen(e->ident.name),
-                     e->type, e->ident.name, e->ident.resolved_sym,
-                     e->ident.resolved_local_loc, e->ident.resolved_local_loc, false);
+            if (!consider(c, e->loc.line, e->loc.col, (int)strlen(e->ident.name),
+                          e->type, e->ident.name, e->ident.resolved_sym,
+                          e->ident.resolved_local_loc, e->ident.resolved_local_loc, false))
+                break;
             /* Block-locals carry a doc site (the line above their binding) so a
              * `// comment` over a `let` shows on hover. A parameter is the one
              * exception: the line above it holds the function decl or an earlier
-             * param, never the param's own doc, so suppress the doc scan — it
-             * hovers as name: type. Go-to-def still uses resolved_local_loc. */
-            if (e->ident.resolved_local_is_param && c->found &&
-                c->start_line == e->loc.line && c->start_col == e->loc.col)
+             * param, never the param's own doc, so suppress the doc scan and let
+             * it hover as name: type. Go-to-def still uses resolved_local_loc. */
+            if (e->ident.resolved_local_is_param)
                 c->no_doc = true;
             /* Type/module reference: render a declaration-form hover header, and
              * carry the companion module so both docs merge into one hover. */
-            if (e->ident.resolved_sym && c->found &&
-                c->start_line == e->loc.line && c->start_col == e->loc.col &&
-                (e->ident.resolved_sym->kind == DECL_STRUCT ||
-                 e->ident.resolved_sym->kind == DECL_UNION ||
-                 e->ident.resolved_sym->kind == DECL_ENUM ||
-                 e->ident.resolved_sym->kind == DECL_MODULE)) {
+            if (is_type_or_module_sym(e->ident.resolved_sym)) {
                 c->type_ref_sym = e->ident.resolved_sym;
                 c->companion = e->ident.companion_module;
             }
-            /* Built-in globals (stdin/stdout/stderr) resolve to no Symbol and no
-             * local binding. If the cursor landed on one, attach its doc. (Keyword
-             * builtins can't appear as idents, so only these globals match here.) */
-            if (!e->ident.resolved_sym && e->ident.resolved_local_loc.line == 0 &&
-                c->found && c->start_line == e->loc.line && c->start_col == e->loc.col) {
-                const BuiltinDoc *bd = builtin_doc_lookup(e->ident.name);
-                if (bd) c->builtin = bd;
-            }
+            /* The built-in streams resolve to no Symbol and no local binding;
+             * attach their doc. */
+            if (e->ident.is_std_stream)
+                c->builtin = builtin_doc_lookup(e->ident.name);
             break;
         }
         case EXPR_FIELD:
@@ -891,69 +788,7 @@ static void find_in_expr(Expr *e, void *find_ctx) {
              * in-progress name may be empty or absent). */
             if (c->op_line && e->loc.line == c->op_line && e->loc.col == c->op_col)
                 c->op_field = e;
-            /* The field-name token's exact source loc is recorded by the parser,
-             * so hover/definition target the field name precisely regardless of the
-             * object expression's shape (a.b, a.b.c, s . field) or spacing. Go-to-
-             * definition resolves: module members (mod.member -> the member decl)
-             * and variant constructors (shape.circle -> the union decl) via a
-             * Symbol; plain struct-field access (s.field) jumps to the field's
-             * declaration in the struct body via its recorded StructField loc. */
-            if (e->field.name_loc.line > 0) {
-                Symbol *def = e->field.resolved_member;
-                SrcLoc doc_loc = NO_LOC;
-                bool doc_is_field = false;
-                if (!def && e->field.is_variant_constructor &&
-                    e->type && e->type->kind == TYPE_UNION) {
-                    /* Variant constructor: go-to-def lands on the union decl (Symbol),
-                     * but the doc comment is read from the variant's own line. */
-                    def = e->type->unio.resolved_sym;
-                    for (int i = 0; i < e->type->unio.variant_count; i++)
-                        if (e->type->unio.variants[i].name == e->field.name) {
-                            doc_loc = e->type->unio.variants[i].loc;
-                            doc_is_field = true;
-                            break;
-                        }
-                }
-                if (!def && e->field.is_variant_constructor &&
-                    e->type && e->type->kind == TYPE_ENUM) {
-                    /* Enum variant: same shape — def on the enum decl, doc from
-                     * the variant's own line. */
-                    def = e->type->enu.resolved_sym;
-                    for (int i = 0; i < e->type->enu.variant_count; i++)
-                        if (e->type->enu.variants[i].name == e->field.name) {
-                            doc_loc = e->type->enu.variants[i].loc;
-                            doc_is_field = true;
-                            break;
-                        }
-                }
-                SrcLoc field_def = NO_LOC;
-                if (!def && e->field.object) {
-                    Type *ot = peel_to_aggregate(e->field.object->type);
-                    if (ot && ot->kind == TYPE_STRUCT)
-                        for (int i = 0; i < ot->struc.field_count; i++)
-                            if (ot->struc.fields[i].name == e->field.name) {
-                                field_def = ot->struc.fields[i].loc;
-                                doc_loc = field_def;       /* plain field: def == doc site */
-                                doc_is_field = true;
-                                break;
-                            }
-                }
-                consider(c, e->field.name_loc.line, e->field.name_loc.col,
-                         (int)strlen(e->field.name), e->type, e->field.name,
-                         def, field_def, doc_loc, doc_is_field);
-                /* Module-member TYPE reference (m.point, gfx.mode): the member
-                 * itself is a type/module, not a value — declaration-form header.
-                 * Variant constructors and type properties keep their value hover
-                 * (their `def` may be the enum/union symbol, so gate on the flags). */
-                if (c->found && def && !e->field.is_variant_constructor &&
-                    !e->field.is_type_property &&
-                    c->start_line == e->field.name_loc.line &&
-                    c->start_col == e->field.name_loc.col &&
-                    (def->kind == DECL_STRUCT || def->kind == DECL_UNION ||
-                     def->kind == DECL_ENUM || def->kind == DECL_MODULE)) {
-                    c->type_ref_sym = def;
-                }
-            }
+            consider_field_name(c, e);
             return;
         case EXPR_CAST:
             consider_type_annotation(c, e->cast.target, e->loc.line, e->loc.col);
@@ -968,7 +803,7 @@ static void find_in_expr(Expr *e, void *find_ctx) {
                 if (p->name) {
                     consider(c, p->loc.line, p->loc.col, (int)strlen(p->name),
                              p->type, p->name, NULL, NO_LOC, NO_LOC, false);
-                    /* The written annotation after `name:` — hover/def on the
+                    /* The written annotation after `name:`: hover/def on the
                      * type name itself. */
                     consider_type_annotation(c, p->type, p->loc.line,
                                              p->loc.col + (int)strlen(p->name));
@@ -978,15 +813,12 @@ static void find_in_expr(Expr *e, void *find_ctx) {
         case EXPR_STRUCT_LIT:
             /* The type name (at the node's loc) goes to the struct declaration. */
             if (e->struct_lit.type_name) {
-                consider(c, e->loc.line, e->loc.col,
-                         (int)strlen(e->struct_lit.type_name), e->type,
-                         e->struct_lit.type_name, e->struct_lit.resolved_sym,
-                         NO_LOC, NO_LOC, false);
                 /* The token names the type: declaration-form hover header. */
-                if (c->found && e->struct_lit.resolved_sym &&
-                    c->start_line == e->loc.line && c->start_col == e->loc.col &&
-                    (e->struct_lit.resolved_sym->kind == DECL_STRUCT ||
-                     e->struct_lit.resolved_sym->kind == DECL_UNION))
+                if (consider(c, e->loc.line, e->loc.col,
+                             (int)strlen(e->struct_lit.type_name), e->type,
+                             e->struct_lit.type_name, e->struct_lit.resolved_sym,
+                             NO_LOC, NO_LOC, false) &&
+                    is_type_or_module_sym(e->struct_lit.resolved_sym))
                     c->type_ref_sym = e->struct_lit.resolved_sym;
             }
             break;
@@ -1008,7 +840,7 @@ static void find_in_expr(Expr *e, void *find_ctx) {
         case EXPR_DEFAULT: {
             consider_builtin(c, e);
             /* The written type argument. `none` shares EXPR_DEFAULT but
-             * spells no type — read the keyword to tell them apart. */
+             * spells no type; read the keyword to tell them apart. */
             Type *tt = e->kind == EXPR_SIZEOF  ? e->sizeof_expr.target
                      : e->kind == EXPR_ALIGNOF ? e->alignof_expr.target
                      :                           e->default_expr.target;
@@ -1030,7 +862,8 @@ static void find_in_expr(Expr *e, void *find_ctx) {
             consider_builtin(c, e);   /* the keyword */
             break;
         case EXPR_LET: {
-            int col = let_name_col(c, e->loc.line, e->loc.col, e->let_expr.let_is_mut);
+            int col = let_name_col(c->idx, c->src, e->loc.line, e->loc.col,
+                                   e->let_expr.let_is_mut);
             consider(c, e->loc.line, col, (int)strlen(e->let_expr.let_name),
                      e->let_expr.let_type, e->let_expr.let_name, NULL,
                      NO_LOC, e->let_expr.let_name_loc, false);
@@ -1054,31 +887,31 @@ static int kw_name_col(const FindCtx *c, int line, int col, int kw_len) {
     return (off - c->idx->starts[line - 1]) + 1;
 }
 
-/* pass1 mangles type-decl names in place (dir -> fc__dir / m__dir); the source
- * spelling is the suffix after the last "__" (FC identifiers cannot contain a
- * double underscore, so the split is unambiguous). Module names are unmangled. */
+/* pass1 mangles type-decl names in place (dir -> fc__dir, fc__m__dir); the
+ * source spelling is the suffix after the last "__" (FC identifiers cannot
+ * contain a double underscore, so the split is unambiguous). Module names are
+ * unmangled. */
 static const char *unmangled_name(const char *n) {
     const char *last = NULL;
     for (const char *p = n; (p = strstr(p, "__")) != NULL; p += 2) last = p;
     return last ? last + 2 : n;
 }
 
-/* Hover for the NAME on a struct/union/enum/module declaration line. There is
+/* Hover for the name on a struct/union/enum/module declaration line. There is
  * no Symbol at hand here; decl_site carries the Decl so hover can render the
  * declaration-form header and read the attached doc comment. */
 static void consider_decl_name(FindCtx *c, Decl *d, int kw_len, const char *decl_name) {
     if (!decl_name) return;
     const char *src_name = unmangled_name(decl_name);
     int col = kw_name_col(c, d->loc.line, d->loc.col, kw_len);
-    consider(c, d->loc.line, col, (int)strlen(src_name),
-             NULL, src_name, NULL, NO_LOC, d->loc, false);
-    if (c->found && c->start_line == d->loc.line && c->start_col == col)
+    if (consider(c, d->loc.line, col, (int)strlen(src_name),
+                 NULL, src_name, NULL, NO_LOC, d->loc, false))
         c->decl_site = d;
 }
 
 /* One identifier written in an import statement. pass1 stamped what the
- * statement resolved to (import.resolved_*), so this is a pure position match —
- * no re-resolution here. `span` is the written token's length while `name` is
+ * statement resolved to (import.resolved_*), so this is a pure position match
+ * with no re-resolution. `span` is the written token's length while `name` is
  * the symbol's own spelling: for an `as` alias the two differ, and hovering the
  * alias should report the thing it aliases, which is what the reader came to
  * look up. An unresolved import contributes nothing (there is no symbol to
@@ -1088,21 +921,19 @@ static void consider_import_ident(FindCtx *c, SrcLoc loc, int span,
     if (loc.line == 0 || span <= 0 || !name || !sym) return;
     Type *t = sym->type;
     if (!t && sym->decl && sym->decl->kind == DECL_LET) t = sym->decl->let.resolved_type;
-    consider(c, loc.line, loc.col, span, t, name, sym, NO_LOC, NO_LOC, false);
-    if (!c->found || c->start_line != loc.line || c->start_col != loc.col) return;
+    if (!consider(c, loc.line, loc.col, span, t, name, sym, NO_LOC, NO_LOC, false)) return;
     /* A type or module reference hovers in declaration form (`struct point`,
      * `module io`), same as a use-site reference to it would. */
-    if (sym->kind == DECL_STRUCT || sym->kind == DECL_UNION ||
-        sym->kind == DECL_ENUM   || sym->kind == DECL_MODULE) {
+    if (is_type_or_module_sym(sym)) {
         c->type_ref_sym = sym;
         c->companion = companion;
     }
 }
 
 /* The identifiers of an import statement: the imported name, its `as` alias,
- * and every module segment of the `from` route — each answering for the module
+ * and every module segment of the `from` route, each answering for the module
  * it names, so `from a.b.c` hovers and jumps per segment. A namespace path
- * (`std::`) names no declaration, so its segments are deliberately not offered. */
+ * (`std::`) names no declaration, so its segments are not offered. */
 static void consider_import(FindCtx *c, Decl *d) {
     const char *name = d->import.name;
     Symbol *sym = d->import.resolved_sym;
@@ -1127,11 +958,11 @@ static void find_in_decl(Decl *d, FindCtx *c) {
     if (!d) return;
     /* The merged program holds decls from several files with overlapping line
      * numbers; only descend into the open document's decls. */
-    if (c->file && d->loc.filename && strcmp(d->loc.filename, c->file) != 0) return;
+    if (!decl_in_file(d, c->file)) return;
     switch (d->kind) {
         case DECL_LET:
             if (d->let.name) {
-                int col = let_name_col(c, d->loc.line, d->loc.col, d->let.is_mut);
+                int col = let_name_col(c->idx, c->src, d->loc.line, d->loc.col, d->let.is_mut);
                 consider(c, d->loc.line, col, (int)strlen(d->let.name),
                          d->let.resolved_type, d->let.name, NULL, NO_LOC, d->loc, false);
             }
@@ -1180,8 +1011,8 @@ static void find_in_decls(Decl **decls, int n, FindCtx *c) {
 /* Companion module of a type Symbol: the same-scope DECL_MODULE sharing the
  * type's source name. pass2 stamps this on ident references
  * (ident.companion_module); this recovers it for reference hits that carry
- * only the type symbol — annotations, struct-literal type names,
- * module-member type paths. */
+ * only the type symbol: annotations, struct-literal type names, module-member
+ * type paths. */
 static Symbol *companion_of_type_sym(AnalysisResult *r, Symbol *ts) {
     if (!ts) return NULL;
     if (ts->kind != DECL_STRUCT && ts->kind != DECL_UNION && ts->kind != DECL_ENUM)
@@ -1209,12 +1040,12 @@ static bool locate(LspServer *S, LspDoc *doc, const LineIndex *idx, int line0, i
     c.file = doc->path;
     c.symtab = &r->symtab;
     find_in_decls(r->program->decls, r->program->decl_count, &c);
-    /* A type REFERENCE that didn't come through pass2's ident path (a written
+    /* A type reference that didn't come through pass2's ident path (a written
      * annotation, a struct-literal type name, a module-member path) carries no
      * companion; recover it so every use-site type hover merges the pair.
-     * Declaration-site names deliberately don't merge: a module only becomes
-     * a companion where a reference resolves it as one, so each half's decl
-     * hover shows only its own doc. */
+     * Declaration-site names don't merge: a module only becomes a companion
+     * where a reference resolves it as one, so each half's decl hover shows
+     * only its own doc. */
     if (c.found && !c.companion && c.type_ref_sym) {
         Symbol *m = companion_of_type_sym(r, c.type_ref_sym);
         if (m) c.companion = m;
@@ -1233,8 +1064,8 @@ static bool locate(LspServer *S, LspDoc *doc, const LineIndex *idx, int line0, i
 typedef struct { const char *file; int line, col; const char *msg; } AggDiag;
 
 /* Emit one textDocument/publishDiagnostics for `uri`. `ds`/`n` are the diagnostics
- * for that file (n == 0 clears it — no text needed); `text`/`text_len` supply the
- * bytes used to map 1-based (line, byte-col) locations to LSP (line, UTF-16-char)
+ * for that file (n == 0 clears it and needs no text); `text`/`text_len` supply the
+ * bytes for mapping 1-based (line, byte-col) locations to LSP (line, UTF-16-char)
  * ranges, so it must be the content that was analyzed for this file. */
 static void emit_diagnostics(LspServer *S, const char *uri, const char *text,
                              int text_len, const AggDiag *ds, int n) {
@@ -1249,7 +1080,7 @@ static void emit_diagnostics(LspServer *S, const char *uri, const char *text,
             /* Extend the squiggle over the identifier/token at the location. */
             int end_byte = start_byte;
             while (end_byte < text_len &&
-                   (isalnum((unsigned char)text[end_byte]) || text[end_byte] == '_'))
+                   id_char(text[end_byte]))
                 end_byte++;
             if (end_byte == start_byte) end_byte = start_byte + 1;
             int end_col1 = col1 + (end_byte - start_byte);
@@ -1273,6 +1104,15 @@ static void emit_diagnostics(LspServer *S, const char *uri, const char *text,
     lsp_notify(a, "textDocument/publishDiagnostics", params);
 }
 
+#if !defined(_WIN32)
+/* The directory part of a document path, malloc'd, or NULL when there is none
+ * to search (no '/', or a file directly under the root). */
+static char *doc_dir(const char *path) {
+    const char *slash = strrchr(path, '/');
+    return slash && slash > path ? str_ndup(path, (size_t)(slash - path)) : NULL;
+}
+#endif
+
 /* Walk up from the directory of `doc_path` looking for an `lsp.rsp` response
  * file (the by-convention name the LSP discovers; equivalent to `fcc @lsp.rsp`).
  * Nearest ancestor wins. Returns a malloc'd path (caller frees) or NULL. */
@@ -1281,15 +1121,8 @@ static char *find_lsp_rsp(const char *doc_path) {
     (void)doc_path;
     return NULL;
 #else
-    const char *slash = strrchr(doc_path, '/');
-    if (!slash) return NULL;
-    int dlen = (int)(slash - doc_path);
-    if (dlen <= 0) return NULL;
-    /* Sized to the path rather than capped at 4096: over the cap this silently
-     * returned NULL, so a project nested deeply enough lost lsp.rsp discovery
-     * and fell back to the sibling heuristic with no explanation. */
-    char *dirbuf = str_sprintf("%.*s", dlen, doc_path);
-
+    char *dirbuf = doc_dir(doc_path);
+    if (!dirbuf) return NULL;
     /* Resolve the directory (the file itself may be unsaved/virtual). */
     char *dir = realpath(dirbuf, NULL);
     free(dirbuf);
@@ -1297,10 +1130,7 @@ static char *find_lsp_rsp(const char *doc_path) {
 
     char *result = NULL;
     for (;;) {
-        size_t dn = strlen(dir);
-        char *path = malloc(dn + sizeof("/lsp.rsp"));
-        memcpy(path, dir, dn);
-        memcpy(path + dn, "/lsp.rsp", sizeof("/lsp.rsp"));
+        char *path = str_sprintf("%s/lsp.rsp", dir);
         if (access(path, R_OK) == 0) { result = path; break; }
         free(path);
         char *up = strrchr(dir, '/');
@@ -1321,12 +1151,8 @@ static void collect_sibling_fc(const char *doc_path, char ***out, int *count, in
 #if defined(_WIN32)
     (void)doc_path; (void)out; (void)count; (void)cap;
 #else
-    const char *slash = strrchr(doc_path, '/');
-    if (!slash) return;
-    int dlen = (int)(slash - doc_path);
-    if (dlen <= 0) return;
-    char *dir = str_sprintf("%.*s", dlen, doc_path);
-
+    char *dir = doc_dir(doc_path);
+    if (!dir) return;
     DIR *d = opendir(dir);
     if (!d) { free(dir); return; }
     struct dirent *e;
@@ -1334,8 +1160,6 @@ static void collect_sibling_fc(const char *doc_path, char ***out, int *count, in
         const char *nm = e->d_name;
         size_t l = strlen(nm);
         if (l < 4 || strcmp(nm + l - 3, ".fc") != 0) continue;
-        /* Sized to fit: over the old cap the sibling was silently skipped, so a
-         * deep path quietly shrank the compilation unit. */
         char *full = str_sprintf("%s/%s", dir, nm);
         struct stat st;
         if (strcmp(full, doc_path) != 0 &&                  /* not the open file */
@@ -1349,43 +1173,31 @@ static void collect_sibling_fc(const char *doc_path, char ***out, int *count, in
 #endif
 }
 
-/* Identity of a document's compilation unit, so docs that resolve to the SAME
+/* Identity of a document's compilation unit, so docs that resolve to the same
  * unit are analyzed together, once. Two docs share a unit iff they discover the
- * same `lsp.rsp` (its listed inputs are the unit) or — with no lsp.rsp — live in
+ * same `lsp.rsp` (its listed inputs are the unit) or, with no lsp.rsp, live in
  * the same directory (the sibling-heuristic unit). The `R:`/`D:` prefixes keep an
- * rsp path from ever colliding with a directory path. Caller frees.
+ * rsp path from colliding with a directory path. Caller frees.
  *
  * On Windows the rsp/sibling discovery is compiled out, so each document is its
- * own unit (keyed by its path) — matching the existing per-file behavior there. */
+ * own unit, keyed by its path. */
 static char *unit_key(LspDoc *doc) {
 #if defined(_WIN32)
-    size_t n = strlen(doc->path);
-    char *k = malloc(n + 3);
-    memcpy(k, "F:", 2);
-    memcpy(k + 2, doc->path, n + 1);
-    return k;
+    return str_sprintf("F:%s", doc->path);
 #else
     char *rsp = find_lsp_rsp(doc->path);
     if (rsp) {
         char *c = canon_path(rsp);
         free(rsp);
-        size_t n = strlen(c);
-        char *k = malloc(n + 3);
-        memcpy(k, "R:", 2);
-        memcpy(k + 2, c, n + 1);
+        char *k = str_sprintf("R:%s", c);
         free(c);
         return k;
     }
     /* Directory of doc->path (canonicalized so symlinked spellings coincide). */
-    const char *slash = strrchr(doc->path, '/');
-    int dlen = slash ? (int)(slash - doc->path) : 0;
-    if (dlen <= 0) return dup_cstr(doc->path);   /* no directory: unique key */
-    /* Sized to fit. This string is a *unit key*: over the old cap two documents
-     * in different deep directories both fell back to their own path, splitting
-     * one project into per-file units (and re-analyzing each separately). */
-    char *dirbuf = str_sprintf("%.*s", dlen, doc->path);
-    char *c = canon_path(dirbuf);
-    free(dirbuf);
+    char *dir = doc_dir(doc->path);
+    if (!dir) return str_dup(doc->path);   /* no directory: unique key */
+    char *c = canon_path(dir);
+    free(dir);
     char *k = str_sprintf("D:%s", c);
     free(c);
     return k;
@@ -1396,14 +1208,14 @@ static UnitEntry *unit_find_or_create(LspServer *S, const char *key) {
     UnitEntry *u = unit_find(S, key);
     if (u) return u;
     UnitEntry e = {0};
-    e.key = dup_cstr(key);
+    e.key = str_dup(key);
     DA_APPEND(S->units, S->unit_count, S->unit_cap, e);
     return &S->units[S->unit_count - 1];
 }
 
 /* Drop every unit no open document references any more (all its files closed),
- * freeing its analyses. Their now-absent diagnostics are cleared by the next
- * publish cycle (the URIs fall out of the aggregate and are emptied). */
+ * freeing its analyses. The next publish cycle clears their diagnostics (the
+ * URIs fall out of the aggregate and are emptied). */
 static void unit_prune(LspServer *S) {
     for (int i = 0; i < S->unit_count;) {
         bool used = false;
@@ -1418,207 +1230,218 @@ static void unit_prune(LspServer *S) {
     }
 }
 
+/* The sources and settings one unit analysis merges, with the storage they
+ * borrow from, which must outlive the analyze() call. */
+typedef struct {
+    AnalysisSource *extra;              /* every source but the primary document */
+    int n, cap;
+    char **disk_bufs;                   /* text read from disk for extra[] */
+    int db, dbcap;
+    char **sibs;                        /* sibling paths extra[].filename may point at */
+    int sc, scap;
+    Flag *flags;                        /* conditional-compilation flags */
+    int flag_count, flag_cap;
+    ExpandedArgs rsp_expanded;          /* an lsp.rsp's tokens, which flags borrow */
+    CompileArgs rsp_ca;
+    bool have_rsp;
+    char *rsp_err;                      /* set when an lsp.rsp exists but is unusable */
+    int len_repr;
+} UnitSources;
+
+/* Add a unit member other than the primary document: the live text of `open`,
+ * the editor's buffer for it, else the file at `path` on disk. */
+static void add_member_source(UnitSources *us, LspDoc *open, const char *path) {
+    if (open) {
+        AnalysisSource src = { open->path, open->text, open->text_len };
+        DA_APPEND(us->extra, us->n, us->cap, src);
+        return;
+    }
+    int len;
+    char *buf = read_file(path, &len);
+    if (!buf) return;
+    AnalysisSource src = { path, buf, len };
+    DA_APPEND(us->extra, us->n, us->cap, src);
+    DA_APPEND(us->disk_bufs, us->db, us->dbcap, buf);
+}
+
+/* The unit an lsp.rsp above `doc` defines, as `fcc @lsp.rsp` would compile it:
+ * its inputs, --flags and --len-repr. Returns false when there is none; when
+ * it exists but is unusable, us->rsp_err says why. */
+static bool gather_rsp_sources(LspServer *S, LspDoc *doc, UnitSources *us) {
+    char *rsp_path = find_lsp_rsp(doc->path);
+    if (!rsp_path) return false;
+    /* Sized to the path: a clipped "@..." names a different file (or none),
+     * and args_expand would report that as a broken response file. */
+    char *at = str_sprintf("@%s", rsp_path);
+    char *fake_argv[] = { (char *)"fcc", at };
+    char *aerr = NULL;
+    if (args_expand(2, fake_argv, &us->rsp_expanded, &aerr) &&
+        args_parse(&us->rsp_expanded, &us->rsp_ca)) {
+        us->have_rsp = true;
+        us->flags = us->rsp_ca.flags;
+        us->flag_count = us->rsp_ca.flag_count;
+        us->len_repr = us->rsp_ca.len_repr;
+
+        char *doc_real = canon_path(doc->path);
+        for (int i = 0; i < us->rsp_ca.input_count; i++) {
+            char *in_real = canon_path(us->rsp_ca.inputs[i]);
+            /* The open document arrives as the primary source; never add it
+             * again, and its live buffer must win over the on-disk copy. */
+            if (strcmp(doc_real, in_real) == 0) { free(in_real); continue; }
+            /* Match by canonical path: the rsp spells its inputs file-relative
+             * (`../shared/lib.fc`) while the editor opens the file by its
+             * resolved path, and a raw-spelling miss would feed the on-disk
+             * copy and ignore the buffer's unsaved edits. */
+            LspDoc *od = store_find_by_path(&S->store, in_real);
+            free(in_real);
+            add_member_source(us, od != doc ? od : NULL, us->rsp_ca.inputs[i]);
+        }
+        free(doc_real);
+    } else {
+        /* A broken lsp.rsp must not silently behave as if absent: the caller
+         * falls back to the heuristic, and the reason is surfaced on the open
+         * file. */
+        const char *m = aerr ? aerr : (us->rsp_ca.error ? us->rsp_ca.error : "parse failed");
+        us->rsp_err = str_dup(m);
+        free(aerr);
+        args_compile_free(&us->rsp_ca);
+        args_expand_free(&us->rsp_expanded);
+    }
+    free(at);
+    free(rsp_path);
+    return us->have_rsp;
+}
+
+/* The zero-config unit: host flags, the .fc files beside `doc`, and the stdlib
+ * feed. */
+static void gather_heuristic_sources(LspServer *S, LspDoc *doc, UnitSources *us) {
+    platform_detect_flags(&us->flags, &us->flag_count, &us->flag_cap);
+
+    collect_sibling_fc(doc->path, &us->sibs, &us->sc, &us->scap);
+    for (int i = 0; i < us->sc; i++) {
+        LspDoc *od = store_find_by_path(&S->store, us->sibs[i]);
+        if (od == doc) continue;
+        add_member_source(us, od, us->sibs[i]);
+    }
+
+    /* stdlib feed. Drop any feed file that is the same source as the open
+     * document or a sibling, most commonly because Go To Definition opened a
+     * stdlib module the feed already provides. Analyzing that file twice would
+     * report spurious redefinition errors and waste an analysis.
+     *
+     * A feed entry is a duplicate if it matches a "have" entry by either:
+     *   - canonical absolute path (realpath): the same on-disk file however its
+     *     path was spelled or symlinked, including an open document with unsaved
+     *     edits (the path matches though the buffer differs from disk, and the
+     *     live buffer must win); or
+     *   - byte-identical content: a separate copy of the same source at a
+     *     different path (the repo's stdlib/data.fc while the feed resolves to
+     *     the installed /usr/local/share/.../data.fc). The content check compares
+     *     lengths first, so a full memcmp runs only for a same-length candidate.
+     * Two different files that merely share a basename (a project's own
+     * `data.fc` and the stdlib's) match neither key and are both kept; matching
+     * by basename would shadow `std::data`. */
+    int sib_n = us->n;                              /* siblings precede any feed entries */
+    int have_n = sib_n + 1;
+    char       **have_path = malloc(sizeof *have_path * (size_t)have_n);
+    const char **have_text = malloc(sizeof *have_text * (size_t)have_n);
+    int         *have_len  = malloc(sizeof *have_len  * (size_t)have_n);
+    have_path[0] = canon_path(doc->path);
+    have_text[0] = doc->text;
+    have_len[0]  = doc->text_len;
+    for (int j = 0; j < sib_n; j++) {
+        have_path[1 + j] = canon_path(us->extra[j].filename);
+        have_text[1 + j] = us->extra[j].text;
+        have_len[1 + j]  = us->extra[j].len;
+    }
+
+    for (int i = 0; i < S->stdlib_count; i++) {
+        char *feed_real = canon_path(S->stdlib[i].filename);
+        bool dup = false;
+        for (int j = 0; j < have_n; j++) {
+            if (strcmp(have_path[j], feed_real) == 0 ||
+                (have_len[j] == S->stdlib[i].len &&
+                 memcmp(have_text[j], S->stdlib[i].text,
+                        (size_t)S->stdlib[i].len) == 0)) {
+                dup = true;
+                break;
+            }
+        }
+        free(feed_real);
+        if (!dup) DA_APPEND(us->extra, us->n, us->cap, S->stdlib[i]);
+    }
+    for (int j = 0; j < have_n; j++) free(have_path[j]);
+    free(have_path);
+    free(have_text);
+    free(have_len);
+}
+
+static void unit_sources_free(UnitSources *us) {
+    for (int i = 0; i < us->db; i++) free(us->disk_bufs[i]);
+    free(us->disk_bufs);
+    for (int i = 0; i < us->sc; i++) free(us->sibs[i]);
+    free(us->sibs);
+    free(us->extra);
+    free(us->rsp_err);
+    if (us->have_rsp) {
+        args_compile_free(&us->rsp_ca);      /* frees the flags array */
+        args_expand_free(&us->rsp_expanded); /* frees the tokens flags borrowed */
+    } else {
+        free(us->flags);
+    }
+}
+
 /* (Re)run the analysis for one compilation unit, storing it on `u`. `doc` is the
- * chosen primary document (any open doc in the unit) — the fresh-lexed source;
- * every OTHER open doc in the unit is merged via the extras below using its live
+ * primary document (any open doc in the unit), which analyze() lexes fresh;
+ * every other open doc in the unit is merged as an extra source using its live
  * buffer, so this single analysis serves all of the unit's open documents.
  *
  * The compilation unit comes from one of two sources:
- *   - an `lsp.rsp` response file discovered by walking up from the open file —
- *     authoritative: exactly its listed inputs (plus the open buffer), with no
- *     sibling glob and no blanket stdlib feed, so the editor resolves names
- *     identically to `fcc @lsp.rsp` on the CLI; or
- *   - (no lsp.rsp) the zero-config heuristic: the open file + its sibling .fc
- *     files (open-buffer text preferred over disk) + the full stdlib feed. */
+ *   - an `lsp.rsp` response file discovered by walking up from the open file.
+ *     It is authoritative: its listed inputs (plus the open buffer), with no
+ *     sibling glob and no blanket stdlib feed, so the editor resolves names the
+ *     same way `fcc @lsp.rsp` does on the CLI; or
+ *   - with no lsp.rsp, the zero-config heuristic: the open file, its sibling
+ *     .fc files (open-buffer text preferred over disk), and the stdlib feed. */
 static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
-    /* The previous fresh result is retired below, AFTER the new analysis, so it
+    /* The previous fresh result is retired below, after the new analysis, so it
      * can be kept as last_good when the new one fails to type-check. */
     AnalysisResult *prev = u->result;
 
     /* Membership is rebuilt from this run's sources (see the record below). */
     unit_free_files(u);
 
-    AnalysisSource *extra = NULL;
-    int n = 0, cap = 0;
-    char **disk_bufs = NULL;    /* text buffers read from disk, freed after analyze */
-    int db = 0, dbcap = 0;
-    char **sibs = NULL;         /* sibling paths; some back extra[].filename, so */
-    int sc = 0, scap = 0;       /* they must outlive analyze() (freed at the end) */
-
-    /* Conditional-compilation flags; when from lsp.rsp the `rsp_*` values own the
-     * token storage the flags' name/value pointers borrow, so they must outlive
-     * the analyze() call (freed at the end). */
-    Flag *flags = NULL;
-    int flag_count = 0, flag_cap = 0;
-    ExpandedArgs rsp_expanded = {0};
-    CompileArgs  rsp_ca = {0};
-    bool have_rsp = false;
-    char *rsp_err = NULL;       /* set when an lsp.rsp exists but is unusable */
-
-    /* Default length representation; an lsp.rsp overrides below so editor
-     * capacity diagnostics match what `fcc @lsp.rsp` would report. Reset per
-     * unit — units are analyzed serially, and one project's --len-repr must
-     * not leak into the next. */
-    g_len_repr = 64;
-
-    char *rsp_path = find_lsp_rsp(doc->path);
-    if (rsp_path) {
-        /* Sized to the path: a clipped "@..." names a different file (or none),
-         * and args_expand would report that as a broken response file. */
-        char *at = str_sprintf("@%s", rsp_path);
-        char *fake_argv[] = { (char *)"fcc", at };
-        char *aerr = NULL;
-        if (args_expand(2, fake_argv, &rsp_expanded, &aerr) &&
-            args_parse(&rsp_expanded, &rsp_ca)) {
-            have_rsp = true;
-            flags = rsp_ca.flags;
-            flag_count = rsp_ca.flag_count;
-            g_len_repr = rsp_ca.len_repr;
-
-            char *doc_real = canon_path(doc->path);
-            for (int i = 0; i < rsp_ca.input_count; i++) {
-                char *in_real = canon_path(rsp_ca.inputs[i]);
-                /* The open document arrives as the primary source; never add it
-                 * again, and its live buffer must win over the on-disk copy. */
-                bool is_open = (strcmp(doc_real, in_real) == 0);
-                if (is_open) { free(in_real); continue; }
-                /* Match by canonical path: the rsp spells its inputs file-relative
-                 * (`../shared/sdl2.fc`), the editor opened this one by its resolved
-                 * path — a raw-spelling miss would feed the stale on-disk copy and
-                 * silently ignore the buffer's unsaved edits. */
-                LspDoc *od = store_find_by_path(&S->store, in_real);
-                free(in_real);
-                if (od && od != doc) {              /* open elsewhere: live text */
-                    AnalysisSource s = { od->path, od->text, od->text_len };
-                    DA_APPEND(extra, n, cap, s);
-                } else {                            /* read from disk */
-                    int len;
-                    char *buf = read_whole_file(rsp_ca.inputs[i], &len);
-                    if (!buf) continue;
-                    AnalysisSource s = { rsp_ca.inputs[i], buf, len };
-                    DA_APPEND(extra, n, cap, s);
-                    DA_APPEND(disk_bufs, db, dbcap, buf);
-                }
-            }
-            free(doc_real);
-        } else {
-            /* A broken lsp.rsp must not silently behave as if absent: fall back
-             * to the heuristic but surface the reason on the open file below. */
-            const char *m = aerr ? aerr : (rsp_ca.error ? rsp_ca.error : "parse failed");
-            rsp_err = dup_cstr(m);
-            free(aerr);
-            args_compile_free(&rsp_ca);
-            args_expand_free(&rsp_expanded);
-        }
-        free(at);
-        free(rsp_path);
-    }
-
-    if (!have_rsp) {
-        /* Zero-config heuristic: host flags + sibling .fc files + stdlib feed. */
-        platform_detect_flags(&flags, &flag_count, &flag_cap);
-
-        collect_sibling_fc(doc->path, &sibs, &sc, &scap);
-        for (int i = 0; i < sc; i++) {
-            LspDoc *od = store_find_by_path(&S->store, sibs[i]);
-            if (od == doc) continue;
-            if (od) {                                   /* open in the editor: live text */
-                AnalysisSource s = { od->path, od->text, od->text_len };
-                DA_APPEND(extra, n, cap, s);
-            } else {                                    /* on disk */
-                int len;
-                char *buf = read_whole_file(sibs[i], &len);
-                if (!buf) continue;
-                AnalysisSource s = { sibs[i], buf, len };
-                DA_APPEND(extra, n, cap, s);
-                DA_APPEND(disk_bufs, db, dbcap, buf);
-            }
-        }
-
-        /* stdlib feed. Drop any feed file that is really the SAME source as the open
-         * document or a sibling — most commonly because you followed Go To Definition
-         * into a stdlib module, so the editor opened the very file the feed already
-         * provides. Without this it is analyzed twice => pass1 "redefinition" => pass2
-         * never runs (no diagnostics AND no hover/CodeLens; the error is attributed to
-         * the feed copy and filtered out, so nothing surfaces).
-         *
-         * A feed entry is a duplicate if it matches a "have" entry by EITHER:
-         *   - canonical absolute path (realpath) — the same on-disk file regardless of
-         *     how its path was spelled or symlinked, and crucially for an open document
-         *     with unsaved edits (path matches even though the buffer differs from
-         *     disk, and the live buffer must win); OR
-         *   - byte-identical content — a separate copy of the same source at a
-         *     different path (e.g. opening the repo's stdlib/data.fc while the feed
-         *     resolves to the *installed* /usr/local/share/.../data.fc; the two files
-         *     are identical but their realpaths differ). The content check is gated on
-         *     an equal length first, so a full memcmp runs only for a genuine
-         *     same-length candidate — never for an ordinary edit.
-         * Two DIFFERENT files that merely share a basename — a project's own `data.fc`
-         * vs the stdlib's — match neither key and are correctly kept (basename-matching
-         * would wrongly shadow `std::data`). */
-        int sib_n = n;                              /* siblings precede any feed entries */
-        int have_n = sib_n + 1;
-        char       **have_path = malloc(sizeof *have_path * (size_t)have_n);
-        const char **have_text = malloc(sizeof *have_text * (size_t)have_n);
-        int         *have_len  = malloc(sizeof *have_len  * (size_t)have_n);
-        have_path[0] = canon_path(doc->path);
-        have_text[0] = doc->text;
-        have_len[0]  = doc->text_len;
-        for (int j = 0; j < sib_n; j++) {
-            have_path[1 + j] = canon_path(extra[j].filename);
-            have_text[1 + j] = extra[j].text;
-            have_len[1 + j]  = extra[j].len;
-        }
-
-        for (int i = 0; i < S->stdlib_count; i++) {
-            char *feed_real = canon_path(S->stdlib[i].filename);
-            bool dup = false;
-            for (int j = 0; j < have_n; j++) {
-                if (strcmp(have_path[j], feed_real) == 0 ||
-                    (have_len[j] == S->stdlib[i].len &&
-                     memcmp(have_text[j], S->stdlib[i].text,
-                            (size_t)S->stdlib[i].len) == 0)) {
-                    dup = true;
-                    break;
-                }
-            }
-            free(feed_real);
-            if (!dup) DA_APPEND(extra, n, cap, S->stdlib[i]);
-        }
-        for (int j = 0; j < have_n; j++) free(have_path[j]);
-        free(have_path);
-        free(have_text);
-        free(have_len);
-    }
+    UnitSources us = { .len_repr = 64 };
+    if (!gather_rsp_sources(S, doc, &us))
+        gather_heuristic_sources(S, doc, &us);
 
     /* Record the unit's member set (canonical, so any spelling of a file matches):
-     * every source this analysis merges. flush_dirty consults it so editing a file
-     * that belongs to a unit it does NOT key — the shared `sdl2.fc` two directories
-     * up from the demo whose lsp.rsp lists it — still re-runs that unit, instead of
-     * leaving it serving an AST whose positions no longer match the file. */
+     * every source this analysis merges. flush_dirty consults it so that editing
+     * a file that belongs to a unit it does not key (a shared library another
+     * directory's lsp.rsp lists) still re-runs that unit, instead of leaving it
+     * serving an AST whose positions do not match the file's current text. */
     DA_APPEND(u->files, u->file_count, u->file_cap, canon_path(doc->path));
-    for (int i = 0; i < n; i++)
-        DA_APPEND(u->files, u->file_count, u->file_cap, canon_path(extra[i].filename));
+    for (int i = 0; i < us.n; i++)
+        DA_APPEND(u->files, u->file_count, u->file_cap, canon_path(us.extra[i].filename));
 
-    u->result = analyze(doc->text, doc->text_len, doc->path, extra, n, flags, flag_count,
-                        &S->lex_cache);
+    u->result = analyze(doc->text, doc->text_len, doc->path, us.extra, us.n, us.flags,
+                        us.flag_count, us.len_repr, &S->lex_cache);
 
     /* lsp.rsp existed but couldn't be used: attach one file-level diagnostic so
      * the editor explains the fallback instead of silently differing. */
-    if (rsp_err) {
-        /* rsp_err quotes a path from the response file — unbounded. */
+    if (us.rsp_err) {
+        /* Sized to the message: rsp_err quotes a path from the response file. */
         Diagnostic d;
         d.loc = (SrcLoc){ .filename = u->result->filename, .line = 1, .col = 1 };
-        d.message = arena_sprintf(&u->result->arena, "lsp.rsp ignored: %s", rsp_err);
+        d.message = arena_sprintf(&u->result->arena, "lsp.rsp ignored: %s", us.rsp_err);
         DA_APPEND(u->result->diags, u->result->diag_count, u->result->diag_cap, d);
-        free(rsp_err);
     }
 
     /* Retain the last analysis that type-checked. When the fresh one is good it
-     * becomes the new last_good (and the previous good copy is freed); when it is
-     * degraded (parse abort or pass1-gated pass2) we hold onto the prior good one
-     * so type-aware queries keep answering. prev/last_good may alias, hence the
-     * !=-guarded frees so nothing is freed twice or while still in use. */
+     * becomes the new last_good (and the previous good copy is freed); when it
+     * is degraded (a lexer abort, so nothing was type-checked) the prior good
+     * one is kept so type-aware queries keep answering. prev and last_good may
+     * alias, hence the !=-guarded frees. */
     if (u->result->typed) {
         if (u->last_good && u->last_good != prev) analysis_free(u->last_good);
         u->last_good = u->result;
@@ -1627,33 +1450,23 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
         if (prev && prev != u->last_good) analysis_free(prev);
     }
 
-    for (int i = 0; i < db; i++) free(disk_bufs[i]);
-    free(disk_bufs);
-    for (int i = 0; i < sc; i++) free(sibs[i]);
-    free(sibs);
-    free(extra);
-    if (have_rsp) {
-        args_compile_free(&rsp_ca);     /* frees the flags array */
-        args_expand_free(&rsp_expanded); /* frees the tokens flags borrowed */
-    } else {
-        free(flags);
-    }
+    unit_sources_free(&us);
     /* Diagnostics are published project-wide once per flush cycle (see
      * publish_project_diagnostics), not per-document here. */
 }
 
-/* Publish diagnostics for EVERY file in the project — open buffer or not — so an
+/* Publish diagnostics for every file in the project, open buffer or not, so an
  * edit that breaks (or fixes) a file the user has not opened still surfaces (or
  * clears) there, and errors cascade to all dependent files. Each unit analysis
- * computes diagnostics for every file in its unit, keyed by filename; here we
- * aggregate those across all units (deduped, in case units overlap), then emit one
- * notification per file's URI. Files that went clean, dropped out of the unit, or
- * were closed are cleared with an explicit empty publish, diffed against
- * S->pub_uris (the set we last published NON-EMPTY).
+ * computes diagnostics for every file in its unit, keyed by filename; these are
+ * aggregated across all units (deduped, since units may overlap), then emitted
+ * as one notification per file's URI. Files that went clean, dropped out of the
+ * unit, or were closed are cleared with an explicit empty publish, diffed
+ * against S->pub_uris (the set last published non-empty).
  *
  * stdlib feed files are never surfaced: presumed clean, not the user's code, and
- * often under a read-only install path. (A stdlib file the user actually OPENED is
- * a normal document, found by store_find_by_path, and handled as one.) */
+ * often under a read-only install path. A stdlib file the user opened is a
+ * normal document, found by store_find_by_path, and handled as one. */
 static void publish_project_diagnostics(LspServer *S) {
     /* 1. Aggregate + dedup diagnostics across every unit's fresh analysis, keyed
      *    by file. */
@@ -1687,7 +1500,7 @@ static void publish_project_diagnostics(LspServer *S) {
     }
 
     /* 2. One notification per distinct errored file; collect its URI into the new
-     *    NON-EMPTY set `now`. */
+     *    non-empty set `now`. */
     char **now = NULL;
     int now_n = 0, now_cap = 0;
     for (int i = 0; i < an; i++) {
@@ -1711,20 +1524,20 @@ static void publish_project_diagnostics(LspServer *S) {
             text = od->text;
             tlen = od->text_len;
         } else {                                   /* not open: read from disk */
-            owned = read_whole_file(file, &tlen);
+            owned = read_file(file, &tlen);
             text = owned;
         }
         if (text) {                                /* (a deleted non-open file is skipped
                                                     * here and cleared via step 4) */
             emit_diagnostics(S, uri, text, tlen, fd, fn);
-            DA_APPEND(now, now_n, now_cap, dup_cstr(uri));
+            DA_APPEND(now, now_n, now_cap, str_dup(uri));
         }
         free(owned);
         free(uri);
         free(fd);
     }
 
-    /* 3. Every OPEN document must be (re)published each cycle: one with no
+    /* 3. Every open document is (re)published each cycle: one with no
      *    diagnostics needs an explicit empty publish to clear a prior squiggle. */
     for (int d = 0; d < S->store.count; d++) {
         const char *uri = S->store.docs[d].uri;
@@ -1734,8 +1547,8 @@ static void publish_project_diagnostics(LspServer *S) {
         if (!in_now) emit_diagnostics(S, uri, "", 0, NULL, 0);
     }
 
-    /* 4. Clear any file we published NON-EMPTY last cycle that is neither errored
-     *    now nor an open doc already cleared in step 3. */
+    /* 4. Clear any file published non-empty last cycle that is neither errored
+     *    in this cycle nor an open doc already cleared in step 3. */
     for (int p = 0; p < S->pub_count; p++) {
         const char *uri = S->pub_uris[p];
         bool in_now = false;
@@ -1748,7 +1561,7 @@ static void publish_project_diagnostics(LspServer *S) {
         if (!is_open) emit_diagnostics(S, uri, "", 0, NULL, 0);
     }
 
-    /* 5. Adopt the new NON-EMPTY set. */
+    /* 5. Adopt the new non-empty set. */
     for (int p = 0; p < S->pub_count; p++) free(S->pub_uris[p]);
     free(S->pub_uris);
     S->pub_uris = now;
@@ -1758,29 +1571,42 @@ static void publish_project_diagnostics(LspServer *S) {
     free(agg);
 }
 
+/* The document a unit's analysis runs with as its primary source: the first
+ * open document bearing its key (the unit's other open documents are merged
+ * live, so the choice only decides where unlocated diagnostics land). */
+static LspDoc *primary_doc_for(LspServer *S, const char *key) {
+    for (int p = 0; p < S->store.count; p++)
+        if (S->store.docs[p].unit_key && strcmp(S->store.docs[p].unit_key, key) == 0)
+            return &S->store.docs[p];
+    return NULL;
+}
+
+static bool key_in(const char **keys, int n, const char *key) {
+    for (int j = 0; j < n; j++)
+        if (strcmp(keys[j], key) == 0) return true;
+    return false;
+}
+
 /* Re-analyze every compilation unit that has a changed document, then publish
  * diagnostics project-wide. Called when the input queue drains and before
- * answering any type-aware request, so deferred edits are realized exactly once
- * per quiet point — collapsing a burst of keystrokes into a single analysis.
+ * answering any type-aware request, so deferred edits are realized once per
+ * quiet point and a burst of keystrokes collapses into a single analysis.
  *
- * A change in one file can create OR clear errors in another file that references
- * it — e.g. editing a shared `prelude.fc` that `main.fc` imports — so the WHOLE
- * unit must be re-analyzed, not just the edited file. But because one analysis of
- * a unit already merges every open document's *live* buffer, we analyze each unit
- * ONCE (with any of its open docs as the fresh primary), not once per open tab:
- * N tabs of the same project cost one analysis, not N. Only units containing a
- * dirty doc are re-run; untouched units keep their result. publish_project_
- * diagnostics then surfaces every unit's result on all its files, open or not.
+ * A change in one file can create or clear errors in another file that
+ * references it (a shared `prelude.fc` that `main.fc` imports), so the whole
+ * unit is re-analyzed, not just the edited file. One analysis of a unit already
+ * merges every open document's live buffer, so each unit is analyzed once
+ * (with any of its open docs as the primary), not once per open tab. Only
+ * units containing a dirty doc are re-run; untouched units keep their result.
  *
- * "Containing" is MEMBERSHIP, not key equality. A document keys the unit it would
- * open on its own, but an lsp.rsp reaches across directories, so one file is
- * routinely a member of units it does not key: `demos/shared/sdl2.fc` keys its own
- * directory while `demos/fibbles/lsp.rsp` and `demos/face-invaders/lsp.rsp` both
- * list it. Re-running only the editor's key-matched unit leaves those serving an
- * analysis of the file's previous revision — with the file's CURRENT text read at
- * query time, so a hover resolves a stale declaration line against fresh source
- * and reads the wrong lines (a moved doc comment simply vanishes) until the server
- * restarts. So the second pass below re-runs every unit that lists a dirty file. */
+ * "Containing" means membership, not key equality. A document keys the unit it
+ * would form on its own, but an lsp.rsp reaches across directories, so a shared
+ * file is routinely a member of units it does not key (a library directory
+ * listed by several programs' lsp.rsp files). A unit that is not re-run keeps
+ * serving an analysis of the file's previous revision while queries read the
+ * file's current text, so a hover would resolve a stale declaration line
+ * against fresh source. The second pass below therefore re-runs every unit
+ * that lists a dirty file. */
 static void flush_dirty(LspServer *S) {
     bool any_dirty = false;
     for (int i = 0; i < S->store.count; i++)
@@ -1798,40 +1624,26 @@ static void flush_dirty(LspServer *S) {
         S->store.docs[i].real = r;
     }
 
-    /* Analyze each DIRTY unit once. A unit is dirty if any of its docs changed;
-     * the primary is the first open doc bearing that key (every other open doc in
-     * the unit is merged live, so the choice only affects which file NULL-located
-     * diagnostics default to). `done` guards against analyzing a unit twice when
-     * several of its docs are dirty. */
+    /* Analyze each dirty unit once. A unit is dirty if any of its docs changed;
+     * `done` guards against analyzing a unit twice when several of its docs
+     * are dirty. */
     const char **done = NULL;
     int dn = 0, dcap = 0;
     for (int i = 0; i < S->store.count; i++) {
         if (!S->store.docs[i].dirty) continue;
         const char *key = S->store.docs[i].unit_key;
-        bool seen = false;
-        for (int j = 0; j < dn; j++)
-            if (strcmp(done[j], key) == 0) { seen = true; break; }
-        if (seen) continue;
+        if (key_in(done, dn, key)) continue;
         DA_APPEND(done, dn, dcap, key);
-
-        LspDoc *primary = NULL;
-        for (int p = 0; p < S->store.count; p++)
-            if (S->store.docs[p].unit_key &&
-                strcmp(S->store.docs[p].unit_key, key) == 0) { primary = &S->store.docs[p]; break; }
-        if (!primary) continue;                 /* unreachable: doc i has this key */
-        analyze_unit(S, unit_find_or_create(S, key), primary);
+        analyze_unit(S, unit_find_or_create(S, key), primary_doc_for(S, key));
     }
 
-    /* Then every OTHER existing unit that LISTS a dirty file among its sources (see
-     * the header note). Indexed, not pointer-held: the pass above may have grown
-     * S->units. A unit only exists while some open doc keys it, so a primary is
-     * always found. */
+    /* Then every other existing unit that lists a dirty file among its sources
+     * (see the comment above this function). Indexed, not pointer-held: the pass
+     * above may have grown S->units. A unit only exists while some open doc keys
+     * it, so a primary is always found. */
     for (int ui = 0; ui < S->unit_count; ui++) {
         const char *key = S->units[ui].key;
-        bool seen = false;
-        for (int j = 0; j < dn; j++)
-            if (strcmp(done[j], key) == 0) { seen = true; break; }
-        if (seen) continue;
+        if (key_in(done, dn, key)) continue;
 
         bool touched = false;
         for (int i = 0; i < S->store.count && !touched; i++)
@@ -1839,10 +1651,7 @@ static void flush_dirty(LspServer *S) {
                       unit_has_file(&S->units[ui], S->store.docs[i].real);
         if (!touched) continue;
 
-        LspDoc *primary = NULL;
-        for (int p = 0; p < S->store.count; p++)
-            if (S->store.docs[p].unit_key &&
-                strcmp(S->store.docs[p].unit_key, key) == 0) { primary = &S->store.docs[p]; break; }
+        LspDoc *primary = primary_doc_for(S, key);
         if (!primary) continue;
         DA_APPEND(done, dn, dcap, key);
         analyze_unit(S, &S->units[ui], primary);
@@ -1855,11 +1664,11 @@ static void flush_dirty(LspServer *S) {
     publish_project_diagnostics(S);
 }
 
-/* True if more input is already waiting, so we should keep reading (and coalesce)
- * rather than analyze now. Relies on stdin being unbuffered (see lsp_main): with
- * no stdio read-ahead, a poll at the fd level reflects the true pending state.
- * On Windows we can't poll stdin portably, so report "nothing pending" — every
- * message then flushes immediately, i.e. the original un-coalesced behavior. */
+/* True if more input is already waiting, so the loop should keep reading (and
+ * coalesce) rather than analyze. Relies on stdin being unbuffered (see
+ * lsp_main): with no stdio read-ahead, a poll at the fd level reflects the true
+ * pending state. Windows has no portable way to poll stdin, so it reports
+ * "nothing pending" and every message flushes immediately, without coalescing. */
 static bool input_pending(void) {
 #if defined(_WIN32)
     return false;
@@ -1882,7 +1691,7 @@ static void handle_did_open(LspServer *S, JsonValue *params) {
     LspDoc *doc = store_find(&S->store, uri);
     if (!doc) {
         LspDoc nd = {0};
-        nd.uri = dup_cstr(uri);
+        nd.uri = str_dup(uri);
         nd.path = uri_to_path(uri);
         nd.real = canon_path(nd.path);   /* refreshed each flush; see flush_dirty */
         DA_APPEND(S->store.docs, S->store.count, S->store.cap, nd);
@@ -1890,13 +1699,9 @@ static void handle_did_open(LspServer *S, JsonValue *params) {
     } else {
         free(doc->text);
     }
-    JsonValue *tdv = json_get(td, "version");
-    doc->version = (tdv && tdv->kind == JSON_NUMBER) ? (long)tdv->num : 0;
     JsonValue *tv = json_get(td, "text");
     doc->text_len = (tv && tv->kind == JSON_STRING) ? tv->str.len : (int)strlen(text);
-    doc->text = malloc((size_t)doc->text_len + 1);
-    memcpy(doc->text, text, (size_t)doc->text_len);
-    doc->text[doc->text_len] = '\0';
+    doc->text = str_ndup(text, (size_t)doc->text_len);
 
     doc->dirty = true;   /* analyzed at the next idle flush (see lsp_main) */
 }
@@ -1918,12 +1723,7 @@ static void handle_did_change(LspServer *S, JsonValue *params) {
 
     free(doc->text);
     doc->text_len = tv->str.len;
-    doc->text = malloc((size_t)doc->text_len + 1);
-    memcpy(doc->text, tv->str.s, (size_t)doc->text_len);
-    doc->text[doc->text_len] = '\0';
-
-    JsonValue *vv = json_get(td, "version");
-    if (vv && vv->kind == JSON_NUMBER) doc->version = (long)vv->num;
+    doc->text = str_ndup(tv->str.s, (size_t)doc->text_len);
 
     doc->dirty = true;   /* analyzed at the next idle flush (see lsp_main) */
 }
@@ -1945,17 +1745,17 @@ static void handle_did_close(LspServer *S, JsonValue *params) {
     if (!removed) return;
 
     if (S->store.count > 0) {
-        /* The closed file may still be a unit member on disk — its last-saved
-         * content is now authoritative (any unsaved edits are discarded). Re-analyze
+        /* The closed file may still be a unit member on disk, whose last-saved
+         * content becomes authoritative (unsaved edits are discarded). Re-analyze
          * the remaining open documents so its diagnostics reflect disk, then
          * republish project-wide: a still-broken dependency keeps its error; a
-         * now-clean or no-longer-referenced file is cleared by the publish cycle.
-         * (Marking all dirty re-runs each affected unit once — cheap; close is rare.) */
+         * clean or unreferenced file is cleared by the publish cycle. Marking
+         * every doc dirty re-runs each affected unit once, and close is rare. */
         for (int i = 0; i < S->store.count; i++) S->store.docs[i].dirty = true;
         flush_dirty(S);
     } else {
         /* Last document closed: nothing anchors the project view, so drop every
-         * unit and clear every URI we published (incl. the just-closed file's). */
+         * unit and clear every URI published (including the closed file's). */
         unit_prune(S);              /* no docs remain -> frees all unit analyses */
         for (int p = 0; p < S->pub_count; p++)
             emit_diagnostics(S, S->pub_uris[p], "", 0, NULL, 0);
@@ -1970,11 +1770,11 @@ static void handle_did_close(LspServer *S, JsonValue *params) {
 /* ======================================================================== */
 /* Doc comments (hover)                                                      */
 /*                                                                          */
-/* FC has no structured doc-comment syntax; the lexer discards comments. So  */
-/* the server reads them straight from source text at the definition site:   */
-/* the contiguous run of `//` lines immediately above a definition (the way  */
-/* a reader documents a `let`/`struct`/`union`/field), plus, for a struct or */
-/* union field, a `//` trailing the field's own line.                        */
+/* FC has no structured doc-comment syntax and the lexer discards comments,  */
+/* so the server reads them from source text at the definition site: the    */
+/* contiguous run of `//` lines directly above a definition (a `let`,       */
+/* `struct`, `union` or field), plus, for a struct or union field, a `//`    */
+/* trailing the field's own line.                                           */
 /* ======================================================================== */
 
 /* Resolve the source text + length for `path`: the open document, then any
@@ -1990,7 +1790,7 @@ static const char *doc_file_text(LspServer *S, LspDoc *doc, const char *path,
     }
     LspDoc *od = store_find_by_path(&S->store, path);
     if (od) { *out_len = od->text_len; return od->text; }
-    char *buf = read_whole_file(path, out_len);
+    char *buf = read_file(path, out_len);
     if (!buf) return NULL;
     *out_owned = true;
     return buf;
@@ -2082,6 +1882,20 @@ static char *extract_doc_comment(Arena *a, const char *text, int text_len,
 /* Handlers: hover / definition                                             */
 /* ======================================================================== */
 
+/* The doc comment at `site`, which may be in another file than the open `doc`
+ * (a sibling or the stdlib): read whichever buffer backs it, reusing the open
+ * document's line index `idx` when the site is in it. */
+static char *doc_comment_at(LspServer *S, LspDoc *doc, const LineIndex *idx, Arena *a,
+                            SrcLoc site, bool is_field) {
+    int flen = 0; bool owned = false;
+    const char *ftext = doc_file_text(S, doc, site.filename, &flen, &owned);
+    if (!ftext) return NULL;
+    LineIndex fidx = (ftext == doc->text) ? *idx : line_index_build(a, ftext, flen);
+    char *md = extract_doc_comment(a, ftext, flen, &fidx, site.line, is_field);
+    if (owned) free((void *)ftext);
+    return md;
+}
+
 static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
     Arena *a = &S->msg_arena;
     JsonValue *td = json_get(params, "textDocument");
@@ -2095,7 +1909,7 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
     if (!doc) { lsp_reply(a, id, json_null(a)); return; }
     LineIndex idx = line_index_build(a, doc->text, doc->text_len);
     FindCtx hit;
-    /* type_ref_sym alone is enough to render: a MODULE symbol carries no value
+    /* type_ref_sym alone is enough to render: a module symbol carries no value
      * type, but its declaration-form header (`module io`) is the whole hover. */
     if (!locate(S, doc, &idx, (int)line, (int)ch, &hit) ||
         (!hit.type && !hit.builtin && !hit.decl_site && !hit.type_ref_sym)) {
@@ -2116,32 +1930,22 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
                                 bd->sig, bd->doc, rt)
                 : arena_sprintf(a, "```fc\n%s\n```\n\n%s", bd->sig, bd->doc);
     } else {
-        /* Doc comment at the definition site. The site may live in another file (a
-         * sibling or the stdlib), so read whichever buffer backs it; reuse the open
-         * doc's line index when the site is in the open file. */
+        /* Doc comment at the definition site. */
         char *doc_md = NULL;
         if (!hit.no_doc) {
             SrcLoc site = NO_LOC; bool site_is_field = false;
             if (hit.doc_loc.line > 0)          { site = hit.doc_loc; site_is_field = hit.doc_is_field; }
             else if (hit.def_loc.line > 0)     { site = hit.def_loc; }
             else if (hit.sym && hit.sym->decl) { site = hit.sym->decl->loc; }
-            if (site.line > 0) {
-                int flen = 0; bool owned = false;
-                const char *ftext = doc_file_text(S, doc, site.filename, &flen, &owned);
-                if (ftext) {
-                    LineIndex fidx = (ftext == doc->text) ? idx
-                                   : line_index_build(a, ftext, flen);
-                    doc_md = extract_doc_comment(a, ftext, flen, &fidx, site.line, site_is_field);
-                    if (owned) free((void *)ftext);
-                }
-            }
+            if (site.line > 0)
+                doc_md = doc_comment_at(S, doc, &idx, a, site, site_is_field);
         }
 
         const char *nm = hit.name ? hit.name : "";
 
         if (hit.type_ref_sym || hit.decl_site) {
-            /* The hovered token names a TYPE or MODULE, not a value: render a
-             * declaration-form header (`enum dir of i32`, `module sfx`) instead
+            /* The hovered token names a type or module, not a value: render a
+             * declaration-form header (`enum dir of i32`, `module io`) instead
              * of the value form `name: type`. When the name is one half of a
              * companion pair, append the module's doc as a second, labeled
              * section so both halves of the pair read as one hover. */
@@ -2165,27 +1969,14 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
             /* Companion module's doc, read at its own declaration line. */
             char *comp_md = NULL;
             if (hit.companion && hit.companion->decl &&
-                hit.companion->decl->loc.line > 0) {
-                SrcLoc csite = hit.companion->decl->loc;
-                int flen = 0; bool owned = false;
-                const char *ftext = doc_file_text(S, doc, csite.filename, &flen, &owned);
-                if (ftext) {
-                    LineIndex fidx = (ftext == doc->text) ? idx
-                                   : line_index_build(a, ftext, flen);
-                    comp_md = extract_doc_comment(a, ftext, flen, &fidx, csite.line, false);
-                    if (owned) free((void *)ftext);
-                }
-            }
+                hit.companion->decl->loc.line > 0)
+                comp_md = doc_comment_at(S, doc, &idx, a, hit.companion->decl->loc, false);
 
             if (hit.companion) {
-                /* Render the module half whenever the pair exists — a companion
+                /* Render the module half whenever the pair exists: a companion
                  * without its own doc comment still gets its `module name`
-                 * fence, so the pairing itself is always visible. A rule
-                 * separates the pair's sections. Drawn with U+2500 text
-                 * rather than markdown `---`: VSCode colors a markdown <hr>
-                 * with the theme's editorHoverWidget.border, which is
-                 * invisible in themes that draw borderless hovers. */
-                #define HOVER_RULE "────────────────────────────────"
+                 * fence, so the pairing itself is always visible. HOVER_RULE
+                 * (builtin_docs.inc) separates the two sections. */
                 char *comp_sec = comp_md
                     ? arena_sprintf(a, HOVER_RULE "\n\n```fc\nmodule %s\n```\n\n%s",
                                     nm, comp_md)
@@ -2251,9 +2042,9 @@ static void handle_definition(LspServer *S, JsonValue *id, JsonValue *params) {
     int dline = dl.line > 0 ? dl.line : 1;
     int dcol  = dl.col  > 0 ? dl.col  : 1;
 
-    /* Map the definition location through the right file's text: same file uses
-     * the live doc text; other files (stdlib) fall back to a trivial byte=col
-     * mapping (good enough — those are ASCII). */
+    /* Map the definition location through the right file's text: the open file
+     * uses its live text; another file (a sibling, the stdlib) takes the byte
+     * column as the UTF-16 column, which is correct for ASCII lines. */
     int dl0, dc0;
     if (strcmp(def_path, doc->path) == 0) {
         loc_to_lsp(&idx, doc->text, dline, dcol, &dl0, &dc0);
@@ -2272,7 +2063,7 @@ static void handle_definition(LspServer *S, JsonValue *id, JsonValue *params) {
 }
 
 /* ======================================================================== */
-/* Handler: CodeLens (inferred type shown above each binding)               */
+/* Handlers: CodeLens and inlay hints (each binding's inferred type)        */
 /* ======================================================================== */
 
 typedef struct {
@@ -2292,8 +2083,7 @@ static int name_end_col(const LineIndex *idx, const char *src, int line, int nam
     int i = off;
     while (i < idx->len) {
         char ch = src[i];
-        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-            (ch >= '0' && ch <= '9') || ch == '_') i++;
+        if (id_char(ch)) i++;
         else break;
     }
     return (i - idx->starts[line - 1]) + 1;
@@ -2303,11 +2093,11 @@ static void lens_emit(LensCtx *lc, int let_line, int let_col, bool is_mut,
                       Type *type, bool init_is_lambda) {
     if (!type) return;
     const char *title;
-    /* For a lambda binding the parameter types are written explicitly at the
-     * definition site, so the only new information is the inferred return type:
-     * render `:-> ret`. Everything else — including a plain function-reference
-     * binding (`let f = g`), whose params are NOT visible here — shows the full
-     * type. Hover is unaffected and always reports the full type. */
+    /* For a lambda binding the parameter types are written at the definition
+     * site, so the only new information is the inferred return type: render
+     * `:-> ret`. Everything else, including a plain function-reference binding
+     * (`let f = g`) whose params are not visible here, shows the full type.
+     * Hover always reports the full type. */
     if (init_is_lambda && type->kind == TYPE_FUNC && type->func.return_type) {
         /* Inline keeps a space after the colon to match the plain `: T` hints
          * (`let f: -> ret`); the standalone CodeLens reads fine tight (`:-> ret`). */
@@ -2317,10 +2107,7 @@ static void lens_emit(LensCtx *lc, int let_line, int let_col, bool is_mut,
         title = arena_sprintf(lc->a, ": %s", type_name(type));
     }
 
-    FindCtx fc = {0};
-    fc.idx = lc->idx;
-    fc.src = lc->src;
-    int name_col = let_name_col(&fc, let_line, let_col, is_mut);
+    int name_col = let_name_col(lc->idx, lc->src, let_line, let_col, is_mut);
 
     if (lc->inlay) {
         /* Hint sits just after the binding name: `let x` -> `let x: T`. */
@@ -2363,7 +2150,7 @@ static void lens_decls(Decl **decls, int n, LensCtx *lc) {
         Decl *d = decls[i];
         if (!d) continue;
         /* skip decls merged in from stdlib / other files */
-        if (lc->file && d->loc.filename && strcmp(d->loc.filename, lc->file) != 0) continue;
+        if (!decl_in_file(d, lc->file)) continue;
         if (d->kind == DECL_LET) {
             lens_emit(lc, d->loc.line, d->loc.col, d->let.is_mut, d->let.resolved_type,
                       d->let.init && d->let.init->kind == EXPR_FUNC);
@@ -2422,7 +2209,8 @@ static void handle_inlayhint(LspServer *S, JsonValue *id, JsonValue *params) {
 /* ======================================================================== */
 
 static const char *KEYWORDS[] = {
-    /* mirrors lexer.c keyword set + builtins + primitive type names */
+    /* The lexer's keywords (check_keyword in lexer.c) and the primitive type
+     * names. Not derived from the lexer: a new keyword must be added here too. */
     "let", "mut", "struct", "union", "enum", "module", "namespace", "import", "from",
     "as", "extern", "private", "match", "with", "when", "if", "then", "else",
     "for", "in", "loop", "do", "break", "continue", "return", "defer", "ignore", "some",
@@ -2449,6 +2237,27 @@ static void add_item(Arena *a, JsonValue *arr, const char *label, int kind,
     json_array_push(a, arr, it);
 }
 
+/* A union's variants, or an enum's variants and its `count` property (a
+ * declared `count` variant takes the name, as it does in pass2). Returns
+ * whether `t` was a union or an enum. */
+static bool add_variant_members(Arena *a, JsonValue *arr, Type *t) {
+    if (t->kind == TYPE_UNION) {
+        for (int i = 0; i < t->unio.variant_count; i++)
+            add_item(a, arr, t->unio.variants[i].name, CIK_ENUMMEMBER, NULL);
+        return true;
+    }
+    if (t->kind != TYPE_ENUM) return false;
+    bool has_count_variant = false;
+    for (int i = 0; i < t->enu.variant_count; i++) {
+        add_item(a, arr, t->enu.variants[i].name, CIK_ENUMMEMBER, NULL);
+        if (strcmp(t->enu.variants[i].name, "count") == 0)
+            has_count_variant = true;
+    }
+    if (!has_count_variant)
+        add_item(a, arr, "count", CIK_FIELD, "i32");
+    return true;
+}
+
 static int sym_kind_to_cik(const Symbol *s) {
     switch (s->kind) {
         case DECL_MODULE: return CIK_MODULE;
@@ -2461,15 +2270,13 @@ static int sym_kind_to_cik(const Symbol *s) {
     }
 }
 
-/* pass1 registers every struct/union type a SECOND time under its mangled C
- * name — file-scope `fc__x`, module-scoped `mod__x` — so canonicalized type
- * stubs resolve directly (see register_struct_sym / register_module_members in
- * pass1.c). That twin's symbol name IS the type's mangled name, whereas the
- * user-facing entry is keyed by the source name. These twins are never writable
- * as bare identifiers, so completion must skip them — otherwise it offers
- * `vgagraph__huffnode` (and twice over, since the module-member table holds both
- * keys and both register into the global symtab). Pointer compare: names are
- * interned. */
+/* pass1 registers every struct, union and enum type a second time under its
+ * mangled C name (`fc__x` at file scope, `fc__mod__x` in a module) so
+ * canonicalized type stubs resolve directly (see register_type_decl in
+ * pass1.c). That twin's symbol name is the type's mangled name, while the
+ * user-facing entry is keyed by the source name. A twin can never be written
+ * as a bare identifier, so completion skips it. Names are interned, so a
+ * pointer compare suffices. */
 static bool sym_is_mangled_type_twin(const Symbol *s) {
     if (!s->type) return false;
     if (s->kind == DECL_STRUCT && s->type->kind == TYPE_STRUCT)
@@ -2494,7 +2301,9 @@ static void emit_module_members(Arena *a, JsonValue *arr, Symbol *mod) {
     }
 }
 
-/* Peel option/pointer one level to reach a struct/union for member access. */
+/* Peel options, results and pointers (up to four layers) to reach the struct,
+ * union or enum a member access applies to. Returns the first type that is
+ * none of those wrappers. */
 static Type *peel_to_aggregate(Type *t) {
     for (int i = 0; t && i < 4; i++) {
         if (t->kind == TYPE_STRUCT || t->kind == TYPE_UNION ||
@@ -2559,11 +2368,11 @@ static void harvest_expr(Expr *e, void *list) {
     expr_for_each_child(e, harvest_expr, list);
 }
 
-/* Member completion after '.' / '::': resolve the node just left of the dot. */
 /* Synthetic, type-level properties of a primitive numeric type name accessed
- * like a module: i32.min/max/bits, f64.nan/inf/neg_inf/epsilon, etc. Mirrors
- * resolve_type_property() in pass2.c. Returns true iff `tn` is an integer/float
- * type (the object was a numeric type name), so the caller stops here. */
+ * like a module: i32.min/max/bits, f64.nan/inf/neg_inf/epsilon, etc. The list
+ * should match what type_property_c (types.c) accepts. Returns true iff `tn` is
+ * an integer/float type (the object was a numeric type name), so the caller
+ * stops here. */
 static bool complete_type_properties(Arena *a, JsonValue *arr, Type *tn) {
     if (!tn) return false;
     bool is_int = type_is_integer(tn), is_float = type_is_float(tn);
@@ -2583,10 +2392,11 @@ static bool complete_type_properties(Arena *a, JsonValue *arr, Type *tn) {
 
 /* Member completion after '.' or '::'. `dot_byte` is the position of the
  * operator's first char; the object expression ends at dot_byte-1. Offers, by
- * object kind: a numeric type name's properties; module members; a slice's
- * len/ptr; an option's is_some/is_none; a struct's fields; a union's
- * variants. A '.' on a pointer auto-derefs one level to the pointee struct's
- * members. */
+ * object kind: a numeric type name's properties; module members; a type
+ * name's companion-module members and variants; a slice's len/ptr; an
+ * option's is_some/is_none; a result's is_ok/is_err; a struct's fields; a
+ * union's or enum's variants. A '.' on a pointer auto-derefs one level to the
+ * pointee's members. */
 static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
                              int dot_byte, JsonValue *arr) {
     Arena *a = &S->msg_arena;
@@ -2594,21 +2404,21 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
     if (anchor < 0) return false;
 
     /* Numeric type-name properties (i32.max, f64.nan). The object before a '.'
-     * is a reserved type keyword — never a binding — so read it from source
+     * is a reserved type keyword, never a binding, so read it from source
      * without resolving a node. */
     const char *txt = doc->text;
     int s = anchor;
-    while (s >= 0 && (isalnum((unsigned char)txt[s]) || txt[s] == '_')) s--;
+    while (s >= 0 && id_char(txt[s])) s--;
     s++;
     if (anchor >= s)
         if (complete_type_properties(a, arr, type_from_name(txt + s, anchor - s + 1)))
             return true;
 
     /* One AST walk resolves two things: the anchor node (the object's last char,
-     * for simple `a.b` / `::` paths) and — via the op-position hook — the field
-     * node at the operator, whose `field.object` gives the object type for ANY
-     * shape (`dict[i]`, `f()`, nested), which the anchor can't when the object
-     * ends in `]`/`)`. */
+     * for simple `a.b` / `::` paths) and, via the op-position hook, the field
+     * node at the operator, whose `field.object` gives the object type for any
+     * shape (`dict[i]`, `f()`, nested); the anchor can't when the object ends
+     * in `]` or `)`. */
     int line0 = 0;
     for (int i = 0; i < idx->count; i++)
         if (idx->starts[i] <= anchor) line0 = i; else break;
@@ -2629,11 +2439,11 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
 
     Expr *obj = c.op_field ? c.op_field->field.object : NULL;
 
-    /* Module members ('.'/'::'): the object resolves to a module — the anchor
-     * landed on the module name ('::' paths, simple `mod.`), or the field node's
-     * object is a module-typed ident or a nested `a.b` module member. (A union
-     * with a companion module keeps its variants below: resolved_sym is the
-     * union, not the module, so `mod` stays NULL here.) */
+    /* Module members ('.'/'::'): the object resolves to a module. Either the
+     * anchor landed on the module name ('::' paths, simple `mod.`), or the
+     * field node's object is a module-typed ident or a nested `a.b` module
+     * member. (A union with a companion module keeps its variants below:
+     * resolved_sym is the union, not the module, so `mod` stays NULL here.) */
     Symbol *mod = NULL;
     if (c.sym && c.sym->kind == DECL_MODULE) mod = c.sym;
     else if (obj && obj->kind == EXPR_IDENT && obj->ident.resolved_sym &&
@@ -2647,27 +2457,19 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
         return true;
     }
 
-    /* Type-NAME object (an ident or module path resolving to a struct/union/
+    /* Type-name object (an ident or module path resolving to a struct/union/
      * enum): what pass2 accepts after the '.' is the companion module's
-     * members (i128.parse) and, for unions/enums, variant constructors —
-     * never the struct's fields (those need a value, and `i128.limbs` is a
-     * compile error). Mirror that here instead of falling through to the
+     * members (`point.origin`) and, for unions/enums, variant constructors;
+     * never the struct's fields (those need a value, so `point.x` is a
+     * compile error). Offer the same here instead of falling through to the
      * value dispatch below, which would offer the fields. */
     Symbol *tsym = NULL;
-    if (obj && obj->kind == EXPR_IDENT && obj->ident.resolved_sym &&
-        (obj->ident.resolved_sym->kind == DECL_STRUCT ||
-         obj->ident.resolved_sym->kind == DECL_UNION ||
-         obj->ident.resolved_sym->kind == DECL_ENUM))
+    if (obj && obj->kind == EXPR_IDENT && is_type_sym(obj->ident.resolved_sym))
         tsym = obj->ident.resolved_sym;
-    else if (obj && obj->kind == EXPR_FIELD && obj->field.resolved_member &&
-             !obj->field.is_variant_constructor && !obj->field.is_type_property &&
-             (obj->field.resolved_member->kind == DECL_STRUCT ||
-              obj->field.resolved_member->kind == DECL_UNION ||
-              obj->field.resolved_member->kind == DECL_ENUM))
+    else if (obj && obj->kind == EXPR_FIELD && is_type_sym(obj->field.resolved_member) &&
+             !obj->field.is_variant_constructor && !obj->field.is_type_property)
         tsym = obj->field.resolved_member;
-    else if (!obj && c.sym &&
-             (c.sym->kind == DECL_STRUCT || c.sym->kind == DECL_UNION ||
-              c.sym->kind == DECL_ENUM))
+    else if (!obj && is_type_sym(c.sym))
         tsym = c.sym;
     if (tsym) {
         Symbol *comp = (obj && obj->kind == EXPR_IDENT)
@@ -2675,29 +2477,16 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
         if (!comp) comp = companion_of_type_sym(r, tsym);
         if (comp && comp->members)
             emit_module_members(a, arr, comp);
-        Type *tt = tsym->type;
-        if (tt && tt->kind == TYPE_UNION) {
-            for (int i = 0; i < tt->unio.variant_count; i++)
-                add_item(a, arr, tt->unio.variants[i].name, CIK_ENUMMEMBER, NULL);
-        } else if (tt && tt->kind == TYPE_ENUM) {
-            bool has_count_variant = false;
-            for (int i = 0; i < tt->enu.variant_count; i++) {
-                add_item(a, arr, tt->enu.variants[i].name, CIK_ENUMMEMBER, NULL);
-                if (strcmp(tt->enu.variants[i].name, "count") == 0)
-                    has_count_variant = true;
-            }
-            if (!has_count_variant)
-                add_item(a, arr, "count", CIK_FIELD, "i32");
-        }
+        if (tsym->type) add_variant_members(a, arr, tsym->type);
         return true;
     }
 
     /* Value dispatch on the object's type: the field node's object (any shape),
      * else the anchored node (simple idents the field capture didn't reach). */
     Type *t = (obj && obj->type) ? obj->type : c.type;
-    /* '.' auto-derefs a single pointer level to the pointee struct (matching
-     * pass2's `.`-on-pointer rewrite). A numeric type name or module was handled above and is never pointer-typed
-     * here, so dereferencing unconditionally is safe for '.'. */
+    /* '.' auto-derefs one pointer level (pass2 rewrites `.` on a pointer to
+     * EXPR_DEREF_FIELD). Numeric type names and modules were handled above, so
+     * a pointer type here is always a value's. */
     if (t && t->kind == TYPE_POINTER)
         t = t->pointer.pointee;
     if (!t) return false;
@@ -2729,26 +2518,7 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
                      dup_type_name(a, t->struc.fields[i].type));
         return true;
     }
-    /* Union variants (bare-name construction site). */
-    if (t->kind == TYPE_UNION) {
-        for (int i = 0; i < t->unio.variant_count; i++)
-            add_item(a, arr, t->unio.variants[i].name, CIK_ENUMMEMBER, NULL);
-        return true;
-    }
-    /* Enum variants + the count type property (a declared `count` variant wins,
-     * mirroring pass2's precedence, so dedup by name-first ordering). */
-    if (t->kind == TYPE_ENUM) {
-        bool has_count_variant = false;
-        for (int i = 0; i < t->enu.variant_count; i++) {
-            add_item(a, arr, t->enu.variants[i].name, CIK_ENUMMEMBER, NULL);
-            if (strcmp(t->enu.variants[i].name, "count") == 0)
-                has_count_variant = true;
-        }
-        if (!has_count_variant)
-            add_item(a, arr, "count", CIK_FIELD, "i32");
-        return true;
-    }
-    return false;
+    return add_variant_members(a, arr, t);
 }
 
 /* Dedup set over interned names (all symbol/identifier strings share the
@@ -2797,21 +2567,21 @@ static void emit_imports(Arena *a, JsonValue *items, NameSet *seen,
  * (open-file decls only), emitting each enclosing module's members + imports and
  * then, for the innermost enclosing function, its locals (params/lets/for-vars).
  * `scope` is the symbol table whose module decls in `decls` resolve through.
- * This mirrors FC's lexical resolution: a module's siblings are visible bare
+ * This follows FC's lexical resolution: a module's siblings are visible bare
  * within it, and a function's bindings within its body. */
 static void complete_scope(Arena *a, JsonValue *items, NameSet *seen,
                            Decl **decls, int n, SymbolTable *scope,
                            const char *file, int target_line) {
     /* The container is the last decl from this file that starts at or before the
      * cursor (decls are in source order, so its span reaches the next sibling).
-     * Require a matching filename AND a real (1-based) line: the merged program
+     * Require a matching filename and a real (1-based) line: the merged program
      * mixes in other files' decls and synthetic, line-0 / NULL-filename decls
      * (e.g. a stdlib `namespace std` wrapper) that must not win the line race. */
     Decl *enc = NULL;
     for (int i = 0; i < n; i++) {
         Decl *d = decls[i];
         if (!d) continue;
-        if (file && (!d->loc.filename || strcmp(d->loc.filename, file) != 0)) continue;
+        if (!decl_in_file(d, file)) continue;
         if (d->loc.line <= 0 || d->loc.line > target_line) continue;
         enc = d;
     }
@@ -2854,25 +2624,24 @@ static void complete_scope(Arena *a, JsonValue *items, NameSet *seen,
 /* An import statement is its own resolution world. What may be written on the
  * left of `from` is decided entirely by the `from` clause (a module's members,
  * or a namespace's top-level symbols), and what may be written on the right is
- * a route of modules — not an expression. So an import line is completed here
+ * a route of modules, not an expression. So an import line is completed here
  * in full, including its `.` and `::` positions, which must never reach
- * complete_members, and it offers exactly these candidates or none: the
+ * complete_members, and it offers only these candidates or none: the
  * lexical-scope list is meaningless here.
  *
- * The statement is read from the SOURCE LINE rather than the AST. A half-typed
- * import (`import x from `, `from a.`) is precisely the state the parser
- * recovers from, so its Decl is either a DECL_ERROR or is missing the very part
- * being completed. The resolutions the text then drives are the ones pass1
- * performs (process_member_import and phase 3b), read out of the symbol table.
+ * The statement is read from the source line rather than the AST. A half-typed
+ * import (`import x from `, `from a.`) is the state the parser recovers from,
+ * so its Decl is either a DECL_ERROR or is missing the part being completed.
+ * The lookups the text then drives are the ones pass1 performs
+ * (process_member_import and the import resolution it is called from), read
+ * out of the symbol table.
  *
- * Known limit, accepted: the `from` clause decides the name list, so until it is
- * written there is nothing to resolve names against and the left side offers
- * nothing. */
+ * Known limit: the `from` clause decides the name list, so until it is written
+ * there is nothing to resolve names against and the left side offers nothing. */
 
 /* A name as written in the document (not interned, so no pointer compare). */
 typedef struct { const char *s; int n; } TextRef;
 
-static bool id_char(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
 static TextRef tr_of(const char *s) {
     TextRef t = { s, (int)strlen(s) };
@@ -2893,7 +2662,7 @@ static bool tset_add(TextSet *s, TextRef t) {
     return true;
 }
 
-/* A `from` clause as written: `[ns::[ns::]…][head][.seg…]`. */
+/* A `from` clause as written: `[ns::[ns::]...][head][.seg...]`. */
 typedef struct {
     char    *ns;        /* mangled namespace path ("a__b"); NULL when unwritten */
     TextRef  head;      /* head module; .n == 0 for a bare `from ns::` */
@@ -2903,7 +2672,7 @@ typedef struct {
 
 static void from_text_free(FromText *f) { free(f->ns); free(f->segs); }
 
-/* Parse the text in [s,e) as a from clause, mirroring parse_from_clause: parts
+/* Parse the text in [s,e) as a from clause, as parse_from_clause does: parts
  * separated by `::` are namespace segments, except a trailing one not followed
  * by `::`, which is the head module; a `.` route may follow the head. Every
  * component may be empty (the cursor is mid-typing), which the callers read as
@@ -2966,10 +2735,11 @@ static Symbol *find_member_module(SymbolTable *members, TextRef name) {
 }
 
 /* The module a written `from` clause reads from, counting route segments
- * [0,upto). Mirrors process_member_import: the head resolves in the namespace
- * written before `::` (else the enclosing one), falling back to a whole-module
- * import already in this scope; every further segment is a module member of its
- * predecessor. NULL when any part is unwritten or unresolved. */
+ * [0,upto), resolved as process_member_import does: the head resolves in the
+ * namespace written before `::` (else the enclosing one), falling back to a
+ * whole-module import already in this scope; every further segment is a
+ * module member of its predecessor. NULL when any part is unwritten or
+ * unresolved. */
 static Symbol *resolve_from_text(AnalysisResult *r, ImportTable *scope_imports,
                                  const char *cur_ns, const FromText *f, int upto) {
     if (f->head.n == 0) return NULL;
@@ -2993,16 +2763,16 @@ static Symbol *resolve_from_text(AnalysisResult *r, ImportTable *scope_imports,
     return mod;
 }
 
-/* The innermost module whose body contains `line` (NULL at file level) — the
- * same line-span walk complete_scope uses, kept separate because this one wants
- * the module Symbol rather than its members. */
+/* The innermost module whose body contains `line` (NULL at file level). The
+ * same line-span walk complete_scope uses, kept separate because this one
+ * wants the module Symbol rather than its members. */
 static Symbol *enclosing_module_at(Decl **decls, int n, SymbolTable *scope,
                                    const char *file, int line) {
     Decl *enc = NULL;
     for (int i = 0; i < n; i++) {
         Decl *d = decls[i];
         if (!d) continue;
-        if (file && (!d->loc.filename || strcmp(d->loc.filename, file) != 0)) continue;
+        if (!decl_in_file(d, file)) continue;
         if (d->loc.line <= 0 || d->loc.line > line) continue;
         enc = d;
     }
@@ -3014,14 +2784,15 @@ static Symbol *enclosing_module_at(Decl **decls, int n, SymbolTable *scope,
     return inner ? inner : ms;
 }
 
-/* The namespace in force at `line` of `file` (pass1 phase 3b's `current_ns`). */
+/* The namespace in force at `line` of `file` (the `current_ns` pass1 resolves
+ * the file's imports in). */
 static const char *file_ns_at(AnalysisResult *r, const char *file, int line) {
     const char *ns = NULL;
     if (!r->program) return NULL;
     for (int i = 0; i < r->program->decl_count; i++) {
         Decl *d = r->program->decls[i];
         if (!d || d->kind != DECL_NAMESPACE) continue;
-        if (file && (!d->loc.filename || strcmp(d->loc.filename, file) != 0)) continue;
+        if (!decl_in_file(d, file)) continue;
         if (d->loc.line <= 0 || d->loc.line > line) continue;
         ns = d->ns.name;
     }
@@ -3038,7 +2809,7 @@ static ImportTable *file_imports_for(AnalysisResult *r, const char *file) {
 }
 
 /* Namespace segments that may follow `prefix` (NULL = the first segment of every
- * namespace). Paths are stored mangled (`acme::graphics` → `acme__graphics`), so
+ * namespace). Paths are stored mangled (`acme::graphics` as `acme__graphics`), so
  * a segment runs to the next `__`. */
 static void emit_ns_segments(Arena *a, JsonValue *items, TextSet *seen,
                              SymbolTable *st, const char *prefix) {
@@ -3082,7 +2853,7 @@ static void emit_nested_modules(Arena *a, JsonValue *items, TextSet *seen,
     }
 }
 
-/* Modules a whole-module import already brought into this scope — heads pass1
+/* Modules a whole-module import already brought into this scope: heads pass1
  * accepts for a `from` clause alongside the symbol table's own. */
 static void emit_import_modules(Arena *a, JsonValue *items, TextSet *seen,
                                 ImportTable *imp) {
@@ -3111,8 +2882,8 @@ static void emit_module_import_names(Arena *a, JsonValue *items, TextSet *used,
 }
 
 /* Candidates for `import <name> from ns::`, which names a whole top-level
- * symbol rather than a member — a module, struct, union or enum (a companion
- * pair being two symbols of one name, hence the dedup). */
+ * symbol rather than a member: a module, struct, union or enum (a companion
+ * pair is two symbols of one name, hence the dedup). */
 static void emit_ns_import_names(Arena *a, JsonValue *items, TextSet *used,
                                  SymbolTable *st, const char *ns) {
     for (int i = 0; i < st->count; i++) {
@@ -3139,7 +2910,7 @@ static bool has_word(const char *txt, int s, int e, const char *kw) {
     return false;
 }
 
-/* The first identifier written in [s,e) — an import item's bound name, the part
+/* The first identifier written in [s,e): an import item's bound name, the part
  * before any `as`. .n == 0 when the item is empty or starts with `*`. */
 static TextRef first_ident(const char *txt, int s, int e) {
     while (s < e && isspace((unsigned char)txt[s])) s++;
@@ -3150,8 +2921,8 @@ static TextRef first_ident(const char *txt, int s, int e) {
 }
 
 /* Complete inside the import statement on `line1` (1-based), with the cursor at
- * byte `cur`. Returns true when the cursor is in an import statement — the reply
- * is then exactly what this appended, possibly nothing. */
+ * byte `cur`. Returns true when the cursor is in an import statement; the reply
+ * is then only what this appended, possibly nothing. */
 static bool complete_import(LspServer *S, LspDoc *doc, const LineIndex *idx,
                             int line1, int cur, JsonValue *items) {
     Arena *a = &S->msg_arena;
@@ -3211,7 +2982,7 @@ static bool complete_import(LspServer *S, LspDoc *doc, const LineIndex *idx,
         while (q > from_end && (txt[q - 1] == ' ' || txt[q - 1] == '\t')) q--;
 
         if (q > from_end && txt[q - 1] == '.') {
-            /* `from head[.seg]….` — the nested modules of what precedes it. */
+            /* `from head[.seg...].`: the nested modules of what precedes it. */
             FromText f;
             from_text_parse(txt + from_end, txt + (q - 1), &f);
             Symbol *mod = resolve_from_text(r, scope_imports, cur_ns, &f,
@@ -3219,7 +2990,7 @@ static bool complete_import(LspServer *S, LspDoc *doc, const LineIndex *idx,
             if (mod) emit_nested_modules(a, items, &seen, mod);
             from_text_free(&f);
         } else if (q - 1 > from_end && txt[q - 1] == ':' && txt[q - 2] == ':') {
-            /* `from ns::` — modules of that namespace, and its next segment.
+            /* `from ns::`: modules of that namespace, and its next segment.
              * The `::` stays inside the parsed text so the whole path reads as
              * a namespace rather than the last part reading as a head. */
             FromText f;
@@ -3250,8 +3021,8 @@ static bool complete_import(LspServer *S, LspDoc *doc, const LineIndex *idx,
     if (has_word(txt, istart, cur, "as")) { free(seen.v); return true; }
 
     if (from_start >= 0) {
-        /* Names already written in the list are no longer candidates; the item
-         * under the cursor is not one of them. */
+        /* Names already written in the list are not offered again; the item
+         * under the cursor does not count as written. */
         int item = kw_end;
         for (int i = kw_end; i <= reg_end; i++) {
             if (i != reg_end && txt[i] != ',') continue;
@@ -3289,12 +3060,12 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     JsonValue *items = json_array(a);
     if (!doc) { lsp_reply(a, id, items); return; }
 
-    /* CompletionContext.triggerKind: 1=Invoked (Ctrl+Space or 24x7 word typing),
-     * 2=TriggerCharacter, 3=re-trigger. An auto-pop by a trigger character should
-     * only ever surface member completion — if the cursor isn't actually at a
-     * member access (a lone `:`, a float-literal `.`), stay quiet instead of
-     * dumping the global list. Absent
-     * context (non-VSCode clients) defaults to Invoked, preserving fall-through. */
+    /* CompletionContext.triggerKind: 1=Invoked (Ctrl+Space or typing a word),
+     * 2=TriggerCharacter, 3=re-trigger. An auto-pop by a trigger character
+     * should only surface member completion: if the cursor isn't at a member
+     * access (a lone `:`, a float-literal `.`), stay quiet instead of listing
+     * every global. A client that sends no context defaults to Invoked, which
+     * falls through to scope completion. */
     long trig_kind = 1;
     JsonValue *cctx = json_get(params, "context");
     if (cctx) json_get_int(cctx, "triggerKind", &trig_kind);
@@ -3318,7 +3089,7 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
      * just before the object, '.' or '::'. dot_byte is the operator's first
      * byte, so the object ends at dot_byte-1 either way. */
     int b = cur - 1;
-    while (b >= 0 && (isalnum((unsigned char)doc->text[b]) || doc->text[b] == '_')) b--;
+    while (b >= 0 && id_char(doc->text[b])) b--;
     int dot_byte = -1;
     if (b >= 0 && doc->text[b] == '.') dot_byte = b;
     else if (b >= 1 && doc->text[b] == ':' && doc->text[b - 1] == ':') dot_byte = b - 1;
@@ -3332,17 +3103,17 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     /* Right after `->` (a lambda body, function type or match arm) there is
      * nothing to offer. Checked regardless of triggerKind: once VSCode has a
      * suggest session open from word typing, it re-queries as Invoked while
-     * you type through `->`, and the global list would show up there. */
+     * the user types through `->`, and the global list would show up there. */
     if (b >= 1 && doc->text[b] == '>' && doc->text[b - 1] == '-') {
         lsp_reply(a, id, items);
         return;
     }
-    /* Not a member context. A trigger character that lands here (a lone `:` that
-     * isn't `::`) has nothing to offer, so an auto-pop stays
-     * quiet; an explicit invoke / word-typing falls through to scope completion. */
+    /* Not a member context. A trigger character that lands here (a lone `:`
+     * that isn't `::`) has nothing to offer, so an auto-pop stays quiet; an
+     * explicit invoke or word typing falls through to scope completion. */
     if (auto_trigger) { lsp_reply(a, id, items); return; }
 
-    /* Global context: keywords, then everything in lexical scope at the cursor —
+    /* Global context: keywords, then everything in lexical scope at the cursor:
      * enclosing-module members + imports and the enclosing function's locals
      * (complete_scope), file-level imports, and top-level symbols. A NameSet
      * dedups across all of these so a name in scope two ways is offered once. */
@@ -3415,7 +3186,6 @@ static void handle_initialize(LspServer *S, JsonValue *id) {
     json_object_set(a, res, "capabilities", caps);
     json_object_set(a, res, "serverInfo", info);
     lsp_reply(a, id, res);
-    S->initialized = true;
 }
 
 /* ======================================================================== */
@@ -3429,7 +3199,7 @@ static void dispatch(LspServer *S, JsonValue *req) {
     JsonValue *params = json_get(req, "params");
     bool is_request = (id != NULL);
 
-    /* Any request expecting a reply (hover, definition, completion, …) must
+    /* Any request expecting a reply (hover, definition, completion, ...) must
      * answer against current types, so realize deferred edits first. No-op when
      * nothing is dirty (e.g. initialize, or a request with no pending change). */
     if (is_request) flush_dirty(S);
@@ -3469,20 +3239,6 @@ static void dispatch(LspServer *S, JsonValue *req) {
 /* stdlib discovery                                                          */
 /* ======================================================================== */
 
-static char *read_whole_file(const char *path, int *out_len) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (sz < 0) { fclose(f); return NULL; }
-    char *buf = malloc((size_t)sz + 1);
-    size_t rd = fread(buf, 1, (size_t)sz, f);
-    buf[rd] = '\0';
-    fclose(f);
-    *out_len = (int)rd;
-    return buf;
-}
 
 /* Load every `.fc` file in a directory into the stdlib feed. Returns true if it
  * loaded at least one. Scans the directory rather than a fixed name list so new
@@ -3505,7 +3261,7 @@ static bool load_stdlib_from_dir(LspServer *S, const char *dir) {
         int len;
         char *buf = NULL;
         if (!(stat(full, &st) == 0 && S_ISDIR(st.st_mode)))
-            buf = read_whole_file(full, &len);
+            buf = read_file(full, &len);
         if (!buf) { free(full); continue; }
         AnalysisSource src = { full, buf, len };
         DA_APPEND(S->stdlib, S->stdlib_count, S->stdlib_cap, src);
@@ -3518,7 +3274,7 @@ static bool load_stdlib_from_dir(LspServer *S, const char *dir) {
 
 /* Load the standard library once so std:: imports resolve. The directory is
  * FCC_STDLIB_DIR if set, else the install datadir, else a repo-relative
- * ./stdlib. Missing stdlib is not fatal — analysis still works for files that
+ * ./stdlib. A missing stdlib is not fatal: analysis still works for files that
  * do not import std::. */
 static void load_stdlib(LspServer *S) {
     const char *env = getenv("FCC_STDLIB_DIR");

@@ -1,7 +1,6 @@
-// BUG (bugsearch 2026-07-18): a binding at depth 2 of a nested union
-// pattern is type-checked but never declared by codegen — the arm body uses
-// `c` and gcc fails with "'c' undeclared". Pattern-binding emission only
-// materializes bindings at payload depth 1.
+// A binding at depth 2 of a nested union pattern (`wrap(chosen(c))`) binds
+// the inner payload. Regression: codegen only declared bindings at payload
+// depth 1, so the arm body's use of `c` failed in C with "'c' undeclared".
 enum color =
     | red
     | green

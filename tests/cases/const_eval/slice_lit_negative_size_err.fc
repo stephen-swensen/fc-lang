@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): a statically-negative slice-literal size on the
-// fully-concrete path is accepted (only the per-instance generic path checks
-// sz <= 0). Emits `uint8_t _fc_back_0[18446744073709551612];` — invalid C.
-// Spec: "A statically-negative length is therefore a compile error."
+// A statically negative slice-literal size is a compile error in concrete
+// code, as it is in a generic instance. Regression: `u8[-4]{}` used to be
+// accepted and emitted `uint8_t _fc_back_0[18446744073709551612];`, which is
+// invalid C.
 let main = (args: str[]) ->
     let a = u8[-4]{}
     (i32) a.len

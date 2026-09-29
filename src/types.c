@@ -1,6 +1,6 @@
 #include "types.h"
-#include "ast.h"    /* Expr — TYPE_CONST_EXPR carries a const-generic expression tree */
-#include "pass1.h"  /* Symbol — mangle_type_name reads resolved_sym for the canonical base name */
+#include "ast.h"    /* Expr: TYPE_CONST_EXPR carries a const-generic expression tree */
+#include "pass1.h"  /* Symbol: mangle_type_name reads resolved_sym for the canonical base name */
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -9,17 +9,15 @@
  * type_name() has no arena and no caller-frees contract, so its results live in
  * rotating storage: a returned pointer stays valid until that slot comes round
  * again, which is what lets `diag_error("%s vs %s", type_name(a), type_name(b))`
- * work. Each kind keeps its own small ring, exactly as before.
+ * work. Each kind keeps its own small ring.
  *
- * Two things changed from the fixed `char buf[256]` these used to be. The slot
- * now *owns* a heap string sized to the spelling, so a long name (a deep
- * wrap<wrap<…>>, a many-argument instantiation) is printed in full rather than
- * clipped mid-identifier — and a clipped type name is not visibly broken, it
- * reads as a different, plausible type. And the spelling is assembled in a
- * private allocation and only then published, so a nested type_name() call can
- * no longer scribble on the partially-built name of the caller that invoked it
- * (with fixed slots, `pair<a<i32>, b<i32>, c<i32>, d<i32>>` wrapped the ring
- * mid-accumulation and garbled the result). */
+ * A slot owns a heap string sized to the spelling, so a long name (a deep
+ * wrap<wrap<...>>, a many-argument instantiation) is printed in full; a clipped
+ * type name would not look broken, it would read as a different, plausible
+ * type. The spelling is built in a private allocation and published only when
+ * finished, so a nested type_name() call cannot overwrite the partly built
+ * name of its caller (`pair<a<i32>, b<i32>, c<i32>, d<i32>>` makes enough
+ * nested calls to wrap a ring mid-build). */
 typedef struct { char *s; } TnSlot;
 
 static const char *tn_publish(TnSlot *slots, int n, int *idx, char *owned) {
@@ -35,13 +33,6 @@ static const char *tn_publish(TnSlot *slots, int n, int *idx, char *owned) {
         static int _idx = 0;                            \
         return tn_publish(_slots, (nslots), &_idx, (owned)); \
     } while (0)
-
-static char *str_dup(const char *s) {
-    size_t len = strlen(s) + 1;
-    char *copy = malloc(len);
-    memcpy(copy, s, len);
-    return copy;
-}
 
 /* Singleton primitive types */
 static Type primitives[TYPE_COUNT];
@@ -72,7 +63,7 @@ PRIM(float32, TYPE_FLOAT32)
 PRIM(float64, TYPE_FLOAT64)
 PRIM(bool,    TYPE_BOOL)
 PRIM(void,    TYPE_VOID)
-/* char is an alias for uint8 per spec */
+/* char is an alias for u8 per spec */
 Type *type_char(void) { return type_uint8(); }
 PRIM(any_ptr, TYPE_ANY_PTR)
 PRIM(error,   TYPE_ERROR)
@@ -81,7 +72,7 @@ PRIM(unresolved, TYPE_UNRESOLVED)
 
 #undef PRIM
 
-/* error = i32 with alias "error" — the display type of declared error
+/* error = i32 with alias "error": the display type of declared error
  * constants and err-pattern bindings. Like str/cstr, the alias affects
  * type_name() output only, never equality or semantics: an error code is an
  * i32 everywhere. */
@@ -162,20 +153,19 @@ Type *type_copy(Arena *a, Type *t) {
 }
 
 /* Recursively copy a type tree, allocating fresh nodes for every constructor
- * (struct/union/pointer/slice/option/array/function/stub) and a fresh
- * fields/variants/params array. Leaves that are never rewritten by
- * mono_resolve_type_names — primitives (singletons), type vars, any* — are
- * shared, as are stub/struct/union *type_args* (read-only when computing a
- * mangled name). This is the isolation needed so that the in-place name
- * canonicalization done by mono_resolve_type_names / discover_nested_types on a
- * monomorphized instance's concrete_type can never mutate a subtree that is
- * still shared with a pass2-live expression type or a generic template.
+ * (struct/union/pointer/slice/option/result/array/function/stub) and fresh
+ * fields/variants/params arrays. Leaves that mono_resolve_type_names never
+ * rewrites (primitive singletons, type vars, any*) are shared, as are
+ * stub/struct/union type_args (read-only when computing a mangled name). The
+ * copy isolates an instance's concrete_type, so the in-place name
+ * canonicalization done by mono_resolve_type_names / discover_nested_types
+ * does not mutate a subtree shared with a pass2 expression type or a generic
+ * template.
  *
- * Termination: a type referencing another (or the same) generic struct in a
- * field appears as a TYPE_STUB or a pointer-to-stub (a name + concrete
- * type_args, which are not recursed here), never as the full embedded
- * definition — by-value self-embedding is rejected as infinite-size — so the
- * recursion is finite. */
+ * Termination: a type that refers to a generic struct (another or itself) in a
+ * field holds a TYPE_STUB or a pointer to one (a name plus concrete type_args,
+ * which are not recursed into), never the embedded definition; by-value
+ * self-embedding is rejected as infinite-size. So the recursion is finite. */
 Type *type_deep_copy(Arena *a, Type *t) {
     if (!t) return NULL;
     switch (t->kind) {
@@ -249,7 +239,7 @@ Type *type_deep_copy(Arena *a, Type *t) {
         return c;
     }
     default:
-        /* Primitive singletons, type vars, any*, error, never — never renamed. */
+        /* Primitive singletons, type vars, any*, error, never: never renamed. */
         return t;
     }
 }
@@ -353,11 +343,11 @@ bool type_is_numeric(Type *t) {
     return type_is_integer(t) || type_is_float(t);
 }
 
-/* Structural equality of two const-generic expression trees (the pass2-
- * normalized restricted node set). Conservative: unknown node kinds compare
- * unequal, which only means two textually different spellings of the same
- * value get separate template-side identities — instances fold to
- * TYPE_CONST_INT before keying, so this can never split a concrete instance. */
+/* Structural equality of two const-generic expression trees (the restricted
+ * node set pass2 normalizes to). Unknown node kinds compare unequal, which
+ * only gives two spellings of the same value separate template-side
+ * identities; instances fold to TYPE_CONST_INT before keying, so a concrete
+ * instance is never split. */
 static bool const_expr_eq(Expr *a, Expr *b) {
     if (a == b) return true;
     if (!a || !b || a->kind != b->kind) return false;
@@ -386,7 +376,9 @@ static const char *type_udt_name(Type *t) {
     return NULL;
 }
 
-bool type_eq(Type *a, Type *b) {
+/* Type equality, with or without the const qualifiers on pointers, slices and
+ * any*. Every other part of the comparison is the same for both. */
+static bool types_equal(Type *a, Type *b, bool with_const) {
     if (a == b) return true;
     if (a->kind == TYPE_ERROR || b->kind == TYPE_ERROR) return true;
     if (a->kind != b->kind) {
@@ -396,24 +388,23 @@ bool type_eq(Type *a, Type *b) {
         if (na && nb) return na == nb;  /* interned string comparison */
         return false;
     }
+    bool const_ok = !with_const || a->is_const == b->is_const;
     switch (a->kind) {
-    case TYPE_POINTER: return a->is_const == b->is_const &&
-                              type_eq(a->pointer.pointee, b->pointer.pointee);
-    case TYPE_SLICE:   return a->is_const == b->is_const &&
-                              type_eq(a->slice.elem, b->slice.elem);
-    case TYPE_OPTION:  return type_eq(a->option.inner, b->option.inner);
-    case TYPE_RESULT:  return type_eq(a->result.inner, b->result.inner);
+    case TYPE_POINTER: return const_ok && types_equal(a->pointer.pointee, b->pointer.pointee, with_const);
+    case TYPE_SLICE:   return const_ok && types_equal(a->slice.elem, b->slice.elem, with_const);
+    case TYPE_ANY_PTR: return const_ok;
+    case TYPE_OPTION:  return types_equal(a->option.inner, b->option.inner, with_const);
+    case TYPE_RESULT:  return types_equal(a->result.inner, b->result.inner, with_const);
     case TYPE_FIXED_ARRAY:
         if (a->fixed_array.size_ref || b->fixed_array.size_ref) {
             if (!a->fixed_array.size_ref || !b->fixed_array.size_ref) return false;
             return type_eq(a->fixed_array.size_ref, b->fixed_array.size_ref) &&
-                   type_eq(a->fixed_array.elem, b->fixed_array.elem);
+                   types_equal(a->fixed_array.elem, b->fixed_array.elem, with_const);
         }
         return a->fixed_array.size == b->fixed_array.size &&
-               type_eq(a->fixed_array.elem, b->fixed_array.elem);
+               types_equal(a->fixed_array.elem, b->fixed_array.elem, with_const);
     case TYPE_CONST_INT:  return a->const_int.value == b->const_int.value;
     case TYPE_CONST_EXPR: return const_expr_eq(a->const_expr.expr, b->const_expr.expr);
-    case TYPE_ANY_PTR: return a->is_const == b->is_const;
     case TYPE_STRUCT:
         /* Tuples compare structurally (arity + element types), independent of when
          * their canonical name gets interned. Named structs compare by interned name. */
@@ -421,7 +412,8 @@ bool type_eq(Type *a, Type *b) {
             if (!a->struc.is_tuple || !b->struc.is_tuple) return false;
             if (a->struc.field_count != b->struc.field_count) return false;
             for (int i = 0; i < a->struc.field_count; i++)
-                if (!type_eq(a->struc.fields[i].type, b->struc.fields[i].type)) return false;
+                if (!types_equal(a->struc.fields[i].type, b->struc.fields[i].type, with_const))
+                    return false;
             return true;
         }
         return a->struc.name == b->struc.name;
@@ -433,59 +425,15 @@ bool type_eq(Type *a, Type *b) {
         if (a->func.param_count != b->func.param_count) return false;
         if (a->func.is_variadic != b->func.is_variadic) return false;
         for (int i = 0; i < a->func.param_count; i++)
-            if (!type_eq(a->func.param_types[i], b->func.param_types[i])) return false;
-        return type_eq(a->func.return_type, b->func.return_type);
+            if (!types_equal(a->func.param_types[i], b->func.param_types[i], with_const))
+                return false;
+        return types_equal(a->func.return_type, b->func.return_type, with_const);
     default: return true;   /* primitives match by kind */
     }
 }
 
-bool type_eq_ignore_const(Type *a, Type *b) {
-    if (a == b) return true;
-    if (a->kind == TYPE_ERROR || b->kind == TYPE_ERROR) return true;
-    if (a->kind != b->kind) {
-        /* A stub might need to match a struct or union type (or vice versa). */
-        const char *na = type_udt_name(a);
-        const char *nb = type_udt_name(b);
-        if (na && nb) return na == nb;
-        return false;
-    }
-    switch (a->kind) {
-    case TYPE_POINTER: return type_eq_ignore_const(a->pointer.pointee, b->pointer.pointee);
-    case TYPE_SLICE:   return type_eq_ignore_const(a->slice.elem, b->slice.elem);
-    case TYPE_OPTION:  return type_eq_ignore_const(a->option.inner, b->option.inner);
-    case TYPE_RESULT:  return type_eq_ignore_const(a->result.inner, b->result.inner);
-    case TYPE_FIXED_ARRAY:
-        if (a->fixed_array.size_ref || b->fixed_array.size_ref) {
-            if (!a->fixed_array.size_ref || !b->fixed_array.size_ref) return false;
-            return type_eq(a->fixed_array.size_ref, b->fixed_array.size_ref) &&
-                   type_eq_ignore_const(a->fixed_array.elem, b->fixed_array.elem);
-        }
-        return a->fixed_array.size == b->fixed_array.size &&
-               type_eq_ignore_const(a->fixed_array.elem, b->fixed_array.elem);
-    case TYPE_CONST_INT:  return a->const_int.value == b->const_int.value;
-    case TYPE_CONST_EXPR: return const_expr_eq(a->const_expr.expr, b->const_expr.expr);
-    case TYPE_STRUCT:
-        if (a->struc.is_tuple || b->struc.is_tuple) {
-            if (!a->struc.is_tuple || !b->struc.is_tuple) return false;
-            if (a->struc.field_count != b->struc.field_count) return false;
-            for (int i = 0; i < a->struc.field_count; i++)
-                if (!type_eq_ignore_const(a->struc.fields[i].type, b->struc.fields[i].type)) return false;
-            return true;
-        }
-        return a->struc.name == b->struc.name;
-    case TYPE_UNION:   return a->unio.name == b->unio.name;
-    case TYPE_ENUM:    return a->enu.name == b->enu.name;
-    case TYPE_STUB:    return a->stub.name == b->stub.name;
-    case TYPE_TYPE_VAR: return a->type_var.name == b->type_var.name;
-    case TYPE_FUNC:
-        if (a->func.param_count != b->func.param_count) return false;
-        if (a->func.is_variadic != b->func.is_variadic) return false;
-        for (int i = 0; i < a->func.param_count; i++)
-            if (!type_eq_ignore_const(a->func.param_types[i], b->func.param_types[i])) return false;
-        return type_eq_ignore_const(a->func.return_type, b->func.return_type);
-    default: return true;
-    }
-}
+bool type_eq(Type *a, Type *b) { return types_equal(a, b, true); }
+bool type_eq_ignore_const(Type *a, Type *b) { return types_equal(a, b, false); }
 
 static const char *primitive_names[] = {
     [TYPE_INT8]    = "i8",
@@ -502,9 +450,8 @@ static const char *primitive_names[] = {
     [TYPE_FLOAT64] = "f64",
     [TYPE_BOOL]    = "bool",
     [TYPE_VOID]    = "void",
-    [TYPE_CHAR]    = "char",
     [TYPE_ANY_PTR] = "any*",
-    [TYPE_FIXED_ARRAY] = NULL,   /* compound — handled in type_name() */
+    [TYPE_FIXED_ARRAY] = NULL,   /* compound; handled in type_name() */
     [TYPE_ERROR]   = "<error>",
     [TYPE_NEVER]   = "never",
 };
@@ -554,14 +501,14 @@ static char *const_expr_print(char *acc, Expr *e) {
     }
 }
 
-/* `const` is a prefix in FC's type grammar while `*`, `[]`, and `[N]` are
- * suffixes, so a const-qualified inner type has to be parenthesized under a
- * suffix: `(const str)[]` — a slice whose *elements* are read-only strings —
- * is a different type from `const str[]`, a read-only slice of strings
- * (§Deep const). Printing both the same way produced diagnostics that read
- * "expected const str[], got const str[]". Options and results need no parens:
- * `const` in an annotation distributes into them (`const str?` *is* the option
- * of `const str`), so there is no second reading to separate. */
+/* `const` is a prefix in FC's type syntax while `*`, `[]`, and `[N]` are
+ * suffixes, so a const-qualified inner type is parenthesized under a suffix:
+ * `(const str)[]`, a slice whose elements are read-only strings, is a
+ * different type from `const str[]`, a read-only slice of strings (spec:
+ * "Deep const"). Printing both the same way would give diagnostics like
+ * "expected const str[], got const str[]". Options and results need no
+ * parens: `const` in an annotation distributes into them (`const str?` is the
+ * option of `const str`), so there is no second reading to separate. */
 static bool name_is_const_prefixed(const char *s) {
     return strncmp(s, "const ", 6) == 0;
 }
@@ -683,18 +630,18 @@ const char *type_name(Type *t) {
     }
 }
 
-/* Adding `const` to the container lets the *element* drop its own `const`:
- * `(const T)[] → const T[]`, and the pointer analogue `(const T)* → const T*`.
- * The target grants a subset of the source's permissions — it forbids writing
- * the slot, and deep const re-adds the qualifier on every load out of a
- * read-only view (§Deep const), so the element still reads back as `const T`.
- * Without this edge the more-const value is the one that gets rejected:
- * `str[]` widens to `const str[]` while `(const str)[]` — the type a slice of
- * string literals has — does not.
+/* Adding `const` to the container lets the element drop its own `const`:
+ * `(const T)[]` -> `const T[]`, and the pointer analogue `(const T)*` ->
+ * `const T*`. The target grants a subset of the source's permissions: it
+ * forbids writing the slot, and deep const re-adds the qualifier on every load
+ * out of a read-only view (spec: "Deep const"), so the element still reads
+ * back as `const T`. Without this edge the more-const value would be the one
+ * rejected: `str[]` widens to `const str[]`, so `(const str)[]` (the type of a
+ * slice of string literals) must too.
  *
- * The reverse direction is *not* a widen and is deliberately absent: `T[] →
- * (const T)[]` would let a read-only element be parked in a slot that another
- * holder still reads as writable, which is C's `char** → const char**` hole. */
+ * The reverse direction is not a widen: `T[]` -> `(const T)[]` would let a
+ * read-only element be stored in a slot that another holder still reads as
+ * writable, which is C's `char**` -> `const char**` hole. */
 static bool elem_const_absorbed(Type *from_elem, Type *to_elem) {
     if (type_eq(from_elem, to_elem)) return true;
     if (!from_elem || !to_elem) return false;
@@ -705,20 +652,20 @@ static bool elem_const_absorbed(Type *from_elem, Type *to_elem) {
 }
 
 /* A representation-preserving widen changes no bits: it only adds `const`, or
- * widens a typed pointer to `any*` (a plain pointer cast). It never changes a
+ * widens a typed pointer to `any*` (a plain pointer cast), and never changes a
  * value's size. These are the pointer/slice/`any*` cases of widening; the
- * numeric/float widenings below are NOT representation-preserving (they change a
- * scalar's width). This is also the ONLY widening permitted on an option's inner
- * type: a struct option is a distinct `fc_option_<T>` per representation, so a
- * size-changing inner widen (e.g. `int32? → int64?`) would emit an invalid
- * struct-to-struct C cast — whereas a null-sentinel option (`T*?`, `any*?`,
- * `cstr?`) is a bare pointer for which const-add / `T* → any*` is a valid pointer
- * cast, and a slice/`str` option's const-add is a no-op (const is display-only in
- * the option's C type). */
+ * numeric and float widenings below change a scalar's width. This is also the
+ * only widening permitted on an option's inner type. A struct option is a
+ * distinct `fc_option_<T>` per representation, so a size-changing inner widen
+ * (e.g. `i32?` -> `i64?`) would emit an invalid struct-to-struct C cast. A
+ * null-sentinel option (`T*?`, `any*?`, `cstr?`) is a bare pointer, for which
+ * const-add and `T*` -> `any*` are valid pointer casts, and a slice/`str`
+ * option's const-add is a no-op (const is display-only in the option's C
+ * type). */
 static bool widen_repr_preserving(Type *from, Type *to) {
     if (type_eq(from, to)) return true;
 
-    /* non-const pointer/slice/any* → const pointer/slice/any* */
+    /* non-const pointer/slice/any* -> const pointer/slice/any* */
     if (to->is_const && !from->is_const) {
         if (from->kind == TYPE_POINTER && to->kind == TYPE_POINTER &&
             elem_const_absorbed(from->pointer.pointee, to->pointer.pointee))
@@ -730,9 +677,9 @@ static bool widen_repr_preserving(Type *from, Type *to) {
             return true;
     }
 
-    /* T* → any* (like C's T* → void*), respecting const */
+    /* T* -> any* (like C's T* -> void*), respecting const */
     if (to->kind == TYPE_ANY_PTR && from->kind == TYPE_POINTER) {
-        /* const T* → const any* OK, T* → any* OK, const T* → any* NOT OK */
+        /* const T* -> const any* and T* -> any* are fine; const T* -> any* is not */
         if (from->is_const && !to->is_const) return false;
         return true;
     }
@@ -744,38 +691,37 @@ bool type_can_widen(Type *from, Type *to) {
     if (from->kind == TYPE_ERROR || to->kind == TYPE_ERROR) return true;
     if (type_eq(from, to)) return true;
 
-    /* Representation-preserving widens: const-add and T* → any*. */
+    /* Representation-preserving widens: const-add and T* -> any*. */
     if (widen_repr_preserving(from, to)) return true;
 
-    /* Option inner widening (e.g. int32*? → const int32*?, int32*? → any*?).
-     * Restricted to representation-preserving inner widens only: a size-changing
-     * numeric inner widen (int32? → int64?) would require an invalid
-     * struct-to-struct cast between distinct fc_option_<T> types, so it is
-     * rejected here — consistently with if/match joins, which require an exact
-     * type match. */
+    /* Option inner widening (e.g. i32*? -> const i32*?, i32*? -> any*?),
+     * limited to representation-preserving inner widens: a size-changing
+     * numeric inner widen (i32? -> i64?) would need an invalid struct-to-struct
+     * cast between distinct fc_option_<T> types. This matches if/match joins,
+     * which require an exact type match. */
     if (from->kind == TYPE_OPTION && to->kind == TYPE_OPTION &&
         from->option.inner && to->option.inner)
         return widen_repr_preserving(from->option.inner, to->option.inner);
 
     TypeKind f = from->kind, t = to->kind;
 
-    /* int8 → int16, int32, int64 */
+    /* i8 -> i16, i32, i64 */
     if (f == TYPE_INT8)   return t == TYPE_INT16 || t == TYPE_INT32 || t == TYPE_INT64;
-    /* int16 → int32, int64 */
+    /* i16 -> i32, i64 */
     if (f == TYPE_INT16)  return t == TYPE_INT32 || t == TYPE_INT64;
-    /* int32 → int64 */
+    /* i32 -> i64 */
     if (f == TYPE_INT32)  return t == TYPE_INT64;
 
-    /* uint8 → uint16, uint32, uint64, int16, int32, int64 */
+    /* u8 -> u16, u32, u64, i16, i32, i64 */
     if (f == TYPE_UINT8)  return t == TYPE_UINT16 || t == TYPE_UINT32 || t == TYPE_UINT64 ||
                                  t == TYPE_INT16  || t == TYPE_INT32  || t == TYPE_INT64;
-    /* uint16 → uint32, uint64, int32, int64 */
+    /* u16 -> u32, u64, i32, i64 */
     if (f == TYPE_UINT16) return t == TYPE_UINT32 || t == TYPE_UINT64 ||
                                  t == TYPE_INT32  || t == TYPE_INT64;
-    /* uint32 → uint64, int64 */
+    /* u32 -> u64, i64 */
     if (f == TYPE_UINT32) return t == TYPE_UINT64 || t == TYPE_INT64;
 
-    /* float32 → float64 */
+    /* f32 -> f64 */
     if (f == TYPE_FLOAT32) return t == TYPE_FLOAT64;
 
     return false;
@@ -883,12 +829,12 @@ bool type_fixed_array_size(Type *t, int64_t *out) {
  * A TYPE_CONST_EXPR carries a pass2-normalized expression tree whose only
  * nodes are integer literals, const-param references (EXPR_TYPE_VAR_REF),
  * binary arithmetic/bitwise ops, unary -/~, and fixed-width integer casts.
- * Evaluation is context-free over int64_t with two's-complement wrap and
- * masked shifts, mirroring pass2's try_eval_const semantics — so it can run
- * inside type_substitute (types.c) and monomorph's substitute_type_args,
- * which have no pass2 context. On failure the error is stashed in a
- * single-slot last-error (the compiler is single-threaded); the caller that
- * owns a diagnostic site reports it via const_eval_take_error. */
+ * Evaluation is context-free, over int64_t with two's-complement wrap and
+ * masked shifts (the semantics of pass2's try_eval_const), so it can run
+ * inside type_substitute and monomorph's substitute_type_args, which have no
+ * pass2 context. On failure the error is stashed in a single-slot last-error
+ * (the compiler is single-threaded); the caller that owns a diagnostic site
+ * reports it via const_eval_take_error. */
 static const char *g_const_eval_err = NULL;
 static SrcLoc g_const_eval_err_loc;
 
@@ -923,8 +869,8 @@ static bool const_eval_mask(TypeKind k, int64_t v, int64_t *out) {
 
 /* Evaluate `e` with const params bound through (var_names, concrete, count),
  * where a binding for a const param is a TYPE_CONST_INT. Returns false and
- * stashes the last-error on a hard failure; returns false WITHOUT an error
- * when a referenced var is simply unbound (still-symbolic template context —
+ * stashes the last-error on a hard failure; returns false without an error
+ * when a referenced var is unbound (a still-symbolic template context, where
  * the caller keeps the expression symbolic). */
 static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
                             int count, int64_t *out) {
@@ -944,7 +890,7 @@ static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
                     return true;
                 }
                 /* Bound to another symbolic param (a generic body naming
-                 * wide<'n> with the caller's own 'n) — stays symbolic. */
+                 * wide<'n> with the caller's own 'n): stays symbolic. */
                 if (concrete[i]->kind == TYPE_TYPE_VAR ||
                     concrete[i]->kind == TYPE_CONST_EXPR)
                     return false;
@@ -952,7 +898,7 @@ static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
                 return false;
             }
         }
-        return false;   /* unbound — stay symbolic, no error */
+        return false;   /* unbound: stay symbolic, no error */
     }
     case EXPR_UNARY_PREFIX: {
         int64_t v;
@@ -1037,7 +983,7 @@ bool const_type_eval(Type *t, const char **var_names, Type **concrete,
                 *out = concrete[i]->const_int.value;
                 return true;
             }
-            /* Bound to another symbolic param — stays symbolic, no error. */
+            /* Bound to another symbolic param: stays symbolic, no error. */
             if (concrete[i]->kind == TYPE_TYPE_VAR ||
                 concrete[i]->kind == TYPE_CONST_EXPR)
                 return false;
@@ -1067,7 +1013,7 @@ bool type_needs_eq_func(Type *t) {
         /* Pointer options use C native == (NULL for none) */
         return !(t->option.inner && t->option.inner->kind == TYPE_POINTER);
     case TYPE_RESULT:
-        /* Always the { err; value } struct — no sentinel specialization */
+        /* Always the { err; value } struct; no sentinel specialization */
         return true;
     case TYPE_STUB:
         return false;  /* unresolved stubs don't need eq functions */
@@ -1076,17 +1022,17 @@ bool type_needs_eq_func(Type *t) {
     }
 }
 
-/* A fully-substituted generic struct/union instance shares ONE subtree between a
- * field type and the matching type argument — type_substitute returns the same
- * node for both. So a chain like wrap<wrap<...<int32>>> is a linear-size DAG, but
- * a naive walk that descends through BOTH a struct's fields and its type_args
- * visits each shared node twice per level => O(2^depth). A divergent generic
- * (e.g. f(wrap{v=x}) instantiating f<wrap<'a>> -> f<wrap<wrap<'a>>> -> ...) builds
- * such chains and hung the compiler here. A visited set of struct/union/stub nodes
- * already proven type-var-FREE collapses the walk back to O(nodes): a `true`
- * result short-circuits all the way out, so only the clean (false) joins need
- * memoizing. The set holds only the branching nodes (struct/union/stub); single-
- * child constructors (pointer/option/slice/array) can't compound a revisit. */
+/* A fully substituted generic struct/union instance shares one subtree between
+ * a field type and the matching type argument (type_substitute returns the
+ * same node for both). So a chain like wrap<wrap<...<i32>>> is a linear-size
+ * DAG, but a naive walk through both a struct's fields and its type_args
+ * visits each shared node twice per level: O(2^depth). A divergent generic
+ * (e.g. f(wrap{v=x}) instantiating f<wrap<'a>> -> f<wrap<wrap<'a>>> -> ...)
+ * builds such chains. A set of struct/union/stub nodes already proven free of
+ * type vars keeps the walk O(nodes): a `true` result returns all the way out,
+ * so only the clean (false) results need memoizing. The set holds only the
+ * branching nodes (struct/union/stub); single-child constructors
+ * (pointer/option/slice/array) cannot compound a revisit. */
 typedef struct {
     Type **items;
     int count, cap;
@@ -1128,7 +1074,7 @@ static bool type_contains_type_var_memo(Type *t, TypeVarCleanSet *clean) {
             type_contains_type_var_memo(t->fixed_array.size_ref, clean)) return true;
         return type_contains_type_var_memo(t->fixed_array.elem, clean);
     case TYPE_CONST_INT:  return false;
-    case TYPE_CONST_EXPR: return true;   /* exists only while symbolic — never memo-clean */
+    case TYPE_CONST_EXPR: return true;   /* exists only while symbolic; never memo-clean */
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
             if (type_contains_type_var_memo(t->func.param_types[i], clean)) return true;
@@ -1169,160 +1115,113 @@ bool type_contains_type_var(Type *t) {
     return r;
 }
 
-/* Collect const-param names referenced by a const-generic expression tree. */
-static void const_expr_collect_vars(Expr *e, const char ***vars, int *count, int *cap) {
+typedef struct {
+    TypeVarVisitFn visit;
+    TypeArgKindFn arg_kind;
+    void *ctx;
+} VarWalk;
+
+static void const_expr_walk_vars(VarWalk *w, Expr *e) {
     if (!e) return;
     switch (e->kind) {
-    case EXPR_TYPE_VAR_REF:
-        for (int i = 0; i < *count; i++)
-            if ((*vars)[i] == e->type_var_ref.name) return;
-        DA_APPEND(*vars, *count, *cap, e->type_var_ref.name);
-        return;
-    case EXPR_UNARY_PREFIX: const_expr_collect_vars(e->unary_prefix.operand, vars, count, cap); return;
+    case EXPR_TYPE_VAR_REF: w->visit(e->type_var_ref.name, GP_CONST, w->ctx); return;
+    case EXPR_UNARY_PREFIX: const_expr_walk_vars(w, e->unary_prefix.operand); return;
     case EXPR_BINARY:
-        const_expr_collect_vars(e->binary.left, vars, count, cap);
-        const_expr_collect_vars(e->binary.right, vars, count, cap);
+        const_expr_walk_vars(w, e->binary.left);
+        const_expr_walk_vars(w, e->binary.right);
         return;
-    case EXPR_CAST: const_expr_collect_vars(e->cast.operand, vars, count, cap); return;
+    case EXPR_CAST: const_expr_walk_vars(w, e->cast.operand); return;
     default: return;
     }
+}
+
+static uint8_t arg_slot_kind(VarWalk *w, Type *named, int i) {
+    return w->arg_kind ? w->arg_kind(named, i, w->ctx) : GP_UNKNOWN;
+}
+
+static void walk_vars(VarWalk *w, Type *t, uint8_t pos_kind) {
+    if (!t) return;
+    switch (t->kind) {
+    case TYPE_TYPE_VAR: w->visit(t->type_var.name, pos_kind, w->ctx); return;
+    case TYPE_POINTER: walk_vars(w, t->pointer.pointee, GP_TYPE); return;
+    case TYPE_SLICE:   walk_vars(w, t->slice.elem, GP_TYPE); return;
+    case TYPE_OPTION:  walk_vars(w, t->option.inner, GP_TYPE); return;
+    case TYPE_RESULT:  walk_vars(w, t->result.inner, GP_TYPE); return;
+    case TYPE_FIXED_ARRAY:
+        walk_vars(w, t->fixed_array.elem, GP_TYPE);
+        walk_vars(w, t->fixed_array.size_ref, GP_CONST);
+        return;
+    case TYPE_CONST_EXPR: const_expr_walk_vars(w, t->const_expr.expr); return;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            walk_vars(w, t->func.param_types[i], GP_TYPE);
+        walk_vars(w, t->func.return_type, GP_TYPE);
+        return;
+    case TYPE_STRUCT:
+        for (int i = 0; i < t->struc.field_count; i++)
+            walk_vars(w, t->struc.fields[i].type, GP_TYPE);
+        for (int i = 0; i < t->struc.type_arg_count; i++)
+            walk_vars(w, t->struc.type_args[i], arg_slot_kind(w, t, i));
+        return;
+    case TYPE_UNION:
+        for (int i = 0; i < t->unio.variant_count; i++)
+            walk_vars(w, t->unio.variants[i].payload, GP_TYPE);
+        for (int i = 0; i < t->unio.type_arg_count; i++)
+            walk_vars(w, t->unio.type_args[i], arg_slot_kind(w, t, i));
+        return;
+    case TYPE_STUB:
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            walk_vars(w, t->stub.type_args[i], arg_slot_kind(w, t, i));
+        return;
+    default: return;
+    }
+}
+
+void type_walk_vars(Type *t, TypeVarVisitFn visit, TypeArgKindFn arg_kind, void *ctx) {
+    VarWalk w = { visit, arg_kind, ctx };
+    walk_vars(&w, t, GP_TYPE);
+}
+
+typedef struct {
+    const char ***vars;
+    uint8_t **kinds;            /* NULL: names only */
+    int *count;
+    int *cap;
+    const char **conflict_var;
+} VarList;
+
+/* Add a variable once. With kinds, the first definite kind sticks and a
+ * different definite kind later records the first conflicting variable. */
+static void var_list_add(const char *name, uint8_t kind, void *ctx) {
+    VarList *l = ctx;
+    for (int i = 0; i < *l->count; i++) {
+        if ((*l->vars)[i] != name) continue;
+        if (!l->kinds) return;
+        uint8_t *k = &(*l->kinds)[i];
+        if (*k == GP_UNKNOWN) *k = kind;
+        else if (kind != GP_UNKNOWN && kind != *k && !*l->conflict_var)
+            *l->conflict_var = name;
+        return;
+    }
+    if (*l->count >= *l->cap) {
+        *l->cap = *l->cap ? *l->cap * 2 : 8;
+        *l->vars = realloc(*l->vars, (size_t)*l->cap * sizeof(**l->vars));
+        if (l->kinds) *l->kinds = realloc(*l->kinds, (size_t)*l->cap * sizeof(**l->kinds));
+    }
+    (*l->vars)[*l->count] = name;
+    if (l->kinds) (*l->kinds)[*l->count] = kind;
+    (*l->count)++;
 }
 
 void type_collect_vars(Type *t, const char ***vars, int *count, int *cap) {
-    if (!t) return;
-    switch (t->kind) {
-    case TYPE_TYPE_VAR:
-        /* Add if not already present */
-        for (int i = 0; i < *count; i++)
-            if ((*vars)[i] == t->type_var.name) return;
-        DA_APPEND(*vars, *count, *cap, t->type_var.name);
-        return;
-    case TYPE_POINTER: type_collect_vars(t->pointer.pointee, vars, count, cap); return;
-    case TYPE_SLICE:   type_collect_vars(t->slice.elem, vars, count, cap); return;
-    case TYPE_OPTION:  type_collect_vars(t->option.inner, vars, count, cap); return;
-    case TYPE_RESULT:  type_collect_vars(t->result.inner, vars, count, cap); return;
-    case TYPE_FIXED_ARRAY:
-        type_collect_vars(t->fixed_array.elem, vars, count, cap);
-        type_collect_vars(t->fixed_array.size_ref, vars, count, cap);
-        return;
-    case TYPE_CONST_EXPR:
-        const_expr_collect_vars(t->const_expr.expr, vars, count, cap);
-        return;
-    case TYPE_FUNC:
-        for (int i = 0; i < t->func.param_count; i++)
-            type_collect_vars(t->func.param_types[i], vars, count, cap);
-        type_collect_vars(t->func.return_type, vars, count, cap);
-        return;
-    case TYPE_STRUCT:
-        for (int i = 0; i < t->struc.field_count; i++)
-            type_collect_vars(t->struc.fields[i].type, vars, count, cap);
-        for (int i = 0; i < t->struc.type_arg_count; i++)
-            type_collect_vars(t->struc.type_args[i], vars, count, cap);
-        return;
-    case TYPE_UNION:
-        for (int i = 0; i < t->unio.variant_count; i++)
-            type_collect_vars(t->unio.variants[i].payload, vars, count, cap);
-        for (int i = 0; i < t->unio.type_arg_count; i++)
-            type_collect_vars(t->unio.type_args[i], vars, count, cap);
-        return;
-    case TYPE_STUB:
-        for (int i = 0; i < t->stub.type_arg_count; i++)
-            type_collect_vars(t->stub.type_args[i], vars, count, cap);
-        return;
-    default: return;
-    }
-}
-
-/* ---- Kind-aware variable collection (const generics) ---- */
-
-static void ck_add(const char ***vars, uint8_t **kinds, int *count, int *cap,
-                   const char *name, uint8_t kind, const char **conflict_var) {
-    for (int i = 0; i < *count; i++) {
-        if ((*vars)[i] == name) {
-            if ((*kinds)[i] == GP_UNKNOWN) (*kinds)[i] = kind;
-            else if (kind != GP_UNKNOWN && kind != (*kinds)[i] && !*conflict_var)
-                *conflict_var = name;
-            return;
-        }
-    }
-    if (*count >= *cap) {
-        *cap = *cap ? *cap * 2 : 8;
-        *vars = realloc(*vars, (size_t)*cap * sizeof(**vars));
-        *kinds = realloc(*kinds, (size_t)*cap * sizeof(**kinds));
-    }
-    (*vars)[*count] = name;
-    (*kinds)[*count] = kind;
-    (*count)++;
-}
-
-static void ck_collect_expr(Expr *e, const char ***vars, uint8_t **kinds,
-                            int *count, int *cap, const char **conflict_var) {
-    if (!e) return;
-    switch (e->kind) {
-    case EXPR_TYPE_VAR_REF:
-        ck_add(vars, kinds, count, cap, e->type_var_ref.name, GP_CONST, conflict_var);
-        return;
-    case EXPR_UNARY_PREFIX: ck_collect_expr(e->unary_prefix.operand, vars, kinds, count, cap, conflict_var); return;
-    case EXPR_BINARY:
-        ck_collect_expr(e->binary.left, vars, kinds, count, cap, conflict_var);
-        ck_collect_expr(e->binary.right, vars, kinds, count, cap, conflict_var);
-        return;
-    case EXPR_CAST: ck_collect_expr(e->cast.operand, vars, kinds, count, cap, conflict_var);
-        return;
-    default: return;
-    }
-}
-
-/* pos_kind: the kind a bare TYPE_TYPE_VAR occurring here would have.
- * GP_UNKNOWN marks type-arg slots of named type references, where the kind
- * depends on the referenced symbol's own params (pass1's infer_param_kinds
- * fixpoint refines those). */
-static void ck_collect(Type *t, uint8_t pos_kind, const char ***vars, uint8_t **kinds,
-                       int *count, int *cap, const char **conflict_var) {
-    if (!t) return;
-    switch (t->kind) {
-    case TYPE_TYPE_VAR:
-        ck_add(vars, kinds, count, cap, t->type_var.name, pos_kind, conflict_var);
-        return;
-    case TYPE_POINTER: ck_collect(t->pointer.pointee, GP_TYPE, vars, kinds, count, cap, conflict_var); return;
-    case TYPE_SLICE:   ck_collect(t->slice.elem, GP_TYPE, vars, kinds, count, cap, conflict_var); return;
-    case TYPE_OPTION:  ck_collect(t->option.inner, GP_TYPE, vars, kinds, count, cap, conflict_var); return;
-    case TYPE_RESULT:  ck_collect(t->result.inner, GP_TYPE, vars, kinds, count, cap, conflict_var); return;
-    case TYPE_FIXED_ARRAY:
-        ck_collect(t->fixed_array.elem, GP_TYPE, vars, kinds, count, cap, conflict_var);
-        ck_collect(t->fixed_array.size_ref, GP_CONST, vars, kinds, count, cap, conflict_var);
-        return;
-    case TYPE_CONST_EXPR:
-        ck_collect_expr(t->const_expr.expr, vars, kinds, count, cap, conflict_var);
-        return;
-    case TYPE_FUNC:
-        for (int i = 0; i < t->func.param_count; i++)
-            ck_collect(t->func.param_types[i], GP_TYPE, vars, kinds, count, cap, conflict_var);
-        ck_collect(t->func.return_type, GP_TYPE, vars, kinds, count, cap, conflict_var);
-        return;
-    case TYPE_STRUCT:
-        for (int i = 0; i < t->struc.field_count; i++)
-            ck_collect(t->struc.fields[i].type, GP_TYPE, vars, kinds, count, cap, conflict_var);
-        for (int i = 0; i < t->struc.type_arg_count; i++)
-            ck_collect(t->struc.type_args[i], GP_UNKNOWN, vars, kinds, count, cap, conflict_var);
-        return;
-    case TYPE_UNION:
-        for (int i = 0; i < t->unio.variant_count; i++)
-            ck_collect(t->unio.variants[i].payload, GP_TYPE, vars, kinds, count, cap, conflict_var);
-        for (int i = 0; i < t->unio.type_arg_count; i++)
-            ck_collect(t->unio.type_args[i], GP_UNKNOWN, vars, kinds, count, cap, conflict_var);
-        return;
-    case TYPE_STUB:
-        for (int i = 0; i < t->stub.type_arg_count; i++)
-            ck_collect(t->stub.type_args[i], GP_UNKNOWN, vars, kinds, count, cap, conflict_var);
-        return;
-    default: return;
-    }
+    VarList l = { vars, NULL, count, cap, NULL };
+    type_walk_vars(t, var_list_add, NULL, &l);
 }
 
 void type_collect_vars_kinds(Type *t, const char ***vars, uint8_t **kinds,
                              int *count, int *cap, const char **conflict_var) {
-    ck_collect(t, GP_TYPE, vars, kinds, count, cap, conflict_var);
+    VarList l = { vars, kinds, count, cap, conflict_var };
+    type_walk_vars(t, var_list_add, NULL, &l);
 }
 
 /* Partially substitute a const-generic expression: bound const params become
@@ -1352,7 +1251,7 @@ static Expr *const_expr_subst(Arena *a, Expr *e, const char **var_names,
             }
             if (concrete[i]->kind == TYPE_CONST_EXPR)
                 return concrete[i]->const_expr.expr;  /* splice the caller's expression */
-            return e;  /* same name / kind error — caught by the gate/eval */
+            return e;  /* same name, or a kind error the gate/eval catches */
         }
         return e;
     }
@@ -1393,7 +1292,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         for (int i = 0; i < count; i++)
             if (var_names[i] == t->type_var.name)
                 return concrete[i];
-        return t; /* unbound type var — leave as is */
+        return t; /* unbound type var: leave as is */
     case TYPE_CONST_INT:
         return t;
     case TYPE_CONST_EXPR: {
@@ -1441,7 +1340,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         const char *pre_err = g_const_eval_err;
         if (const_type_eval(t->fixed_array.size_ref, var_names, concrete, count, &v))
             return type_fixed_array(a, inner, v);
-        if (g_const_eval_err != pre_err) return type_error();  /* hard failure — caller reports via const_eval_take_error */
+        if (g_const_eval_err != pre_err) return type_error();  /* hard failure; caller reports via const_eval_take_error */
         Type *nref = type_substitute(a, t->fixed_array.size_ref, var_names, concrete, count);
         if (type_is_error(nref)) return type_error();
         if (inner == t->fixed_array.elem && nref == t->fixed_array.size_ref) return t;
@@ -1499,8 +1398,9 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         ns->struc.type_arg_count = new_targ_count;
         ns->struc.resolved_sym = t->struc.resolved_sym;
         /* For a substituted tuple, the canonical name is re-derived later by
-         * mono_resolve_type_names / register_concrete_tuple (which hold the
-         * intern table). type_eq compares tuples structurally in the meantime. */
+         * mono_resolve_type_names or pass2's register_concrete_tuple (which
+         * hold the intern table). type_eq compares tuples structurally in the
+         * meantime. */
         return ns;
     }
     case TYPE_UNION: {
@@ -1557,45 +1457,64 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
     }
 }
 
-/* Concatenate b onto a (a is realloc'd in place, b is borrowed). */
-static char *mangle_cat(char *a, const char *b) {
-    size_t la = strlen(a), lb = strlen(b);
-    char *r = realloc(a, la + lb + 1);
-    memcpy(r + la, b, lb + 1);
-    return r;
-}
-
-/* Append a length-prefixed, self-delimiting encoding of `piece` ("5_int32")
+/* Append a length-prefixed, self-delimiting encoding of `piece` ("3_i32")
  * onto `acc`. `piece` is consumed (freed). The leading decimal length keeps a
  * join of components injective even when components themselves contain '_'
  * separators: the boundary between components is always implied by the length,
  * never inferred from a '_'. */
 static char *mangle_append_piece(char *acc, char *piece) {
-    char hdr[24];
-    snprintf(hdr, sizeof(hdr), "%zu_", strlen(piece));
-    acc = mangle_cat(acc, hdr);
-    acc = mangle_cat(acc, piece);
+    acc = str_appendf(acc, "%zu_%s", strlen(piece), piece);
     free(piece);
     return acc;
+}
+
+/* base "__" lp(arg)*, or the bare base when there are no args. */
+static char *mangle_with_args(const char *base, Type **args, int count) {
+    char *r = str_dup(base);
+    if (count > 0) {
+        r = str_appendf(r, "__");
+        for (int i = 0; i < count; i++)
+            r = mangle_append_piece(r, mangle_type_name(args[i]));
+    }
+    return r;
+}
+
+/* "fc_tupleN" "__" lp(field type)*: a tuple's identity is its element list,
+ * joined the same way as generic arguments. */
+static char *mangle_tuple(StructField *fields, int n) {
+    char *r = str_sprintf("fc_tuple%d", n);
+    if (n > 0) {
+        r = str_appendf(r, "__");
+        for (int i = 0; i < n; i++)
+            r = mangle_append_piece(r, mangle_type_name(fields[i].type));
+    }
+    return r;
+}
+
+/* A structural tag followed by the mangling of the type it wraps. */
+static char *mangle_tagged(const char *tag, Type *inner) {
+    char *in = mangle_type_name(inner);
+    char *r = str_sprintf("%s%s", tag, in);
+    free(in);
+    return r;
 }
 
 /* Returns a type name suitable for mangling. The result is always a malloc'd
  * string that the caller must free (even for primitive types).
  *
- * The mangling is INJECTIVE: distinct types always produce distinct strings,
- * so two unrelated generic instantiations can never dedupe to one C symbol.
- * Two devices guarantee this:
- *   - Every structural type constructor (pointer/slice/option/const/array/
- *     function/any*) is tagged with a leading "__" sequence. A user-written
- *     identifier can never contain "__" (the lexer reserves it), and a
- *     module-mangled name only ever has "__" followed by a name segment, which
- *     starts with a letter or '_' — never a digit. So a structural tag can be
- *     neither forged by nor confused with a leaf (struct/union/primitive) name:
- *     e.g. a pointer `int32*` mangles to "__pint32", which a user struct named
- *     `ptr_int32` (mangling to "ptr_int32") can never collide with.
+ * The mangling is injective: distinct types produce distinct strings, so two
+ * unrelated generic instantiations cannot share one C symbol. Two devices make
+ * it so:
+ *   - Every structural type constructor (pointer/slice/option/result/const/
+ *     array/function/any*) is tagged with a leading "__" sequence. No leaf
+ *     (struct/union/enum/primitive) name begins with "__": a user-written
+ *     identifier cannot contain "__" (the lexer reserves it), and a mangled
+ *     declaration name begins with "fc__". So a structural tag can be neither
+ *     forged by nor confused with a leaf name: `i32*` mangles to "__pi32",
+ *     which no struct name can spell.
  *   - Multi-component manglings (function params, plus the generic/tuple joins
- *     below) length-prefix each component, so a '_' inside one component can
- *     never be mistaken for a component boundary. */
+ *     below) length-prefix each component, so a '_' inside one component is
+ *     never mistaken for a component boundary. */
 char *mangle_type_name(Type *t) {
     if (!t) return str_dup("void");
     /* Const types get a "__c" structural tag. Only pointer/slice/any* carry a
@@ -1604,10 +1523,7 @@ char *mangle_type_name(Type *t) {
     if (t->is_const) {
         Type tmp = *t;
         tmp.is_const = false;
-        char *inner = mangle_type_name(&tmp);
-        char *r = mangle_cat(str_dup("__c"), inner);
-        free(inner);
-        return r;
+        return mangle_tagged("__c", &tmp);
     }
     if (is_str_type(t)) return str_dup("str");
     if (is_cstr_type(t)) return str_dup("cstr");
@@ -1625,26 +1541,15 @@ char *mangle_type_name(Type *t) {
     case TYPE_FLOAT32: return str_dup("f32");
     case TYPE_FLOAT64: return str_dup("f64");
     case TYPE_BOOL:    return str_dup("bool");
-    case TYPE_CHAR:    return str_dup("char");
     case TYPE_VOID:    return str_dup("void");
     case TYPE_NEVER:   return str_dup("never"); /* defensive: never monomorphized */
     case TYPE_STRUCT:
-        /* A tuple's identity is its element list — spell the name from the
-         * fields (mirroring tuple_canonical_name) so it never depends on
-         * whether a stored name was canonicalized yet. */
-        if (t->struc.is_tuple) {
-            char hdr[24];
-            snprintf(hdr, sizeof(hdr), "fc_tuple%d", t->struc.field_count);
-            char *r = str_dup(hdr);
-            if (t->struc.field_count > 0) {
-                r = mangle_cat(r, "__");
-                for (int i = 0; i < t->struc.field_count; i++)
-                    r = mangle_append_piece(r, mangle_type_name(t->struc.fields[i].type));
-            }
-            return r;
-        }
-        /* A generic instance spells base "__" lp(arg)* from structure — the
-         * same recursion as the TYPE_STUB arm below — so the name is a pure
+        /* Spelled from the fields, so it never depends on whether a stored
+         * tuple name was canonicalized yet. */
+        if (t->struc.is_tuple)
+            return mangle_tuple(t->struc.fields, t->struc.field_count);
+        /* A generic instance spells base "__" lp(arg)* from structure (the
+         * same recursion as the TYPE_STUB arm below), so the name is a pure
          * function of the type, not of which walk renamed the node first.
          * The base comes from the defining symbol (the canonical template
          * name set by pass1) when available, which makes the spelling
@@ -1655,10 +1560,7 @@ char *mangle_type_name(Type *t) {
             Symbol *sym = t->struc.resolved_sym;
             if (sym && sym->type && sym->type->kind == TYPE_STRUCT && sym->type->struc.name)
                 base = sym->type->struc.name;
-            char *r = mangle_cat(str_dup(base), "__");
-            for (int i = 0; i < t->struc.type_arg_count; i++)
-                r = mangle_append_piece(r, mangle_type_name(t->struc.type_args[i]));
-            return r;
+            return mangle_with_args(base, t->struc.type_args, t->struc.type_arg_count);
         }
         return str_dup(t->struc.name);
     case TYPE_UNION:
@@ -1668,137 +1570,80 @@ char *mangle_type_name(Type *t) {
             Symbol *sym = t->unio.resolved_sym;
             if (sym && sym->type && sym->type->kind == TYPE_UNION && sym->type->unio.name)
                 base = sym->type->unio.name;
-            char *r = mangle_cat(str_dup(base), "__");
-            for (int i = 0; i < t->unio.type_arg_count; i++)
-                r = mangle_append_piece(r, mangle_type_name(t->unio.type_args[i]));
-            return r;
+            return mangle_with_args(base, t->unio.type_args, t->unio.type_arg_count);
         }
         return str_dup(t->unio.name);
     case TYPE_ENUM:    return str_dup(t->enu.name);
     case TYPE_STUB:
-        /* A generic-instance stub (box<i32>) must mangle identically to its
-         * monomorphized struct (box__3_i32): base "__" lp(arg)*, mirroring
-         * mangle_generic_name. Without recursing into the args, a stub nested in
-         * another instance's type args (box<box<i32>>, where the inner arg is
-         * still an unresolved stub) would drop its args to the bare base name —
-         * making distinct instantiations collide and mis-resolving the C type
-         * name. Concrete top-level decl field types keep their args as base-name
-         * stubs (never rewritten in place), so this never double-mangles. */
-        if (t->stub.type_arg_count > 0) {
-            char *r = mangle_cat(str_dup(t->stub.name), "__");
-            for (int i = 0; i < t->stub.type_arg_count; i++)
-                r = mangle_append_piece(r, mangle_type_name(t->stub.type_args[i]));
-            return r;
-        }
-        return str_dup(t->stub.name);
+        /* A generic-instance stub (box<i32>) mangles like its monomorphized
+         * struct (box__3_i32): base "__" lp(arg)*, through the same
+         * mangle_with_args as mangle_generic_name. The args matter for a stub
+         * nested in another instance's type args (box<box<i32>>, where the
+         * inner arg is still an unresolved stub): mangled as the bare base
+         * name, distinct instantiations would collide and resolve the wrong C
+         * type name. Concrete top-level decl field types keep their args as
+         * base-name stubs (never rewritten in place), so this never
+         * double-mangles. */
+        return mangle_with_args(t->stub.name, t->stub.type_args, t->stub.type_arg_count);
     case TYPE_TYPE_VAR: return str_dup(t->type_var.name);
     case TYPE_ANY_PTR: return str_dup("__y");
     case TYPE_ERROR:   return str_dup("__err"); /* defensive: never monomorphized */
-    case TYPE_POINTER: {
-        char *inner = mangle_type_name(t->pointer.pointee);
-        char *r = mangle_cat(str_dup("__p"), inner);
-        free(inner);
-        return r;
-    }
-    case TYPE_SLICE: {
-        char *inner = mangle_type_name(t->slice.elem);
-        char *r = mangle_cat(str_dup("__l"), inner);
-        free(inner);
-        return r;
-    }
-    case TYPE_OPTION: {
-        char *inner = mangle_type_name(t->option.inner);
-        char *r = mangle_cat(str_dup("__o"), inner);
-        free(inner);
-        return r;
-    }
-    case TYPE_RESULT: {
-        char *inner = mangle_type_name(t->result.inner);
-        char *r = mangle_cat(str_dup("__r"), inner);
-        free(inner);
-        return r;
-    }
+    case TYPE_POINTER: return mangle_tagged("__p", t->pointer.pointee);
+    case TYPE_SLICE:   return mangle_tagged("__l", t->slice.elem);
+    case TYPE_OPTION:  return mangle_tagged("__o", t->option.inner);
+    case TYPE_RESULT:  return mangle_tagged("__r", t->result.inner);
     case TYPE_FIXED_ARRAY: {
         /* A symbolic size only exists in template types, which are never
          * emitted; mangle the size_ref's display form defensively. */
-        if (t->fixed_array.size_ref) {
-            char *inner = mangle_type_name(t->fixed_array.elem);
-            char *r = mangle_cat(str_dup("__as"), type_name(t->fixed_array.size_ref));
-            r = mangle_cat(r, "_");
-            r = mangle_cat(r, inner);
-            free(inner);
-            return r;
-        }
         char *inner = mangle_type_name(t->fixed_array.elem);
-        char hdr[32];
-        snprintf(hdr, sizeof(hdr), "__a%lld_", (long long)t->fixed_array.size);
-        char *r = mangle_cat(str_dup(hdr), inner);
+        char *r = t->fixed_array.size_ref
+            ? str_sprintf("__as%s_%s", type_name(t->fixed_array.size_ref), inner)
+            : str_sprintf("__a%lld_%s", (long long)t->fixed_array.size, inner);
         free(inner);
         return r;
     }
-    case TYPE_CONST_INT: {
-        /* "__k<value>" (or "__kn<abs>" for negatives — '-' is not a C
-         * identifier char). Injective alongside "__a…": the tag letter
+    case TYPE_CONST_INT:
+        /* "__k<value>" (or "__kn<abs>" for negatives, since '-' is not a C
+         * identifier char). Injective alongside "__a...": the tag letter
          * differs, and the value is all digits. */
-        char hdr[32];
         if (t->const_int.value < 0)
-            snprintf(hdr, sizeof(hdr), "__kn%llu",
-                     (unsigned long long)(0 - (uint64_t)t->const_int.value));
-        else
-            snprintf(hdr, sizeof(hdr), "__k%lld", (long long)t->const_int.value);
-        return str_dup(hdr);
-    }
+            return str_sprintf("__kn%llu",
+                               (unsigned long long)(0 - (uint64_t)t->const_int.value));
+        return str_sprintf("__k%lld", (long long)t->const_int.value);
     case TYPE_CONST_EXPR:
         return str_dup("__unk");   /* defensive: never registered/emitted symbolic */
     case TYPE_FUNC: {
         /* "__f" <nparams> "_" lp(param)* lp(ret) [ "_v" if variadic ]. The
          * param count tells the join where the params end and the return type
          * begins; each param/return is length-prefixed (mangle_append_piece). */
-        char hdr[24];
-        snprintf(hdr, sizeof(hdr), "__f%d_", t->func.param_count);
-        char *r = str_dup(hdr);
+        char *r = str_sprintf("__f%d_", t->func.param_count);
         for (int i = 0; i < t->func.param_count; i++)
             r = mangle_append_piece(r, mangle_type_name(t->func.param_types[i]));
         r = mangle_append_piece(r, mangle_type_name(t->func.return_type));
-        if (t->func.is_variadic) r = mangle_cat(r, "_v");
+        if (t->func.is_variadic) r = str_appendf(r, "_v");
         return r;
     }
     default: return str_dup("__unk"); /* defensive: TYPE_COUNT etc. */
     }
 }
 
-const char *mangle_generic_name(Arena *a, InternTable *intern_tbl,
-                                const char *base, Type **type_args, int count) {
-    /* base "__" lp(arg)*  — injective. The "__" boundary is unambiguous: every
-     * arg piece begins with its decimal length (a digit), whereas any "__"
-     * occurring *inside* a module-mangled base is followed by a name segment
-     * (a letter or '_', never a digit). Length-prefixing each arg then keeps the
-     * join itself injective. So neither `pair<foo_bar,baz>` vs `pair<foo,bar_baz>`
-     * nor a base whose own name embeds "__<arg-like>" can collide. */
-    char *buf = str_dup(base);
-    if (count > 0) {
-        buf = mangle_cat(buf, "__");
-        for (int i = 0; i < count; i++)
-            buf = mangle_append_piece(buf, mangle_type_name(type_args[i]));
-    }
-    (void)a;
+const char *mangle_generic_name(InternTable *intern_tbl, const char *base,
+                                Type **type_args, int count) {
+    /* base "__" lp(arg)*, which is injective. The "__" boundary is
+     * unambiguous: every arg piece begins with its decimal length (a digit),
+     * whereas any "__" inside a module-mangled base is followed by a name
+     * segment (a letter or '_', never a digit). Length-prefixing each arg then
+     * keeps the join itself injective. So neither `pair<foo_bar,baz>` vs
+     * `pair<foo,bar_baz>` nor a base whose own name embeds "__<arg-like>" can
+     * collide. */
+    char *buf = mangle_with_args(base, type_args, count);
     const char *result = intern_cstr(intern_tbl, buf);
     free(buf);
     return result;
 }
 
-const char *tuple_canonical_name(Arena *a, InternTable *intern_tbl,
-                                 StructField *fields, int n) {
-    (void)a;
-    /* "fc_tupleN" "__" lp(field-type)* — same injective join as generics. */
-    char base[24];
-    snprintf(base, sizeof(base), "fc_tuple%d", n);
-    char *buf = str_dup(base);
-    if (n > 0) {
-        buf = mangle_cat(buf, "__");
-        for (int i = 0; i < n; i++)
-            buf = mangle_append_piece(buf, mangle_type_name(fields[i].type));
-    }
+const char *tuple_canonical_name(InternTable *intern_tbl, StructField *fields, int n) {
+    char *buf = mangle_tuple(fields, n);
     const char *result = intern_cstr(intern_tbl, buf);
     free(buf);
     return result;
@@ -1819,4 +1664,113 @@ Type *type_tuple(Arena *a, Type **elems, int n) {
         t->struc.fields[i].type = elems[i];
     }
     return t;
+}
+
+char *type_inst_display(const char *name, Type **args, int count) {
+    const char *base = name ? name : "?";
+    for (const char *p = base; (p = strstr(p, "__")); p += 2) base = p + 2;
+    char *s = str_sprintf("%s", base);
+    if (count > 0) {
+        s = str_appendf(s, "<");
+        for (int i = 0; i < count; i++)
+            s = str_appendf(s, "%s%s", i ? ", " : "",
+                            args && args[i] ? type_name(args[i]) : "?");
+        s = str_appendf(s, ">");
+    }
+    return s;
+}
+
+static int max_arg_depth(Type **args, int count, int m) {
+    for (int i = 0; i < count; i++) {
+        int d = type_arg_depth(args[i]);
+        if (d > m) m = d;
+    }
+    return m;
+}
+
+int type_arg_depth(Type *t) {
+    if (!t) return 0;
+    switch (t->kind) {
+    case TYPE_POINTER:     return 1 + type_arg_depth(t->pointer.pointee);
+    case TYPE_SLICE:       return 1 + type_arg_depth(t->slice.elem);
+    case TYPE_OPTION:      return 1 + type_arg_depth(t->option.inner);
+    case TYPE_RESULT:      return 1 + type_arg_depth(t->result.inner);
+    case TYPE_FIXED_ARRAY: return 1 + type_arg_depth(t->fixed_array.elem);
+    case TYPE_FUNC:
+        return 1 + max_arg_depth(t->func.param_types, t->func.param_count,
+                                 type_arg_depth(t->func.return_type));
+    case TYPE_STRUCT: return 1 + max_arg_depth(t->struc.type_args, t->struc.type_arg_count, 0);
+    case TYPE_UNION:  return 1 + max_arg_depth(t->unio.type_args, t->unio.type_arg_count, 0);
+    case TYPE_STUB:   return 1 + max_arg_depth(t->stub.type_args, t->stub.type_arg_count, 0);
+    default: return 1; /* primitives, type vars, any* */
+    }
+}
+
+const char *type_property_c(Type *t, const char *prop) {
+    TypeKind k = t->kind;
+    bool is_int = type_is_integer(t);
+    bool is_float = type_is_float(t);
+    if (!is_int && !is_float) return NULL;
+
+    if (strcmp(prop, "bits") == 0) {
+        switch (k) {
+        case TYPE_INT8: case TYPE_UINT8:   return "8";
+        case TYPE_INT16: case TYPE_UINT16: return "16";
+        case TYPE_INT32: case TYPE_UINT32: case TYPE_FLOAT32: return "32";
+        case TYPE_INT64: case TYPE_UINT64: case TYPE_FLOAT64: return "64";
+        case TYPE_ISIZE: case TYPE_USIZE: return "((int32_t)(sizeof(ptrdiff_t)*8))";
+        default: return NULL;
+        }
+    }
+    if (is_int) {
+        if (strcmp(prop, "min") == 0) {
+            switch (k) {
+            case TYPE_INT8:   return "INT8_MIN";
+            case TYPE_INT16:  return "INT16_MIN";
+            case TYPE_INT32:  return "INT32_MIN";
+            case TYPE_INT64:  return "INT64_MIN";
+            case TYPE_UINT8:  return "((uint8_t)0)";
+            case TYPE_UINT16: return "((uint16_t)0)";
+            case TYPE_UINT32: return "((uint32_t)0)";
+            case TYPE_UINT64: return "((uint64_t)0)";
+            case TYPE_ISIZE:  return "PTRDIFF_MIN";
+            case TYPE_USIZE:  return "((size_t)0)";
+            default: return NULL;
+            }
+        }
+        if (strcmp(prop, "max") == 0) {
+            switch (k) {
+            case TYPE_INT8:   return "INT8_MAX";
+            case TYPE_INT16:  return "INT16_MAX";
+            case TYPE_INT32:  return "INT32_MAX";
+            case TYPE_INT64:  return "INT64_MAX";
+            case TYPE_UINT8:  return "UINT8_MAX";
+            case TYPE_UINT16: return "UINT16_MAX";
+            case TYPE_UINT32: return "UINT32_MAX";
+            case TYPE_UINT64: return "UINT64_MAX";
+            case TYPE_ISIZE:  return "PTRDIFF_MAX";
+            case TYPE_USIZE:  return "SIZE_MAX";
+            default: return NULL;
+            }
+        }
+        return NULL;
+    }
+    /* Float properties */
+    bool is_f32 = (k == TYPE_FLOAT32);
+    if (strcmp(prop, "min") == 0) return is_f32 ? "FLT_MIN" : "DBL_MIN";
+    if (strcmp(prop, "max") == 0) return is_f32 ? "FLT_MAX" : "DBL_MAX";
+    if (strcmp(prop, "epsilon") == 0) return is_f32 ? "FLT_EPSILON" : "DBL_EPSILON";
+    if (strcmp(prop, "nan") == 0) return is_f32 ? "((float)NAN)" : "((double)NAN)";
+    if (strcmp(prop, "inf") == 0) return is_f32 ? "((float)INFINITY)" : "((double)INFINITY)";
+    if (strcmp(prop, "neg_inf") == 0) return is_f32 ? "((float)(-INFINITY))" : "((double)(-INFINITY))";
+    return NULL;
+}
+
+PropHeader type_property_header(Type *t, const char *prop) {
+    if (!type_is_float(t)) return PROP_HEADER_NONE;
+    if (strcmp(prop, "nan") == 0 || strcmp(prop, "inf") == 0 || strcmp(prop, "neg_inf") == 0)
+        return PROP_HEADER_MATH;
+    if (strcmp(prop, "min") == 0 || strcmp(prop, "max") == 0 || strcmp(prop, "epsilon") == 0)
+        return PROP_HEADER_FLOAT;
+    return PROP_HEADER_NONE;
 }

@@ -1,0 +1,16 @@
+// A binding may take the name of a built-in stream (stdin, stdout, stderr);
+// a use of that name reads the binding, not the C stream. Unshadowed, the
+// name is still the stream.
+let pick = (stderr: any*) ->
+    stderr
+
+let main = (args: str[]) ->
+    let stdout = (any*) 0usize
+    assert(stdout == (any*) 0usize)
+    let copy = stdout
+    assert(copy == (any*) 0usize)
+    let stdin = (any*) 16usize
+    assert(stdin == (any*) 16usize)
+    assert(pick((any*) 8usize) == (any*) 8usize)
+    assert(stderr != (any*) 8usize)
+    0

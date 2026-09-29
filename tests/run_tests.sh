@@ -1,9 +1,14 @@
 #!/bin/bash
+# Run the compiler test suite: compile each test to C with fcc, compile the C
+# with $CC -std=c11 -Wall -Werror, run it, and check the result against the
+# test's markers (see CONTRIBUTING.md for the test layout).
+#
+# Environment: CC (C compiler, default cc), CC_OPT (its optimization flags,
+# e.g. -O2), FCC_EXTRA_ARGS (extra fcc options for every test), FILTER (grep
+# pattern over category/test_name), JOBS (parallel jobs, default nproc).
 set -e
 ulimit -c 0
 
-# Per-OS build subdirectory: build/linux/, build/windows/, ... — ask Make
-# rather than replicate the OS-detection logic here.
 FCC="$(make -s print-bin)"
 CC="${CC:-cc}"
 TESTDIR="tests/cases"
@@ -19,8 +24,8 @@ case "$(uname -s)" in
 esac
 
 # Optimized-C run detection. The -O2 test targets (test-*-O2) set CC_OPT=-O2;
-# this runner (make test) leaves it empty (the transpiled C is unoptimized).
-# Drives the skip_o2 / only_o2 markers below.
+# the default runs leave it empty (the transpiled C is built unoptimized). This
+# drives the skip_o2 / only_o2 markers below.
 IS_O2=""
 case "${CC_OPT:-}" in *-O2*) IS_O2=1 ;; esac
 
@@ -35,25 +40,39 @@ exit_matches() {
     if [ -n "$IS_WINDOWS" ] && [ "$expected" = "134" ] && [ "$actual" = "3" ]; then return 0; fi
     return 1
 }
+export -f exit_matches
+export IS_WINDOWS
 
 start_time=$(date +%s%N)
-passed=0
-failed=0
-skipped=0
-errors=""
+JOBS="${JOBS:-$(nproc)}"
 
-run_test() {
+# Platform skips accumulate here (see the skip_windows marker check below).
+skipped=0
+skip_names=""
+
+# run_one_test outputs a single line: PASS or FAIL with details.
+# Each test writes to its own temp files keyed by slug, so no conflicts.
+run_one_test() {
     local test_display="$1"
     local fc_files="$2"
     local error_file="$3"
     local expected_exit_file="$4"
-    local expected_file="$5"
-    local fc_flags="$6"
-    local stderr_contains_file="$7"
+    local fc_flags="$5"
+    local stderr_contains_file="$6"
 
     local slug="${test_display//\//_}"
     local c_file="$TMPDIR/${slug}.c"
     local bin_file="$TMPDIR/${slug}"
+
+    # Cap each compile's virtual memory so a runaway fcc/cc (e.g. an exponential
+    # monomorphization) dies as a single failed test instead of exhausting RAM
+    # and letting the OOM killer take down the whole session/VM. Normal compiles
+    # use a few MB, so the default 3 GiB is generous. Override via
+    # FC_TEST_MEM_CAP_KB (0 disables). Not applied on Windows (ulimit -v is a
+    # no-op under MSYS2/UCRT).
+    if [ -z "$IS_WINDOWS" ]; then
+        ulimit -v "${FC_TEST_MEM_CAP_KB:-3145728}" 2>/dev/null || true
+    fi
 
     # Compile FC -> C. FCC_EXTRA_ARGS lets a whole suite run be re-based on
     # extra fcc options (e.g. FCC_EXTRA_ARGS="--len-repr 16" via make test-gcc-len16).
@@ -62,104 +81,59 @@ run_test() {
             local expected_error=$(cat "$error_file")
             local actual_error=$(cat "$TMPDIR/${slug}.stderr")
             if echo "$actual_error" | grep -qF "$expected_error"; then
-                echo "  PASS  $test_display (expected error)"
-                passed=$((passed + 1))
+                echo "PASS  $test_display (expected error)"
                 return
             else
-                echo "  FAIL  $test_display (wrong error)"
+                echo "FAIL  $test_display (wrong error)"
                 echo "    expected: $expected_error"
                 echo "    got: $actual_error"
-                failed=$((failed + 1))
-                errors="$errors  $test_display\n"
                 return
             fi
         fi
-        echo "  FAIL  $test_display (fc compilation failed)"
-        cat "$TMPDIR/${slug}.stderr"
-        failed=$((failed + 1))
-        errors="$errors  $test_display\n"
+        echo "FAIL  $test_display (fc compilation failed)"
+        cat "$TMPDIR/${slug}.stderr" >&2
         return
     fi
 
     # If an .error file exists but compilation succeeded, that's a failure
     if [ -n "$error_file" ] && [ -f "$error_file" ]; then
-        echo "  FAIL  $test_display (expected error but compilation succeeded)"
-        failed=$((failed + 1))
-        errors="$errors  $test_display\n"
+        echo "FAIL  $test_display (expected error but compilation succeeded)"
         return
     fi
 
     # Compile C -> binary (include source dir for local .h files)
     local src_dir
     src_dir="$(dirname "$(echo $fc_files | awk '{print $1}')")"
-    if ! "$CC" -std=c11 -Wall -Werror -I "$src_dir" -o "$bin_file" "$c_file" -lm $EXTRA_LIBS 2>"$TMPDIR/${slug}.cc_stderr"; then
-        echo "  FAIL  $test_display (C compilation failed)"
-        cat "$TMPDIR/${slug}.cc_stderr"
-        failed=$((failed + 1))
-        errors="$errors  $test_display\n"
+    if ! "$CC" -std=c11 -Wall -Werror ${CC_OPT:-} -I "$src_dir" -o "$bin_file" "$c_file" -lm $EXTRA_LIBS 2>"$TMPDIR/${slug}.cc_stderr"; then
+        echo "FAIL  $test_display (C compilation failed)"
+        cat "$TMPDIR/${slug}.cc_stderr" >&2
         return
     fi
 
-    # Run once, capturing stdout and stderr separately so we can match against
-    # both .expected (stdout+stderr combined, exact diff) and
-    # .expected_stderr_contains (stderr only, substring lines).
-    local stdout_file="$TMPDIR/${slug}.stdout"
+    # Run the binary and check its exit code (0 unless expected_exit says
+    # otherwise). The outer 2>/dev/null drops bash's "Aborted (core dumped)"
+    # notice for the many tests that exit through abort().
     local stderr_file="$TMPDIR/${slug}.run_stderr"
-    local combined_file="$TMPDIR/${slug}.combined"
     local actual_exit
-    local ran=0
-    run_bin() {
-        set +e
-        "$bin_file" > "$stdout_file" 2>"$stderr_file"
-        actual_exit=$?
-        set -e
-        cat "$stdout_file" "$stderr_file" > "$combined_file" 2>/dev/null || true
-        ran=1
-    }
-
-    # Check expected exit code
+    set +e
+    { "$bin_file" > /dev/null 2>"$stderr_file"; actual_exit=$?; } 2>/dev/null
+    set -e
     if [ -n "$expected_exit_file" ] && [ -f "$expected_exit_file" ]; then
         local expected_exit=$(cat "$expected_exit_file" | tr -d '[:space:]')
-        run_bin
         if ! exit_matches "$expected_exit" "$actual_exit"; then
-            echo "  FAIL  $test_display (exit code: expected $expected_exit, got $actual_exit)"
-            failed=$((failed + 1))
-            errors="$errors  $test_display\n"
+            echo "FAIL  $test_display (exit code: expected $expected_exit, got $actual_exit)"
             return
         fi
+    elif [ "$actual_exit" != "0" ]; then
+        echo "FAIL  $test_display (exit code: expected 0, got $actual_exit)"
+        cat "$stderr_file" >&2
+        return
     fi
 
-    # Check expected stdout (matches combined stdout+stderr for back-compat)
-    if [ -n "$expected_file" ] && [ -f "$expected_file" ]; then
-        [ "$ran" = "1" ] || run_bin
-        if ! diff -u "$expected_file" "$combined_file" > "$TMPDIR/${slug}.diff" 2>&1; then
-            echo "  FAIL  $test_display (output mismatch)"
-            cat "$TMPDIR/${slug}.diff"
-            failed=$((failed + 1))
-            errors="$errors  $test_display\n"
-            return
-        fi
-    fi
-
-    # If no expected_exit and no expected stdout, run and expect exit code 0
-    if { [ -z "$expected_exit_file" ] || [ ! -f "$expected_exit_file" ]; } && \
-       { [ -z "$expected_file" ] || [ ! -f "$expected_file" ]; }; then
-        [ "$ran" = "1" ] || run_bin
-        if [ "$actual_exit" != "0" ]; then
-            echo "  FAIL  $test_display (exit code: expected 0, got $actual_exit)"
-            cat "$stderr_file"
-            failed=$((failed + 1))
-            errors="$errors  $test_display\n"
-            return
-        fi
-    fi
-
-    # Check substring assertions against stderr.  Each non-empty, non-comment
-    # line of expected_stderr_contains must appear (as a fixed-string substring)
-    # somewhere in the run's stderr.  Used by --backtraces tests where the
-    # exact frame layout is variable but key tokens are stable.
+    # Each non-empty, non-comment line of expected_stderr_contains must appear
+    # (as a fixed string) somewhere in stderr. The --backtraces tests use this,
+    # since their exact frame layout varies but key tokens are stable.
     if [ -n "$stderr_contains_file" ] && [ -f "$stderr_contains_file" ]; then
-        [ "$ran" = "1" ] || run_bin
         local missing=""
         while IFS= read -r line; do
             [ -n "$line" ] || continue
@@ -169,71 +143,62 @@ run_test() {
             fi
         done < "$stderr_contains_file"
         if [ -n "$missing" ]; then
-            echo "  FAIL  $test_display (stderr missing expected substrings)"
-            printf "$missing"
-            echo "  ---- actual stderr ----"
-            cat "$stderr_file"
-            failed=$((failed + 1))
-            errors="$errors  $test_display\n"
+            echo "FAIL  $test_display (stderr missing expected substrings)"
+            printf "$missing" >&2
+            echo "  ---- actual stderr ----" >&2
+            cat "$stderr_file" >&2
             return
         fi
     fi
 
-    echo "  PASS  $test_display"
-    passed=$((passed + 1))
+    echo "PASS  $test_display"
 }
 
-# Discover and run tests
-# Two kinds:
-#   1. Single-file: a .fc file directly in a category dir (expressions/foo.fc)
-#   2. Multi-file:  a subdirectory containing *.fc files + expected_exit or error
-#      (modules/cross_ns_import/{main.fc, lib.fc, expected_exit})
+export -f run_one_test
+export FCC CC TMPDIR FILTER
+
+# Build the list of tests, one per line: display|fc_files|error|exit|flags|stderr_contains
+test_list="$TMPDIR/test_list"
 
 for milestone_dir in "$TESTDIR"/*/; do
     milestone=$(basename "$milestone_dir")
 
-    # Single-file tests: .fc files directly in this directory
     for fc_file in "$milestone_dir"*.fc; do
         [ -f "$fc_file" ] || continue
         test_name=$(basename "$fc_file" .fc)
-        test_display="$milestone/$test_name"
-
-        run_test "$test_display" \
-            "$fc_file" \
-            "$milestone_dir${test_name}.error" \
-            "$milestone_dir${test_name}.expected_exit" \
-            "$milestone_dir${test_name}.expected"
+        echo "$milestone/$test_name|$fc_file|${milestone_dir}${test_name}.error|${milestone_dir}${test_name}.expected_exit||"
     done
 
-    # Multi-file tests: subdirectories containing .fc files
     for test_subdir in "$milestone_dir"*/; do
         [ -d "$test_subdir" ] || continue
         test_name=$(basename "$test_subdir")
-        test_display="$milestone/$test_name"
-
-        # Collect all .fc files in the subdirectory
         fc_files=$(find "$test_subdir" -name "*.fc" | sort | tr '\n' ' ')
         [ -n "$fc_files" ] || continue
 
-        # Platform skips: a skip_windows marker opts a test out on Windows —
-        # e.g. the --backtraces tests, whose frames rely on execinfo backtrace()
-        # (glibc/macOS only; a no-op stub under MSYS2/UCRT).
+        # A skip_windows marker opts a test out on Windows: the --backtraces
+        # tests rely on execinfo backtrace(), which is glibc/macOS only.
         if [ -n "$IS_WINDOWS" ] && [ -f "${test_subdir}skip_windows" ]; then
-            echo "  SKIP  $test_display (windows)"
-            skipped=$((skipped + 1))
+            if [ -z "$FILTER" ] || printf '%s' "$milestone/$test_name" | grep -q "$FILTER"; then
+                skipped=$((skipped + 1))
+                skip_names="${skip_names}  SKIP  $milestone/$test_name (windows)\n"
+            fi
             continue
         fi
 
         # Optimization-level skips (see IS_O2 above). skip_o2 opts a test out of
-        # the -O2 runs; only_o2 opts a test out of the default unoptimized runs.
+        # the -O2 runs (e.g. --backtraces tests asserting full frames that TCO
+        # legitimately elides at -O2); only_o2 opts a test out of the default
+        # unoptimized runs (e.g. the -O2 backtrace variants asserting the
+        # degraded frame set / cold-split handling, which only holds at -O2).
         if { [ -n "$IS_O2" ] && [ -f "${test_subdir}skip_o2" ]; } || \
            { [ -z "$IS_O2" ] && [ -f "${test_subdir}only_o2" ]; }; then
-            echo "  SKIP  $test_display (opt)"
-            skipped=$((skipped + 1))
+            if [ -z "$FILTER" ] || printf '%s' "$milestone/$test_name" | grep -q "$FILTER"; then
+                skipped=$((skipped + 1))
+                skip_names="${skip_names}  SKIP  $milestone/$test_name (opt)\n"
+            fi
             continue
         fi
 
-        # Append dependency files listed in deps (one path per line, relative to project root)
         if [ -f "${test_subdir}deps" ]; then
             while IFS= read -r dep; do
                 [ -n "$dep" ] || continue
@@ -241,7 +206,6 @@ for milestone_dir in "$TESTDIR"/*/; do
             done < "${test_subdir}deps"
         fi
 
-        # Collect --flag arguments from flags file
         fc_flags=""
         if [ -f "${test_subdir}flags" ]; then
             while IFS= read -r flag; do
@@ -250,8 +214,8 @@ for milestone_dir in "$TESTDIR"/*/; do
             done < "${test_subdir}flags"
         fi
 
-        # Literal extra fcc args (one per line) — used for codegen flags like
-        # --backtraces.  Distinct from `flags` which prepends --flag to each.
+        # Literal extra fcc args, one per line (`#` comments skipped), such as
+        # --backtraces or a @response.rsp file.
         if [ -f "${test_subdir}fcc_args" ]; then
             while IFS= read -r arg; do
                 [ -n "$arg" ] || continue
@@ -260,15 +224,46 @@ for milestone_dir in "$TESTDIR"/*/; do
             done < "${test_subdir}fcc_args"
         fi
 
-        run_test "$test_display" \
-            "$fc_files" \
-            "${test_subdir}error" \
-            "${test_subdir}expected_exit" \
-            "${test_subdir}expected" \
-            "$fc_flags" \
-            "${test_subdir}expected_stderr_contains"
+        echo "$milestone/$test_name|$fc_files|${test_subdir}error|${test_subdir}expected_exit|$fc_flags|${test_subdir}expected_stderr_contains"
     done
-done
+done > "$test_list"
+
+# Apply filter if set
+if [ -n "$FILTER" ]; then
+    filtered="$TMPDIR/test_list_filtered"
+    grep "$FILTER" "$test_list" > "$filtered" || true
+    test_list="$filtered"
+fi
+
+# Run tests in parallel, collect output
+results=$(cat "$test_list" | xargs -P "$JOBS" -I {} bash -c '
+    IFS="|" read -r display files err exit flags scont <<< "{}"
+    run_one_test "$display" "$files" "$err" "$exit" "$flags" "$scont"
+')
+
+# Tally results
+passed=0
+failed=0
+fail_lines=""
+
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [[ "$line" == PASS* ]]; then
+        echo "  $line"
+        passed=$((passed + 1))
+    elif [[ "$line" == FAIL* ]]; then
+        echo "  $line"
+        failed=$((failed + 1))
+        fail_lines="$fail_lines  $line\n"
+    else
+        # Detail lines (indented error output)
+        echo "$line"
+    fi
+done <<< "$results"
+
+if [ -n "$skip_names" ]; then
+    echo -en "$skip_names"
+fi
 
 elapsed_ms=$(( ($(date +%s%N) - start_time) / 1000000 ))
 elapsed_s=$(( elapsed_ms / 1000 ))
@@ -276,12 +271,12 @@ elapsed_frac=$(( elapsed_ms % 1000 ))
 
 echo ""
 if [ "$skipped" -gt 0 ]; then
-    printf "%d passed, %d failed, %d skipped in %d.%03ds\n" "$passed" "$failed" "$skipped" "$elapsed_s" "$elapsed_frac"
+    printf "%d passed, %d failed, %d skipped in %d.%03ds (%s)\n" "$passed" "$failed" "$skipped" "$elapsed_s" "$elapsed_frac" "${CC:-cc}"
 else
-    printf "%d passed, %d failed in %d.%03ds\n" "$passed" "$failed" "$elapsed_s" "$elapsed_frac"
+    printf "%d passed, %d failed in %d.%03ds (%s)\n" "$passed" "$failed" "$elapsed_s" "$elapsed_frac" "${CC:-cc}"
 fi
 
 if [ $failed -gt 0 ]; then
-    echo -e "Failed tests:\n$errors"
+    echo -e "Failed tests:\n$fail_lines"
     exit 1
 fi

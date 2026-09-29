@@ -68,7 +68,7 @@ CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -g $(OPT) -I$(BUILD_DIR) \
          -DFCC_DATADIR='"$(datadir)"'
 
 SRCS     := $(wildcard src/*.c)
-HDRS     := $(wildcard src/*.h)
+HDRS     := $(wildcard src/*.h src/*.inc)
 OBJS     := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 BIN_NAME := fcc$(EXE)
 BIN      := $(BUILD_DIR)/$(BIN_NAME)
@@ -80,9 +80,8 @@ GEN_VERSION_H := $(BUILD_DIR)/fcc_version.h
 
 all: $(BIN)
 
-# Echo the binary path. run.sh, demos/*/run.sh, and tests/run_tests*.sh use
-# this so they don't have to replicate the OS-detection logic — `make
-# print-bin` returns build/<os>/fcc[.exe] for whichever OS Make ran on.
+# Echo the binary path, build/<os>/fcc[.exe]. run.sh, demos/*/run.sh and
+# tests/run_tests.sh use this instead of repeating the OS detection above.
 print-bin:
 	@echo $(BIN)
 
@@ -122,11 +121,9 @@ dev:
 	@$(MAKE) clean
 	@$(MAKE) OPT=-O0
 
-# Removes every OS subdirectory under build/. Also sweeps any stale src/*.o
-# from older in-tree builds (pre per-OS subdirectory layout).
+# Removes every OS subdirectory under build/.
 clean:
 	rm -rf build
-	rm -f src/*.o
 
 
 # === Install / Uninstall (GNU coding standards) ===
@@ -160,84 +157,79 @@ uninstall-vscode:
 
 
 # === Tests ===
+# Every suite runs tests/run_tests.sh. CC picks the compiler for the generated
+# C, CC_OPT its optimization flags, FCC_EXTRA_ARGS adds fcc options, and FILTER
+# is a grep pattern over category/test_name.
+RUN_TESTS = FILTER=$(FILTER) bash tests/run_tests.sh
 
 # `check` is the GNU canonical test target.
-check: test-all
+check: check-ascii test-all
 
-test: $(BIN)
-	@bash tests/run_tests.sh
-
-test-parallel: $(BIN)
-	@bash tests/run_tests_parallel.sh
+# Compiler sources are plain ASCII. The one exception is src/builtin_docs.inc,
+# user-facing hover markdown that keeps its typography.
+check-ascii:
+	@if LC_ALL=C grep -nH "$$(printf '[\200-\377]')" src/*.c src/*.h; then \
+	  echo "error: non-ASCII bytes in src/ (see lines above)"; exit 1; fi
 
 test-gcc: $(BIN)
 	@echo "=== Testing with gcc ==="
-	@CC=gcc FILTER=$(FILTER) bash tests/run_tests_parallel.sh
+	@CC=gcc $(RUN_TESTS)
 
 test-clang: $(BIN)
 	@echo "=== Testing with clang ==="
-	@CC=clang FILTER=$(FILTER) bash tests/run_tests_parallel.sh
+	@CC=clang $(RUN_TESTS)
 
 test-gcc-O2: $(BIN)
 	@echo "=== Testing with gcc (-O2) ==="
-	@CC=gcc CC_OPT=-O2 FILTER=$(FILTER) bash tests/run_tests_parallel.sh
+	@CC=gcc CC_OPT=-O2 $(RUN_TESTS)
 
 test-clang-O2: $(BIN)
 	@echo "=== Testing with clang (-O2) ==="
-	@CC=clang CC_OPT=-O2 FILTER=$(FILTER) bash tests/run_tests_parallel.sh
+	@CC=clang CC_OPT=-O2 $(RUN_TESTS)
 
-# The whole suite re-based on a 16-bit slice-length representation. Because
-# --len-repr changes only representation (semantics are identical for
-# programs whose data fits), the retro configuration is testable on the host.
+# The whole suite with 16-bit stored slice lengths. --len-repr changes only
+# the representation, so the retro configuration is testable on the host.
 test-gcc-len16: $(BIN)
 	@echo "=== Testing with gcc (--len-repr 16) ==="
-	@CC=gcc FCC_EXTRA_ARGS="--len-repr 16" FILTER=$(FILTER) bash tests/run_tests_parallel.sh
+	@CC=gcc FCC_EXTRA_ARGS="--len-repr 16" $(RUN_TESTS)
 
 test-clang-len16: $(BIN)
 	@echo "=== Testing with clang (--len-repr 16) ==="
-	@CC=clang FCC_EXTRA_ARGS="--len-repr 16" FILTER=$(FILTER) bash tests/run_tests_parallel.sh
+	@CC=clang FCC_EXTRA_ARGS="--len-repr 16" $(RUN_TESTS)
 
-test-all-O2: $(BIN)
+# Run the suite under gcc and clang at the same time and print each log whole.
+# $(1) is CC_OPT for the generated C (empty for the default, unoptimized).
+define test_both
 	@bash -c '\
 	  start=$$(date +%s%N); \
 	  tmpdir=$$(mktemp -d); \
 	  trap "rm -rf $$tmpdir" EXIT; \
-	  (CC=gcc CC_OPT=-O2 FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/gcc.out" 2>&1; \
-	    echo $$? > "$$tmpdir/gcc.rc"; \
-	    echo "=== Testing with gcc (-O2) ==="; cat "$$tmpdir/gcc.out"; echo "") & \
-	  (CC=clang CC_OPT=-O2 FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/clang.out" 2>&1; \
-	    echo $$? > "$$tmpdir/clang.rc"; \
-	    echo "=== Testing with clang (-O2) ==="; cat "$$tmpdir/clang.out"; echo "") & \
+	  for cc in gcc clang; do \
+	    (CC=$$cc CC_OPT=$(1) $(RUN_TESTS) > "$$tmpdir/$$cc.out" 2>&1; \
+	      echo $$? > "$$tmpdir/$$cc.rc") & \
+	  done; \
 	  wait; \
-	  gcc_rc=$$(cat "$$tmpdir/gcc.rc"); clang_rc=$$(cat "$$tmpdir/clang.rc"); \
-	  end=$$(date +%s%N); \
-	  elapsed_ms=$$(( (end - start) / 1000000 )); \
+	  rc=0; \
+	  for cc in gcc clang; do \
+	    echo "=== Testing with $$cc$(if $(1), ($(1))) ==="; \
+	    cat "$$tmpdir/$$cc.out"; echo ""; \
+	    [ "$$(cat "$$tmpdir/$$cc.rc")" = 0 ] || rc=1; \
+	  done; \
+	  elapsed_ms=$$(( ($$(date +%s%N) - start) / 1000000 )); \
 	  printf "Total time: %d.%03ds\n" $$((elapsed_ms / 1000)) $$((elapsed_ms % 1000)); \
-	  if [ $$gcc_rc -ne 0 ] || [ $$clang_rc -ne 0 ]; then exit 1; fi'
+	  exit $$rc'
+endef
 
-# Language-server wire tests. Kept out of `check`/`test-all` (different
-# prereqs — needs python3) so they can never regress the compiler suite.
+test-all: $(BIN)
+	$(call test_both,)
+
+test-all-O2: $(BIN)
+	$(call test_both,-O2)
+
+# Language-server wire tests. Kept out of `check` because they need python3.
 test-lsp: $(BIN)
 	@echo "=== Testing LSP server ==="
 	@bash tests/lsp/run_lsp_tests.sh
-
-test-all: $(BIN)
-	@bash -c '\
-	  start=$$(date +%s%N); \
-	  tmpdir=$$(mktemp -d); \
-	  trap "rm -rf $$tmpdir" EXIT; \
-	  (CC=gcc FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/gcc.out" 2>&1; \
-	    echo $$? > "$$tmpdir/gcc.rc"; \
-	    echo "=== Testing with gcc ==="; cat "$$tmpdir/gcc.out"; echo "") & \
-	  (CC=clang FILTER=$(FILTER) bash tests/run_tests_parallel.sh > "$$tmpdir/clang.out" 2>&1; \
-	    echo $$? > "$$tmpdir/clang.rc"; \
-	    echo "=== Testing with clang ==="; cat "$$tmpdir/clang.out"; echo "") & \
-	  wait; \
-	  gcc_rc=$$(cat "$$tmpdir/gcc.rc"); clang_rc=$$(cat "$$tmpdir/clang.rc"); \
-	  end=$$(date +%s%N); \
-	  elapsed_ms=$$(( (end - start) / 1000000 )); \
-	  printf "Total time: %d.%03ds\n" $$((elapsed_ms / 1000)) $$((elapsed_ms % 1000)); \
-	  if [ $$gcc_rc -ne 0 ] || [ $$clang_rc -ne 0 ]; then exit 1; fi'
 
 
 # === Help ===
@@ -258,7 +250,8 @@ help:
 	@echo "  Override PREFIX, DESTDIR, bindir, or datadir to customize install paths."
 	@echo ""
 	@echo "Test:"
-	@echo "  make check        Run full test suite (GNU alias of test-all)"
+	@echo "  make check        check-ascii, then the full test suite (test-all)"
+	@echo "  make check-ascii  Fail on non-ASCII bytes in src/*.c and src/*.h"
 	@echo "  make test-all     Run tests with both gcc and clang"
 	@echo "  make test-gcc     Run tests with gcc only"
 	@echo "  make test-clang   Run tests with clang only"
@@ -269,7 +262,7 @@ help:
 
 
 .PHONY: all dev clean install uninstall install-vscode uninstall-vscode \
-        check test test-parallel test-lsp \
+        check check-ascii test-lsp \
         test-gcc test-clang test-gcc-O2 test-clang-O2 \
         test-gcc-len16 test-clang-len16 \
         test-all test-all-O2 help print-bin

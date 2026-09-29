@@ -17,7 +17,6 @@ typedef enum {
     TYPE_FLOAT64,
     TYPE_BOOL,
     TYPE_VOID,
-    TYPE_CHAR,
     TYPE_POINTER,
     TYPE_SLICE,
     TYPE_OPTION,
@@ -34,7 +33,7 @@ typedef enum {
                         folds to TYPE_CONST_INT at substitution time */
     TYPE_STUB,       /* unresolved type reference: name only, resolved by pass1/pass2 */
     TYPE_ERROR,      /* poison type for error recovery */
-    TYPE_NEVER,      /* bottom type: return/break/continue — absorbed by any branch sibling */
+    TYPE_NEVER,      /* bottom type: return/break/continue; absorbed by any branch sibling */
     TYPE_UNRESOLVED, /* a recursive function's not-yet-inferred return type. Transient:
                         exists only while a recursive body is being checked, then patched
                         to the concrete inferred type (or `never` if no base case exists).
@@ -77,13 +76,13 @@ struct EnumVariant {
 
 struct Type {
     TypeKind kind;
-    const char *alias;  /* display name override (e.g. "str" for uint8[], "cstr" for uint8*) */
+    const char *alias;  /* display name override (e.g. "str" for u8[], "cstr" for u8*) */
     bool is_const;      /* const qualifier for pointer/slice types */
     union {
         struct { Type *pointee; } pointer;
         struct { Type *elem; } slice;
         struct { Type *inner; } option;
-        struct { Type *inner; } result;   /* T! — ok(T) | err(i32); repr { int32_t err; T value; } */
+        struct { Type *inner; } result;   /* T!: ok(T) | err(i32); repr { int32_t err; T value; } */
         struct {
             Type **param_types;
             int param_count;
@@ -94,7 +93,7 @@ struct Type {
         } func;
         struct {
             const char *name;
-            const char *qualified_name;  /* fully qualified FC path (e.g. "std::types.tuple2") */
+            const char *qualified_name;  /* fully qualified FC path (e.g. "std::data.array_list") */
             const char *c_name;         /* C struct/union tag name for extern types, NULL for normal */
             bool is_c_union;            /* true for extern union (untagged C union layout) */
             bool is_tuple;              /* true for synthesized tuple structs (fields e0..eN-1, display "{...}") */
@@ -114,7 +113,7 @@ struct Type {
             struct Symbol *resolved_sym; /* template type symbol, set by pass1/pass2; used by mono to avoid symtab re-lookup */
         } unio;
         struct {
-            const char *name;            /* mangled C name (fc__difficulty / m__door_lock) */
+            const char *name;            /* mangled C name (fc__difficulty / fc__m__door_lock) */
             const char *qualified_name;  /* fully qualified FC path for diagnostics */
             Type *repr;                  /* underlying type: i8..u64 singleton; i32 default */
             EnumVariant *variants;
@@ -131,7 +130,7 @@ struct Type {
         struct { int64_t value; } const_int;              /* TYPE_CONST_INT */
         struct { struct Expr *expr; } const_expr;         /* TYPE_CONST_EXPR */
         /* TYPE_STUB: unresolved type reference created by the parser.
-         * Resolved to TYPE_STRUCT or TYPE_UNION by pass1/pass2. */
+         * Resolved to the struct, union or enum type it names by pass1/pass2. */
         struct {
             const char *name;
             const char *qualified_name;
@@ -182,7 +181,7 @@ Type *type_fixed_array(Arena *a, Type *elem, int64_t size);
 bool is_str_type(Type *t);
 bool is_cstr_type(Type *t);
 
-/* Const helpers */
+/* Copy and const helpers */
 Type *type_copy(Arena *a, Type *t);
 /* Recursive copy: fresh nodes for every constructor + fresh field/variant/param
  * arrays (leaves and type_args shared). Use when a copy will be mutated in place
@@ -200,6 +199,27 @@ bool type_is_numeric(Type *t);
 bool type_eq(Type *a, Type *b);
 bool type_eq_ignore_const(Type *a, Type *b);
 const char *type_name(Type *t);
+
+/* The C spelling of built-in property `prop` of numeric type `t` (`i32.max` is
+ * INT32_MAX, `f64.nan` is ((double)NAN), `u8.bits` is 8), or NULL when `t` has
+ * no such property. */
+const char *type_property_c(Type *t, const char *prop);
+
+/* The C header a type property's spelling needs beyond <stdint.h>: float.h for
+ * a float's min, max and epsilon, math.h for its nan, inf and neg_inf. */
+typedef enum { PROP_HEADER_NONE, PROP_HEADER_FLOAT, PROP_HEADER_MATH } PropHeader;
+PropHeader type_property_header(Type *t, const char *prop);
+
+/* An instantiation spelled the way the user writes it, "uwide<100>", for a
+ * diagnostic. `name` may be a mangled C name: everything through its last
+ * "__" is dropped (a user name never contains "__"). Caller frees. */
+char *type_inst_display(const char *name, Type **args, int count);
+
+/* The structural nesting depth of a type argument: the axis along which a
+ * divergent instantiation grows. It recurses through wrapper constructors and
+ * generic type arguments but never into struct/union fields, which the
+ * definition bounds; that also keeps it finite on by-value-recursive types. */
+int type_arg_depth(Type *t);
 
 /* Implicit widening: can 'from' widen to 'to' without explicit cast? */
 bool type_can_widen(Type *from, Type *to);
@@ -232,10 +252,10 @@ bool type_is_const_arg(Type *t);
 bool type_fixed_array_size(Type *t, int64_t *out);
 
 /* Evaluate a const-arg carrier (TYPE_CONST_INT / TYPE_CONST_EXPR / a const
- * param TYPE_TYPE_VAR) under name→Type bindings where const params bind to
+ * param TYPE_TYPE_VAR) under name-to-Type bindings where const params bind to
  * TYPE_CONST_INT. Context-free i64 evaluation (two's-complement wrap, masked
  * shifts, div-by-zero = error). Returns false when still symbolic (no error)
- * or on a hard failure (error stashed — see const_eval_take_error). */
+ * or on a hard failure (error stashed; see const_eval_take_error). */
 bool const_type_eval(Type *t, const char **var_names, Type **concrete,
                      int count, int64_t *out);
 
@@ -251,6 +271,15 @@ bool type_contains_type_var(Type *t);
 
 /* Collect unique type variable names from a type in order of first appearance */
 void type_collect_vars(Type *t, const char ***vars, int *count, int *cap);
+
+/* Visit each type-variable occurrence in `t`, in order, with the kind its
+ * position gives it: GP_TYPE in a type position, GP_CONST in an array size or
+ * const expression. In the i-th type-argument slot of a named type (`named`,
+ * a struct, union or stub) the kind is whatever the referenced declaration's
+ * parameter is: `arg_kind` supplies it, or GP_UNKNOWN when it is NULL. */
+typedef void (*TypeVarVisitFn)(const char *name, uint8_t kind, void *ctx);
+typedef uint8_t (*TypeArgKindFn)(Type *named, int i, void *ctx);
+void type_walk_vars(Type *t, TypeVarVisitFn visit, TypeArgKindFn arg_kind, void *ctx);
 
 /* Like type_collect_vars, but also records each variable's inferred kind
  * (GP_TYPE for type positions, GP_CONST for size/value positions, GP_UNKNOWN
@@ -268,15 +297,16 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
  * Returns a malloc'd string that the caller must free. */
 char *mangle_type_name(Type *t);
 
-/* Build mangled name for a generic instantiation, e.g. "fc_identity_int32" */
-const char *mangle_generic_name(Arena *a, InternTable *intern,
+/* The interned C name of a generic instantiation: `base` "__" and each
+ * argument's mangling, length-prefixed (box<i32> from base "fc__box" is
+ * "fc__box__3_i32"). */
+const char *mangle_generic_name(InternTable *intern,
                                 const char *base, Type **type_args, int count);
 
-/* Build the canonical interned name for a tuple struct from its element fields,
- * e.g. "fc_tuple2_int32_str". Two structurally identical tuples share this name,
- * so type_eq (which compares struc.name) yields structural identity. */
-const char *tuple_canonical_name(Arena *a, InternTable *intern,
-                                 StructField *fields, int n);
+/* The canonical interned name of a tuple struct, from its element types
+ * ({i32, str} is "fc_tuple2__3_i323_str"). Structurally identical tuples share
+ * the name, so type_eq (which compares struc.name) is structural for them. */
+const char *tuple_canonical_name(InternTable *intern, StructField *fields, int n);
 
 /* Construct a synthesized tuple struct type from element types (fields e0..eN-1).
  * Sets is_tuple=true; name/qualified_name are left for the canonicalizer/resolve_type. */

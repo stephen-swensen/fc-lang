@@ -16,8 +16,7 @@ static inline SrcLoc loc_from_token(const Token *t) {
 
 void diag_set_filename(const char *filename);
 
-/* The current default source filename (used when a SrcLoc carries no filename of
- * its own — e.g. when rendering secondary locations in a multi-line diagnostic). */
+/* The filename used for a SrcLoc that carries none. */
 const char *diag_filename(void);
 
 /* Report error and increment error count. */
@@ -31,13 +30,12 @@ _Noreturn void diag_fatal_simple(const char *fmt, ...);
 
 int diag_error_count(void);
 
-/* ---- Diagnostic capture (for the in-process LSP server) ----
+/* ---- Server mode (fcc --lsp) ----
  *
- * By default diagnostics print to stderr and diag_fatal* exit(1) — the CLI
- * behaviour, unchanged. A long-running server instead wants to (a) collect
- * diagnostics as structured records and (b) survive the lexer/parser's many
- * _Noreturn diag_fatal sites while the user is mid-typing. Both are opt-in and
- * leave the default (sink == NULL, abort env == NULL) byte-for-byte as today. */
+ * By default diagnostics print to stderr and diag_fatal* calls exit(1). The
+ * language server instead collects diagnostics through a sink and turns a fatal
+ * into a longjmp, so a lexer error in a half-typed file ends one analysis
+ * rather than the process. */
 
 /* A sink receives the resolved location (filename already defaulted from
  * diag_filename() when the SrcLoc carried none) and the formatted message text
@@ -48,8 +46,7 @@ typedef void (*DiagSink)(SrcLoc loc, const char *msg, void *userdata);
  * here instead of stderr. Pass NULL to restore stderr printing. */
 void diag_set_sink(DiagSink sink, void *userdata);
 
-/* Zero the error count (call before reusing the diagnostics globals for a fresh
- * analysis). */
+/* Zero the error count before starting a fresh analysis. */
 void diag_reset_counts(void);
 
 /* Register a recovery point: while set (non-NULL), diag_fatal/diag_fatal_simple

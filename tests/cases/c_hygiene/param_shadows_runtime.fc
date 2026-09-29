@@ -1,9 +1,9 @@
-// BUG (bugsearch 2026-07-18): parameters emitted raw can shadow libc and
-// FC-runtime file-scope names the generated body relies on: a param named
-// `abort` breaks the assert expansion ("called object 'abort' is not a
-// function"), `fc_str` breaks subsequent str declarations, `snprintf`
-// breaks interpolation. is_c_reserved covers only C keywords, not libc or
-// the fc_* runtime namespace.
+// A parameter may be named after a libc or FC runtime symbol (`abort`,
+// `fc_str`, `snprintf`) without breaking the code generated around it.
+// Regression: parameters used to be emitted with their source spelling and
+// shadowed the file-scope name, breaking the assert expansion ("called
+// object 'abort' is not a function"), later str declarations, and
+// interpolation respectively.
 let f = (abort: i32) ->
     assert(abort == 1)
     abort + 1

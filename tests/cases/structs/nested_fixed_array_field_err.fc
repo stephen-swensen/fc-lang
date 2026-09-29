@@ -1,7 +1,6 @@
-// BUG (bugsearch 2026-07-18): a nested fixed-array field type u8[2][3] is
-// accepted and codegen emits `uint8_t[2] m[3];` — not a C type-specifier;
-// ~10 gcc errors. Must never be exit-0-with-broken-output: either reject
-// (this test's expectation) or emit the proper inside-out C declarator.
+// A fixed array must be a field's outermost type, so a nested fixed-array
+// field `u8[2][3]` is a compile error. Regression: it used to be accepted and
+// emitted `uint8_t[2] m[3];`, which is not a C declaration.
 struct grid =
     m: u8[2][3]
 

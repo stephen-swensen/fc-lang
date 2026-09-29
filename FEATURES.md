@@ -99,7 +99,7 @@ Eight modules, written in FC ([`stdlib/`](stdlib/)):
 - **`--backtraces`** — opt-in FC-level stack traces on abort, with no linker flags and zero cost when off
 - **`.errcodes`** — a name/code map for `error` declarations emitted alongside every build
 - **`fcc --lsp`** — an in-process language server: project-wide live diagnostics, hover with doc comments, go-to-definition, scope-aware completion, and inferred-type inlay hints or CodeLens. A project pins its own compilation unit with an `lsp.rsp` file
-- **Editor support** — a VSCode extension in [`editors/vscode/`](editors/vscode/) (`make install-vscode`) and a Vim syntax file at [`spec/fc.vim`](spec/fc.vim)
+- **Editor support** — a VSCode extension in [`editors/vscode/`](editors/vscode/) (`make install-vscode`) and a Vim syntax file at [`editors/vim/fc.vim`](editors/vim/fc.vim)
 - **`run.sh`** — compile, link with the stdlib, run, and report the exit code in one shot
 - **Test runner** — `make check` builds every case with both gcc and clang under `-Wall -Werror`; the emitted C is warning-clean by contract
 

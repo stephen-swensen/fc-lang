@@ -6,12 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* On Windows, fcc must link against UCRT — same policy as the emitted FC
- * programs (see prelude guard in codegen.c). Fail at compiler build time
- * rather than letting users discover the gap later when their first FC
- * program hits the matching guard. The check sits *after* the standard
- * headers because _UCRT is defined in MinGW-w64's <_mingw.h> (pulled in
- * transitively by <stdint.h> et al.), not by the compiler itself. */
+/* On Windows, fcc must link against UCRT, the same policy as the emitted FC
+ * programs (see the prelude guard in codegen.c). Checking here reports the
+ * problem when fcc is built rather than when its first FC program is. The
+ * check comes after the standard headers because _UCRT is defined by
+ * MinGW-w64's <_mingw.h>, which <stdint.h> and the others pull in, not by the
+ * compiler itself. */
 #if defined(_WIN32) && !defined(_UCRT)
 #error "FC on Windows requires the UCRT runtime; msvcrt is not supported."
 #endif
@@ -35,24 +35,25 @@ typedef struct Arena {
 void arena_init(Arena *a);
 void *arena_alloc(Arena *a, size_t size);
 char *arena_strdup(Arena *a, const char *s, int len);
+/* Copy `count` elements of `size` bytes into the arena; NULL when count is 0.
+ * Typically moves a DA_APPEND scratch array into the AST before freeing it. */
+void *arena_dup(Arena *a, const void *src, int count, size_t size);
 void arena_free(Arena *a);
 
 /* ---- Exact-size string formatting ---- */
 
-/* printf-format into a fresh allocation sized exactly to the result.
+/* printf-format into a fresh allocation sized to the result.
  *
- * These are the replacement for the `char buf[N]` + snprintf idiom anywhere the
- * formatted text embeds an FC identifier, a qualified name, a type spelling, or
- * a filesystem path. All of those are unbounded, and snprintf reports a cut only
- * through a return value that name-building code routinely drops — so the
- * failure is silent, and a truncated *name* does not become invalid, it becomes
- * a **different valid name**: `a.bcd` cut to `a.bc` resolves to a real other
- * symbol, and two namespaces cut to a common prefix mangle onto one C symbol.
+ * Use these instead of `char buf[N]` + snprintf wherever the formatted text
+ * embeds an FC identifier, a qualified name, a type spelling, or a filesystem
+ * path. Those are unbounded, snprintf reports a cut only through a return
+ * value that is easy to drop, and a truncated name is not invalid but a
+ * different valid name: `a.bcd` cut to `a.bc` resolves to another symbol, and
+ * two namespaces cut to a common prefix mangle onto one C symbol.
  *
- * `str_sprintf` returns malloc'd memory the caller frees — the right shape when
- * the result is interned and then discarded. `arena_sprintf` returns arena
- * memory that lives as long as the arena. Both abort on allocation failure,
- * matching arena_alloc, so callers never see NULL. */
+ * `str_sprintf` returns malloc'd memory the caller frees. `arena_sprintf`
+ * returns memory that lives as long as the arena. Both abort on allocation
+ * failure, like arena_alloc, so callers never see NULL. */
 char *str_sprintf(const char *fmt, ...);
 char *arena_sprintf(Arena *a, const char *fmt, ...);
 
@@ -60,12 +61,21 @@ char *arena_sprintf(Arena *a, const char *fmt, ...);
  * consumed (the caller still owns the va_end). */
 char *str_vsprintf(const char *fmt, va_list ap);
 
-/* Append printf-formatted text to a malloc'd string, returning the (possibly
- * moved) result and freeing nothing the caller still holds — the old pointer is
- * consumed. Passing NULL starts a fresh string, so a build loop needs no special
- * first iteration. This is the growing counterpart to str_sprintf: the way to
+/* Append printf-formatted text to a malloc'd string and return the result,
+ * which may have moved; the old pointer is consumed. Passing NULL starts a
+ * fresh string, so a build loop needs no special first iteration. Use it to
  * assemble a name, path, or diagnostic descriptor of unknown final length. */
 char *str_appendf(char *acc, const char *fmt, ...);
+
+/* ---- Strings and files ---- */
+
+/* malloc'd, NUL-terminated copies of `s` and of its first `n` bytes. */
+char *str_dup(const char *s);
+char *str_ndup(const char *s, size_t n);
+
+/* The whole file as a malloc'd, NUL-terminated buffer, or NULL if it cannot
+ * be read. `len` (optional) receives the byte count. */
+char *read_file(const char *path, int *len);
 
 /* ---- String interning ---- */
 
@@ -86,58 +96,55 @@ void intern_init(InternTable *t, Arena *a);
 const char *intern(InternTable *t, const char *s, int len);
 const char *intern_cstr(InternTable *t, const char *s);
 
-/* Format and intern in one step. This is the shape almost every name-building
- * site wants — a qualified name, a mangled prefix, a namespace path — where the
- * formatted text is a temporary and only the interned result is kept. Sized
- * exactly (see str_sprintf), so no component can be silently clipped. */
+/* Format and intern in one step, for name building (a qualified name, a
+ * mangled prefix, a namespace path) where only the interned result is kept.
+ * Sized to the result like str_sprintf, so no component is clipped. */
 const char *intern_sprintf(InternTable *t, const char *fmt, ...);
 
 /* ---- Slice length representation (--len-repr) ----
  *
- * The *semantic* type of every slice/string length is i64 on every profile —
- * the type checker never sees this knob. What --len-repr selects is the
- * *stored* width of the len field in the emitted C (fc_len_t) so small
- * targets pay native-width slices and guards. Soundness rides one invariant:
- * every stored len is proven in [0, fc_len_max()] at slice construction
- * (statically where the value is compile-time, via an abort guard otherwise),
- * after which reads widen losslessly and bounds checks compare at stored
- * width. 64 (the default) reproduces the historical behavior. */
+ * Every slice/string length has type i64 on every profile; the type checker
+ * never sees this setting. --len-repr selects only the stored width of the len
+ * field in the emitted C (fc_len_t), so small targets get native-width slices
+ * and guards. Invariant: every stored len is proven in [0, fc_len_max()] when
+ * the slice is constructed (statically when the value is known at compile
+ * time, by an abort guard otherwise). Reads then widen losslessly and bounds
+ * checks compare at the stored width. The default is 64. */
 extern int g_len_repr;            /* 16, 32, or 64 */
 int64_t fc_len_max(void);         /* INT16_MAX / INT32_MAX / INT64_MAX */
 
-/* Decoded byte length of string-literal source text (escapes collapsed,
- * `%%` → `%`); when `out` is non-NULL also writes the bytes. One routine
- * both sizes and fills so no consumer's length can disagree with codegen's
- * bytes. Lives here because pass2 (capacity checks) and codegen (emission)
- * both need it. */
+/* The value of hex digit `c` (0-15), or -1 when it is not one. */
+int hex_digit_val(char c);
+
+/* Decoded byte length of string-literal source text (escapes collapsed, `%%`
+ * read as `%`); when `out` is non-NULL, also writes the bytes. pass2's
+ * capacity checks and codegen's emission both use this one routine, so a
+ * length always matches the bytes emitted. */
 int decode_str_lit(const char *s, int slen, unsigned char *out);
 
 /* ---- C identifier hygiene ---- */
 
-/* True if `name` is a C reserved word (C11/C23 keyword or implementation-
- * reserved spelling) that cannot appear as any C identifier — including a
- * struct/union member, a parameter, or a block-scope variable. FC permits
- * these spellings as user identifiers (e.g. `register`, `restrict`), so the
- * codegen must escape them before they reach C scope. */
+/* True if `name` is a C reserved word (a C11 or C23 keyword, or another
+ * implementation-reserved spelling) and so cannot be any C identifier,
+ * including a struct/union member, a parameter, or a local. FC allows these
+ * spellings as identifiers (e.g. `register`, `restrict`), so codegen escapes
+ * them before they reach C. */
 bool is_c_reserved(const char *name);
 
-/* Map a user identifier to a C-safe spelling. If `name` is a C reserved word,
- * returns the interned "fc__"+name; otherwise returns `name` unchanged. The
- * escaped form lives in the compiler-reserved `__` (double-underscore)
- * namespace — the lexer forbids `__` in FC identifiers — so it can never
- * collide with a user identifier, and (being keyword-free) is a valid C
- * identifier. Deterministic and idempotent: declaration and use sites that
- * both call this agree without any shared state. */
+/* Map a user identifier to a C-safe spelling: the interned "fc__"+name when
+ * `name` is a C reserved word, otherwise `name` unchanged. No FC identifier
+ * contains `__` (the lexer rejects it), so the escaped form cannot collide
+ * with a user identifier. The mapping is deterministic and idempotent, so
+ * declaration and use sites that both call it agree without shared state. */
 const char *c_safe_ident(InternTable *t, const char *name);
 
-/* True if `name` is rooted at `fc__` — the reserved root every FC declaration's
- * emitted name lives under (mangle_root, pass1.c). Such a name already spells
- * its whole declaration path (`fc__ns__mod__type`), so it names exactly one
- * declaration program-wide and is *self-identifying*: it must resolve from any
- * namespace, and the ns_prefix filter that disambiguates source names across
- * namespaces can only hide it. No user-written name reaches this — the lexer
- * forbids `__` in FC identifiers, and the parser rejects an extern C name in
- * this root outright. */
+/* True if `name` starts with `fc__`, the root of every FC declaration's
+ * emitted name (mangle_root in pass1.c). Such a name spells its whole
+ * declaration path (`fc__ns__mod__type`), so it identifies one declaration on
+ * its own: it resolves from any namespace, and the ns_prefix filter that
+ * disambiguates source names across namespaces must not hide it. No
+ * user-written name starts with `fc__`: the lexer rejects `__` in FC
+ * identifiers, and the parser rejects an extern C name with this prefix. */
 bool is_mangled_root_name(const char *name);
 
 /* ---- Dynamic array ---- */

@@ -1,7 +1,7 @@
 # Build output (binary, object files, all OS subdirectories)
 /build/
 
-# Stale in-tree artifacts (older builds put these alongside sources)
+# Object files and Windows executables from demo and ad-hoc builds
 *.o
 *.exe
 

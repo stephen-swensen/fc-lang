@@ -6,26 +6,26 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Monomorphization termination guards (audit item 14).
+/* Monomorphization termination guards.
  *
  * A generic that instantiates itself with an ever-growing type argument produces
- * an infinite family of monomorphized copies — e.g. `f(some(x))` forces
+ * an infinite family of monomorphized copies: `f(some(x))` forces
  * f<'a> -> f<'a?> -> f<'a??> -> ..., and a non-uniform recursive type forces
- * node<int32> -> node<node<int32>> -> ... Both fixpoint loops below (function
- * discovery in mono_discover_transitive, nested-type discovery in
- * mono_finalize_types) would otherwise never converge (hang) or, when a name
- * collision happens to halt the loop, silently emit a truncated/dangling C type.
+ * node<i32> -> node<node<i32>> -> ... Without a guard, both fixpoint loops below
+ * (function discovery in mono_discover_transitive, nested-type discovery in
+ * mono_finalize_types) would never converge, or, if a name collision happened
+ * to stop the loop, would emit a truncated C type.
  *
- * The divergence always manifests as type arguments that nest one constructor
+ * The divergence always shows up as type arguments that nest one constructor
  * deeper each round, so a cap on the structural depth of an instance's type
- * arguments catches it regardless of shape. Because FC has no type-level
- * computation (array sizes, tuple arities, etc. are fixed by source, never
- * synthesized), a bounded type-argument depth admits only finitely many distinct
- * types — so the depth cap alone *guarantees* termination. The count cap is a
- * belt-and-suspenders backstop against any breadth-divergence shape not foreseen
- * here. Both limits are far above anything a finite program reaches (real generic
- * nesting is a handful of levels deep; whole programs have thousands, not
- * hundreds of thousands, of instances). */
+ * arguments catches it whatever its shape. Apart from const arguments (capped
+ * per template below), FC has no type-level computation: array sizes, tuple
+ * arities, etc. are fixed by source. So a bounded type-argument depth admits
+ * only finitely many distinct types, and the depth cap alone guarantees
+ * termination. The instance-count cap is a backstop for any breadth divergence
+ * not foreseen here. Both limits are far above what real programs reach
+ * (generic nesting is a handful of levels deep; programs have thousands of
+ * instances, not hundreds of thousands). */
 #define MONO_MAX_INSTANTIATION_DEPTH 128
 #define MONO_MAX_INSTANCES           200000
 /* Per-template cap: value-recursive const generics (f calling f<'n + 1>) grow
@@ -37,86 +37,24 @@
 
 static void mono_drain_const_eval_error(void);
 
-/* Structural nesting depth of a type's *type arguments*: the axis along which a
- * divergent instantiation grows. Recurses through wrapper constructors and into
- * generic type arguments, but NOT into struct/union fields (those are bounded by
- * the definition; only the args grow during divergence) — which also keeps this
- * walk finite on by-value-recursive concrete types. */
-static int mono_type_arg_depth(Type *t) {
-    if (!t) return 0;
-    switch (t->kind) {
-    case TYPE_POINTER:     return 1 + mono_type_arg_depth(t->pointer.pointee);
-    case TYPE_SLICE:       return 1 + mono_type_arg_depth(t->slice.elem);
-    case TYPE_OPTION:      return 1 + mono_type_arg_depth(t->option.inner);
-    case TYPE_RESULT:      return 1 + mono_type_arg_depth(t->result.inner);
-    case TYPE_FIXED_ARRAY: return 1 + mono_type_arg_depth(t->fixed_array.elem);
-    case TYPE_FUNC: {
-        int m = mono_type_arg_depth(t->func.return_type);
-        for (int i = 0; i < t->func.param_count; i++) {
-            int d = mono_type_arg_depth(t->func.param_types[i]);
-            if (d > m) m = d;
-        }
-        return 1 + m;
-    }
-    case TYPE_STRUCT: {
-        int m = 0;
-        for (int i = 0; i < t->struc.type_arg_count; i++) {
-            int d = mono_type_arg_depth(t->struc.type_args[i]);
-            if (d > m) m = d;
-        }
-        return 1 + m;
-    }
-    case TYPE_UNION: {
-        int m = 0;
-        for (int i = 0; i < t->unio.type_arg_count; i++) {
-            int d = mono_type_arg_depth(t->unio.type_args[i]);
-            if (d > m) m = d;
-        }
-        return 1 + m;
-    }
-    case TYPE_STUB: {
-        int m = 0;
-        for (int i = 0; i < t->stub.type_arg_count; i++) {
-            int d = mono_type_arg_depth(t->stub.type_args[i]);
-            if (d > m) m = d;
-        }
-        return 1 + m;
-    }
-    default: return 1; /* primitives, type vars, any* */
-    }
-}
-
-/* Spell an instantiation the way the user wrote it — "uwide<100>" — for a
- * diagnostic. Grown to fit rather than formatted into a fixed buffer: both the
- * template name and every argument spelling are unbounded, and a clipped
- * descriptor names an instance the reader cannot find in their source. Caller
- * frees. */
-static char *fmt_inst_display(const char *disp, Type **args, int count) {
-    char *acc = str_sprintf("%s<", disp);
-    for (int i = 0; i < count; i++)
-        acc = str_appendf(acc, "%s%s", i ? ", " : "", type_name(args[i]));
-    return str_appendf(acc, ">");
-}
-
 const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
                           const char *name, const char *ns_prefix,
                           Type **type_args, int count,
                           Decl *tmpl, DeclKind kind,
                           const char **type_params, int tp_count) {
-    /* Once an infinite instantiation has been reported, stop growing the table so
-     * both discovery fixpoint loops converge (their guards key off t->count). The
-     * single diagnostic below is thus emitted exactly once. */
+    /* Once an error has been reported (such as an infinite instantiation), stop
+     * growing the table so both discovery fixpoint loops converge (their guards
+     * key off t->count) and the diagnostic below is reported only once. */
     if (diag_error_count() > 0) return name;
 
     /* Build the base name for mangling */
     const char *base = name;
     if (ns_prefix) {
-        /* Exact-sized: this base feeds mangle_generic_name, so a clipped prefix
-         * would not fail — two differently-named generics would mangle onto one
-         * C symbol and silently merge. */
+        /* Sized to fit: a clipped prefix would mangle two differently-named
+         * generics onto one C symbol. */
         base = intern_sprintf(intern_tbl, "%s__%s", ns_prefix, name);
     }
-    const char *mangled = mangle_generic_name(a, intern_tbl, base, type_args, count);
+    const char *mangled = mangle_generic_name(intern_tbl, base, type_args, count);
 
     /* Dedup: check if already registered */
     for (int i = 0; i < t->count; i++) {
@@ -124,11 +62,11 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
             return mangled;
     }
 
-    /* Backstop: void has no value representation, so an instance binding a
-     * type parameter to it emits `void x;`. pass2 rejects the written and
+    /* void has no value representation, so an instance binding a type
+     * parameter to it would emit `void x;`. pass2 rejects the written and
      * inferred spellings at their use sites (with a source location); this
-     * catches any path that reached instantiation without passing one of
-     * them, so no such instance can ever reach codegen. */
+     * catches any other path to instantiation, so no such instance reaches
+     * codegen. */
     for (int i = 0; i < count; i++) {
         if (type_args[i] && type_args[i]->kind == TYPE_VOID) {
             diag_error(tmpl ? tmpl->loc : (SrcLoc){0},
@@ -143,11 +81,11 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
      * type argument (infinite monomorphization). Report once and stop. */
     int arg_depth = 0;
     for (int i = 0; i < count; i++) {
-        int d = mono_type_arg_depth(type_args[i]);
+        int d = type_arg_depth(type_args[i]);
         if (d > arg_depth) arg_depth = d;
     }
     /* Per-template count (value-recursion guard, see MONO_MAX_PER_TEMPLATE).
-     * Only counted when a const argument is present — type-only instantiation
+     * Only counted when a const argument is present; type-only instantiation
      * counts are bounded by the depth guard. */
     int tmpl_count = 0;
     if (tmpl) {
@@ -193,8 +131,8 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         return mangled;
     }
 
-    /* static_assert enforcement — the one choke point every instance passes
-     * through exactly once (explicit annotation, call site, transitive
+    /* static_assert enforcement. Every new instance passes through here once,
+     * however it was reached (explicit annotation, call site, transitive
      * discovery, nested field type). Conditions were shape-validated and
      * normalized in pass2, so the context-free evaluator suffices here. */
     {
@@ -210,31 +148,31 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
             }
         }
         if (san > 0) {
-            /* Human-readable instance descriptor: "uwide<100>" (the owner
-             * name captured at parse time — decl names get mangled). Spelled on
-             * demand, since only the two failure paths below need it. */
+            /* Instance descriptor for messages, e.g. "uwide<100>", built from
+             * the owner name captured at parse time (decl names get mangled).
+             * Spelled only on the two failure paths below. */
             const char *disp = sas[0].owner ? sas[0].owner : name;
 
             int nbind = tp_count < count ? tp_count : count;
             for (int i = 0; i < san; i++) {
-                if (sas[i].judged) continue;   /* concrete — judged once in pass2 */
+                if (sas[i].judged) continue;   /* concrete: judged in pass2 */
                 Type wrapper = {0};
                 wrapper.kind = TYPE_CONST_EXPR;
                 wrapper.const_expr.expr = sas[i].cond;
                 int64_t v;
                 if (const_type_eval(&wrapper, type_params, type_args, nbind, &v)) {
                     if (v == 0) {
-                        char *inst = fmt_inst_display(disp, type_args, count);
+                        char *inst = type_inst_display(disp, type_args, count);
                         diag_error(sas[i].loc,
                             "static assertion failed in instantiation of '%s': %s",
                             inst, sas[i].msg);
                         free(inst);
-                        return mangled;   /* rejected — never registered */
+                        return mangled;   /* rejected: never registered */
                     }
                 } else {
                     SrcLoc eloc = {0};
                     const char *emsg = const_eval_take_error(&eloc);
-                    char *inst = fmt_inst_display(disp, type_args, count);
+                    char *inst = type_inst_display(disp, type_args, count);
                     diag_error((emsg && eloc.filename) ? eloc : sas[i].loc,
                         "%s (in static_assert of '%s')",
                         emsg ? emsg : "could not evaluate static_assert condition",
@@ -246,16 +184,8 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         }
     }
 
-    /* Copy type_args into arena */
-    Type **args_copy = arena_alloc(a, sizeof(Type*) * (size_t)count);
-    memcpy(args_copy, type_args, sizeof(Type*) * (size_t)count);
-
-    /* Copy type_params into arena */
-    const char **params_copy = NULL;
-    if (tp_count > 0) {
-        params_copy = arena_alloc(a, sizeof(const char*) * (size_t)tp_count);
-        memcpy(params_copy, type_params, sizeof(const char*) * (size_t)tp_count);
-    }
+    Type **args_copy = arena_dup(a, type_args, count, sizeof(Type*));
+    const char **params_copy = arena_dup(a, type_params, tp_count, sizeof(const char*));
 
     MonoInstance inst = {
         .generic_name = name,
@@ -296,14 +226,14 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
         return;
     case TYPE_STRUCT:
         /* Tuples carry their instantiation in fields (type_args is empty), so the
-         * generic "base + type_args" rename doesn't apply — re-derive the canonical
-         * name from the (now resolved) element types instead. Recurse fields first
-         * so nested tuples/structs are named before this one. */
+         * generic "base + type_args" rename doesn't apply; re-derive the canonical
+         * name from the resolved element types instead. Recurse fields first so
+         * nested tuples/structs are named before this one. */
         if (type->struc.is_tuple) {
             for (int i = 0; i < type->struc.field_count; i++)
                 mono_resolve_type_names(t, a, intern, type->struc.fields[i].type);
             if (!type_contains_type_var(type)) {
-                const char *cn = tuple_canonical_name(a, intern,
+                const char *cn = tuple_canonical_name(intern,
                     type->struc.fields, type->struc.field_count);
                 type->struc.name = cn;
                 type->struc.qualified_name = cn;
@@ -312,10 +242,9 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
         }
         if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
             /* The instance name is a pure function of the type (mangle_type_name:
-             * canonical base from resolved_sym + recursion over the arguments), so
-             * no arg pre-canonicalization or sym dance is needed. The mono_find
-             * guard keeps a node already carrying a registered instance name
-             * untouched. */
+             * canonical base from resolved_sym plus recursion over the
+             * arguments). The mono_find guard leaves a node that already carries
+             * a registered instance name untouched. */
             if (!mono_find(t, type->struc.name)) {
                 char *m = mangle_type_name(type);
                 type->struc.name = intern_cstr(intern, m);
@@ -327,7 +256,7 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
         return;
     case TYPE_UNION:
         if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
-            /* Pure spelling — see the struct arm. */
+            /* Pure spelling; see the struct arm. */
             if (!mono_find(t, type->unio.name)) {
                 char *m = mangle_type_name(type);
                 type->unio.name = intern_cstr(intern, m);
@@ -340,7 +269,7 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
     case TYPE_STUB:
         if (type->stub.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (!mono_find(t, type->stub.name)) {
-                type->stub.name = mangle_generic_name(a, intern,
+                type->stub.name = mangle_generic_name(intern,
                     type->stub.name, type->stub.type_args, type->stub.type_arg_count);
             }
         }
@@ -373,7 +302,7 @@ typedef struct {
     int var_count;
 } DiscoverCtx;
 
-/* Substitute the type vars of an expression's *type operand* (e.g. the target of
+/* Substitute the type vars of an expression's type operand (e.g. the target of
  * sizeof/alignof/default/alloc, an array/slice-literal element type, or a variant
  * constructor's union result type) and register any generic struct/union instances
  * it transitively names. Such instances are otherwise never registered when they
@@ -407,11 +336,11 @@ static void discover_call(Expr *e, DiscoverCtx *c) {
     if (all_concrete) {
         /* An argument type may itself name a generic instance: inside
          * `bx2<'a>`, the call `bx(bx(v))` binds the outer `bx` to
-         * `box<'a>`, which substitutes to `box<i32>`.  Registering the
-         * *callee* does not register that instance, and nothing else
-         * reaches it (pass2 only ever saw the abstract `box<'a>`), so
-         * the emitted C would name a struct it never defined.  Register
-         * it; the callee's own mangled name spells the instance from
+         * `box<'a>`, which substitutes to `box<i32>`. Registering the
+         * callee does not register that instance, and nothing else
+         * reaches it (pass2 only saw the abstract `box<'a>`), so the
+         * emitted C would name a struct it never defined. Register it
+         * here; the callee's mangled name spells the instance from its
          * structure (mangle_type_name), so no renaming is needed. */
         for (int i = 0; i < e->call.type_arg_count; i++)
             discover_nested_types(concrete_args[i], c->t, c->a, c->intern, c->symtab);
@@ -429,55 +358,24 @@ static void discover_call(Expr *e, DiscoverCtx *c) {
     free(concrete_args);
 }
 
-/* A literal of a generic struct type built under this substitution: register
- * the instance it constructs. */
-static void discover_struct_lit(Expr *e, DiscoverCtx *c) {
-    if (!e->type || e->type->kind != TYPE_STRUCT || !type_contains_type_var(e->type))
-        return;
-    Symbol *struct_sym = e->struct_lit.resolved_sym;
-    if (!struct_sym || !struct_sym->is_generic) return;
-    const char **vars = NULL;
-    int vc = 0, vcap = 0;
-    type_collect_vars(e->type, &vars, &vc, &vcap);
-    Type **concrete_args = arena_alloc(c->a, sizeof(Type*) * (size_t)vc);
-    for (int k = 0; k < vc; k++) {
-        concrete_args[k] = NULL;
-        for (int j = 0; j < c->var_count; j++) {
-            if (c->var_names[j] == vars[k]) {
-                concrete_args[k] = c->concrete[j];
-                break;
-            }
-        }
-        if (!concrete_args[k]) concrete_args[k] = type_type_var(c->a, vars[k]);
-    }
-    bool all_concrete = true;
-    for (int k = 0; k < vc; k++) {
-        if (type_contains_type_var(concrete_args[k])) {
-            all_concrete = false;
-            break;
-        }
-    }
-    if (all_concrete) {
-        /* Use canonical C type name (already includes module/ns prefix) */
-        const char *mangled = mono_register(c->t, c->a, c->intern,
-            struct_sym->type->struc.name, NULL,
-            concrete_args, vc, struct_sym->decl,
-            DECL_STRUCT, struct_sym->type_params, struct_sym->type_param_count);
-        MonoInstance *mi = mono_find(c->t, mangled);
-        if (mi && !mi->concrete_type) {
-            int ntp = struct_sym->type_param_count < vc ? struct_sym->type_param_count : vc;
-            Type *ct = type_substitute(c->a, struct_sym->type,
-                struct_sym->type_params, concrete_args, ntp);
-            /* Deep copy: type_substitute shares unchanged field
-             * subtrees with the template, which the in-place name
-             * canonicalization below would otherwise corrupt. */
-            ct = type_deep_copy(c->a, ct);
-            ct->struc.name = mangled;
-            mono_resolve_type_names(c->t, c->a, c->intern, ct);
-            mi->concrete_type = ct;
-        }
-    }
-    free(vars);
+/* Register the instance of generic struct or union `sym` at `args` (its C name
+ * built from `base`) and give a new entry its concrete type: the template with
+ * the arguments substituted, named for the instance, with nested instance
+ * names resolved. The substituted type is deep-copied first, because
+ * type_substitute shares unchanged subtrees with the template and the renaming
+ * is in place. */
+static void mono_instantiate(MonoTable *t, Arena *a, InternTable *intern,
+                             Symbol *sym, const char *base, Type **args, int n) {
+    const char *mangled = mono_register(t, a, intern, base, NULL, args, n, sym->decl,
+                                        sym->kind, sym->type_params, sym->type_param_count);
+    MonoInstance *mi = mono_find(t, mangled);
+    if (!mi || mi->concrete_type) return;
+    int ntp = sym->type_param_count < n ? sym->type_param_count : n;
+    Type *ct = type_deep_copy(a, type_substitute(a, sym->type, sym->type_params, args, ntp));
+    if (ct->kind == TYPE_STRUCT) ct->struc.name = mangled;
+    else if (ct->kind == TYPE_UNION) ct->unio.name = mangled;
+    mono_resolve_type_names(t, a, intern, ct);
+    mi->concrete_type = ct;
 }
 
 /* A tuple literal whose element types mention type variables: register the
@@ -507,7 +405,11 @@ static void discover_in_expr(Expr *e, void *ctx) {
     expr_for_each_child(e, discover_in_expr, ctx);
     switch (e->kind) {
     case EXPR_CALL:       discover_call(e, c); break;
-    case EXPR_STRUCT_LIT: discover_struct_lit(e, c); break;
+    /* A generic struct literal makes the instance its own type names: the
+     * type's arguments substituted, not the body's variables in order. */
+    case EXPR_STRUCT_LIT:
+        if (e->type && type_contains_type_var(e->type)) discover_in_type(e->type, c);
+        break;
     case EXPR_TUPLE_LIT:  discover_tuple_lit(e, c); break;
     case EXPR_FIELD:
     case EXPR_DEREF_FIELD:
@@ -531,7 +433,7 @@ static void discover_in_expr(Expr *e, void *ctx) {
     }
 }
 
-/* Check if a type references a struct/union by VALUE (not through pointer/option/slice).
+/* Check if a type references a struct/union by value (not through pointer/option/slice).
  * Returns the mangled name if found, NULL otherwise. */
 static const char *find_by_value_dep(Type *type) {
     if (!type) return NULL;
@@ -549,15 +451,14 @@ static const char *find_by_value_dep(Type *type) {
         /* Fixed arrays of structs are by-value */
         return find_by_value_dep(type->fixed_array.elem);
     case TYPE_RESULT:
-        /* A result ALWAYS embeds its payload by value ({ err; value } struct).
-         * Options deliberately return NULL below: their answer is
-         * representation-dependent (T*? is a bare pointer, no embed) and this
-         * file can't see codegen's is_null_sentinel — codegen's
-         * find_by_value_dep_name handles the struct-option interleave instead.
-         * Results have no such split, so unconditional recursion is correct. */
+        /* A result always embeds its payload by value ({ err; value } struct).
+         * Options return NULL below: whether they embed depends on the
+         * representation (T*? is a bare pointer), which this file can't see;
+         * codegen's find_by_value_dep_name orders struct options instead.
+         * Results have no such split, so they always recurse. */
         return find_by_value_dep(type->result.inner);
     default:
-        /* Pointers, slices, options, functions — NOT by-value dependencies */
+        /* Pointers, slices, options, functions: not by-value dependencies */
         return NULL;
     }
 }
@@ -624,7 +525,7 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             for (int i = 0; i < type->struc.field_count; i++)
                 discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
             if (!type_contains_type_var(type)) {
-                const char *cn = tuple_canonical_name(a, intern,
+                const char *cn = tuple_canonical_name(intern,
                     type->struc.fields, type->struc.field_count);
                 type->struc.name = cn;
                 type->struc.qualified_name = cn;
@@ -646,39 +547,26 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             }
             /* Use resolved_sym from pass1/pass2 for the canonical name. A type
              * coming straight from resolve_type (e.g. a sizeof/default/alloc
-             * operand) may carry no resolved_sym — fall back to a name lookup,
-             * as the STUB branch below already does. */
+             * operand) may carry no resolved_sym; fall back to a name lookup,
+             * as the STUB branch below does. */
             Symbol *sym = type->struc.resolved_sym;
             if (!sym && symtab)
                 sym = symtab_lookup_kind(symtab, type->struc.name, DECL_STRUCT);
             /* Register the arguments too: an argument may itself be a generic
              * instance (box<box<i32>>) whose definition must be emitted. The
              * arguments are reachable only here: the field walk below descends
-             * the *definition*, never the args. (The mangled name is spelled
-             * from structure, so the args need no renaming before this type is
+             * the definition, not the args. (The mangled name is spelled from
+             * structure, so the args need no renaming before this type is
              * named.) */
             for (int i = 0; i < type->struc.type_arg_count; i++)
                 discover_nested_types(type->struc.type_args[i], t, a, intern, symtab);
             const char *canon = (sym && sym->type) ? sym->type->struc.name : type->struc.name;
-            const char *mangled = mangle_generic_name(a, intern,
+            const char *mangled = mangle_generic_name(intern,
                 canon, type->struc.type_args, type->struc.type_arg_count);
             if (!mono_find(t, mangled)) {
-                if (sym && sym->is_generic && sym->decl) {
-                    mono_register(t, a, intern, sym->type->struc.name, NULL,
-                        type->struc.type_args, type->struc.type_arg_count,
-                        sym->decl, DECL_STRUCT, sym->type_params, sym->type_param_count);
-                    MonoInstance *mi = mono_find(t, mangled);
-                    if (mi && !mi->concrete_type) {
-                        int ntp = sym->type_param_count < type->struc.type_arg_count
-                                  ? sym->type_param_count : type->struc.type_arg_count;
-                        Type *ct = type_substitute(a, sym->type,
-                            sym->type_params, type->struc.type_args, ntp);
-                        ct = type_deep_copy(a, ct);  /* isolate before in-place canonicalization */
-                        ct->struc.name = mangled;
-                        mono_resolve_type_names(t, a, intern, ct);
-                        mi->concrete_type = ct;
-                    }
-                }
+                if (sym && sym->is_generic && sym->decl)
+                    mono_instantiate(t, a, intern, sym, sym->type->struc.name,
+                                     type->struc.type_args, type->struc.type_arg_count);
             }
         }
         for (int i = 0; i < type->struc.field_count; i++)
@@ -694,29 +582,16 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             Symbol *sym = type->unio.resolved_sym;
             if (!sym && symtab)
                 sym = symtab_lookup_kind(symtab, type->unio.name, DECL_UNION);
-            /* Register the arguments too — see the struct arm. */
+            /* Register the arguments too; see the struct arm. */
             for (int i = 0; i < type->unio.type_arg_count; i++)
                 discover_nested_types(type->unio.type_args[i], t, a, intern, symtab);
             const char *canon = (sym && sym->type) ? sym->type->unio.name : type->unio.name;
-            const char *mangled = mangle_generic_name(a, intern,
+            const char *mangled = mangle_generic_name(intern,
                 canon, type->unio.type_args, type->unio.type_arg_count);
             if (!mono_find(t, mangled)) {
-                if (sym && sym->is_generic && sym->decl) {
-                    mono_register(t, a, intern, sym->type->unio.name, NULL,
-                        type->unio.type_args, type->unio.type_arg_count,
-                        sym->decl, DECL_UNION, sym->type_params, sym->type_param_count);
-                    MonoInstance *mi = mono_find(t, mangled);
-                    if (mi && !mi->concrete_type) {
-                        int ntp = sym->type_param_count < type->unio.type_arg_count
-                                  ? sym->type_param_count : type->unio.type_arg_count;
-                        Type *ct = type_substitute(a, sym->type,
-                            sym->type_params, type->unio.type_args, ntp);
-                        ct = type_deep_copy(a, ct);  /* isolate before in-place canonicalization */
-                        ct->unio.name = mangled;
-                        mono_resolve_type_names(t, a, intern, ct);
-                        mi->concrete_type = ct;
-                    }
-                }
+                if (sym && sym->is_generic && sym->decl)
+                    mono_instantiate(t, a, intern, sym, sym->type->unio.name,
+                                     type->unio.type_args, type->unio.type_arg_count);
             }
         }
         for (int i = 0; i < type->unio.variant_count; i++)
@@ -726,29 +601,14 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
         if (type->stub.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (mono_find(t, type->stub.name)) return;
             const char *base_name = type->stub.name;
-            const char *mangled = mangle_generic_name(a, intern,
+            const char *mangled = mangle_generic_name(intern,
                 base_name, type->stub.type_args, type->stub.type_arg_count);
             if (!mono_find(t, mangled) && symtab) {
                 Symbol *sym = symtab_lookup_kind(symtab, base_name, DECL_STRUCT);
                 if (!sym) sym = symtab_lookup_kind(symtab, base_name, DECL_UNION);
-                if (sym && sym->is_generic && sym->decl && sym->type) {
-                    DeclKind dk = sym->kind;
-                    mono_register(t, a, intern, base_name, NULL,
-                        type->stub.type_args, type->stub.type_arg_count,
-                        sym->decl, dk, sym->type_params, sym->type_param_count);
-                    MonoInstance *mi = mono_find(t, mangled);
-                    if (mi && !mi->concrete_type) {
-                        int ntp = sym->type_param_count < type->stub.type_arg_count
-                                  ? sym->type_param_count : type->stub.type_arg_count;
-                        Type *ct = type_substitute(a, sym->type,
-                            sym->type_params, type->stub.type_args, ntp);
-                        ct = type_deep_copy(a, ct);  /* isolate before in-place canonicalization */
-                        if (ct->kind == TYPE_STRUCT) ct->struc.name = mangled;
-                        else if (ct->kind == TYPE_UNION) ct->unio.name = mangled;
-                        mono_resolve_type_names(t, a, intern, ct);
-                        mi->concrete_type = ct;
-                    }
-                }
+                if (sym && sym->is_generic && sym->decl && sym->type)
+                    mono_instantiate(t, a, intern, sym, base_name,
+                                     type->stub.type_args, type->stub.type_arg_count);
             }
         }
         return;
@@ -756,28 +616,27 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
     }
 }
 
-/* Completeness backstop (audit item 14): walk a finalized concrete type and, if
- * it references a generic struct/union instance that was never registered (so
- * codegen would emit a dangling C typedef name), report an infinite-instantiation
- * error once. A missing instance is the fingerprint of a truncated infinite
- * family — the mutually/indirectly non-uniform recursive types that the
- * definition-site self-check (pass1) and the depth cap don't catch, because the
- * buggy discovery fixpoint halts itself (via a name collision) below the depth
- * limit instead of growing without bound. Recurses through wrapper constructors
- * and into type arguments, but not into a referenced instance's own fields (those
- * are validated when its own table entry is visited), so this terminates. */
+/* Completeness backstop: walk a finalized concrete type and, if it references a
+ * generic struct/union instance that was never registered (so codegen would
+ * emit a dangling C typedef name), report an infinite-instantiation error once.
+ * A missing instance is the sign of a truncated infinite family: mutually or
+ * indirectly non-uniform recursive types, which the definition-site self-check
+ * (pass1) and the depth cap miss when the discovery fixpoint stops itself (via
+ * a name collision) below the depth limit instead of growing without bound.
+ * Recurses through wrapper constructors, but not into a referenced instance's
+ * own fields (those are checked when its own table entry is visited), so this
+ * terminates. */
 static void check_dangling_instance(MonoTable *t, Type *ty, Decl *site, bool *reported) {
     if (!ty || *reported) return;
     /* A type that still contains a type variable is template residue, not a
      * concrete instance codegen emits, so it is never dangling. */
     if (type_contains_type_var(ty)) return;
     switch (ty->kind) {
-    /* Recurse only through wrapper constructors and function signatures — the
-     * shapes that carry an emitted *field* type. NOT into a generic instance's
+    /* Recurse only through wrapper constructors and function signatures, the
+     * shapes that carry an emitted field type. Not into a generic instance's
      * type arguments: those are mangling inputs, not emitted member types, and
-     * mono_resolve_type_names deliberately leaves them at their base name. Every
-     * emitted instance is reached as some entry's field anyway, so heads are
-     * fully covered without descending into args. */
+     * mono_resolve_type_names leaves them at their base name. Every emitted
+     * instance is reached as some entry's field anyway. */
     case TYPE_POINTER:     check_dangling_instance(t, ty->pointer.pointee, site, reported); return;
     case TYPE_SLICE:       check_dangling_instance(t, ty->slice.elem, site, reported); return;
     case TYPE_OPTION:      check_dangling_instance(t, ty->option.inner, site, reported); return;
@@ -813,22 +672,21 @@ dangling:
 void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
     if (t->count == 0) return;
 
-    /* Isolate every concrete_type as a private deep copy before the in-place name
-     * canonicalization done below (discover_nested_types and mono_resolve_type_names
-     * both rewrite struct/union/stub names in place). Several pass2 sites store the
-     * concrete_type as the very expression type they inferred (a shallow copy that
-     * shares field/variant subtrees with a pass2-live type or a generic template);
-     * mangling those shared nodes would corrupt them (item 7). Deep-copying here
-     * makes the finalize phase's mutations local. Instances created *during* the
-     * discovery loop below already deep-copy at their build sites. */
+    /* Give every concrete_type a private deep copy before the in-place name
+     * canonicalization below (discover_nested_types and mono_resolve_type_names
+     * both rewrite struct/union/stub names in place). Several pass2 sites store
+     * as concrete_type the expression type they inferred, a shallow copy that
+     * shares field/variant subtrees with a live pass2 type or a generic
+     * template, and renaming those shared nodes would corrupt them. Instances
+     * created during the discovery loop below deep-copy at their build sites. */
     for (int i = 0; i < t->count; i++) {
         if (t->entries[i].concrete_type)
             t->entries[i].concrete_type = type_deep_copy(a, t->entries[i].concrete_type);
     }
 
     /* Discover any concrete generic structs/unions referenced in field types
-     * that don't have their own MonoInstance yet (e.g., entry<int32> used only
-     * as a field type of table<int32>, never directly constructed). */
+     * that don't have their own MonoInstance yet (e.g., entry<i32> used only
+     * as a field type of table<i32>, never directly constructed). */
     int prev_count;
     do {
         prev_count = t->count;
@@ -849,10 +707,10 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
 
     mono_drain_const_eval_error();
 
-    /* Resolve all type names in concrete_types. This is the single centralized
-     * pass that converts canonical struct names (e.g., "m__entry") to mangled
-     * C identifiers (e.g., "m__entry_i32_i32"). Done AFTER discovery so
-     * all mono instances are registered and mono_find can prevent double-mangling. */
+    /* Resolve all type names in concrete_types: convert canonical struct names
+     * (e.g., "fc__m__entry") to instance C identifiers (e.g.,
+     * "fc__m__entry__3_i323_i32"). Done after discovery so all instances are
+     * registered and mono_find can prevent double-mangling. */
     for (int i = 0; i < t->count; i++) {
         MonoInstance *inst = &t->entries[i];
         if (inst->concrete_type)
@@ -860,7 +718,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
     }
 
     /* Completeness backstop: reject any concrete type that references an
-     * unregistered generic instance (a truncated infinite family — see
+     * unregistered generic instance (a truncated infinite family; see
      * check_dangling_instance). Done before the topo sort so an incomplete table
      * is never handed to codegen. */
     bool dangling_reported = false;
@@ -880,7 +738,9 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
 
     /* Topologically sort struct/union entries so by-value dependencies come first.
      * Function entries are left in their original order at the end. */
-    assert(t->count >= 0);  /* invariant: count only grows from 0 via DA_APPEND — tells GCC LTO the (size_t) cast below can't become a huge value */
+    /* count only grows from 0 via DA_APPEND; the assert tells GCC LTO that the
+     * (size_t) casts below cannot produce a huge value. */
+    assert(t->count >= 0);
     int *state = calloc((size_t)t->count, sizeof(int));
     int *order = malloc(sizeof(int) * (size_t)t->count);
     int order_count = 0;
@@ -906,13 +766,12 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
     free(order);
 }
 
-/* Backstop for hard const-generic evaluation failures stashed by this phase's
+/* Backstop for const-generic evaluation failures stashed by this phase's
  * type_substitute calls (e.g. division by zero in the size expression of a
- * transitively-discovered instance). Deliberate diagnostic sites drain the
- * slot themselves; anything still stashed here would otherwise vanish — and a
- * vanished failure means fcc exits 0 while the emitted C names an unresolved
- * instance and fails the C compile. Report it so the build fails with the
- * real cause at the real location. */
+ * transitively discovered instance). Sites that report their own diagnostic
+ * drain the slot themselves. Anything still stashed would otherwise be lost:
+ * fcc would succeed while the emitted C names an unresolved instance. Report
+ * it with its real cause and location. */
 static void mono_drain_const_eval_error(void) {
     SrcLoc eloc = {0};
     const char *emsg = const_eval_take_error(&eloc);
@@ -929,7 +788,7 @@ void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, Symbo
             Decl *tmpl = t->entries[i].template_decl;
             if (!tmpl || !tmpl->let.init || tmpl->let.init->kind != EXPR_FUNC) continue;
             /* Snapshot the fields we pass into discover_in_expr before the loop:
-             * discover_in_expr can mono_register → DA_APPEND → realloc t->entries,
+             * discover_in_expr can mono_register -> DA_APPEND -> realloc t->entries,
              * which would dangle a held &t->entries[i]. These are arena/AST pointers
              * and a plain int, so the snapshot stays valid across that growth. */
             const char **tp_names = t->entries[i].type_param_names;

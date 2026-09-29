@@ -1,6 +1,7 @@
-// BUG (bugsearch 2026-07-18): tuple destructure bindings launder stack
-// provenance — p escapes bad()'s frame (ASan: stack-use-after-return).
-// Same hole family as match bindings and for-loop elements.
+// A tuple-destructure binding inherits the provenance of its component, so
+// returning p destructured from `{&x, 1}` is a compile error. Regression:
+// destructure bindings used to get unknown provenance, letting the stack
+// pointer escape bad()'s frame (ASan: stack-use-after-return).
 let bad = () ->
     let mut x = 41
     x = x + 1

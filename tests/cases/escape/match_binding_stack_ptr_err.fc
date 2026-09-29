@@ -1,8 +1,8 @@
-// BUG (bugsearch 2026-07-18): match pattern bindings launder stack
-// provenance — `| some(p) -> p` returns a pointer into the dead frame
-// (ASan: stack-use-after-return), while the unwrap twin some(&x)! IS
-// caught. Pattern bindings are registered with PROV_UNKNOWN instead of
-// inheriting the scrutinee's provenance.
+// A match pattern binding inherits the scrutinee's provenance, so
+// `| some(p) -> p` on some(&x) cannot return a stack pointer, just as
+// `some(&x)!` cannot. Regression: pattern bindings used to get unknown
+// provenance, letting the pointer escape the frame (ASan:
+// stack-use-after-return).
 let bad = () ->
     let mut x = 42
     let o = some(&x)

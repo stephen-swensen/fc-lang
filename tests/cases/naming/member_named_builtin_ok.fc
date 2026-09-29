@@ -1,6 +1,6 @@
-// §7.8 negative space: struct fields, union variants, and enum variants live in
-// per-type member namespaces, so naming one after a built-in type is legal —
-// only the type/module name itself collides with the primitive lookup.
+// Struct fields, union variants, and enum variants live in per-type member
+// namespaces, so naming one after a built-in type is legal. Only the
+// type/module name itself collides with the primitive lookup.
 struct box =
     i32: i32              // field named after a built-in
     str: bool

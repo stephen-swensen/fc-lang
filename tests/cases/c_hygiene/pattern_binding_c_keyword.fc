@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): match-pattern bindings are the one binding
-// form not run through c_safe_ident — a payload binding named `int` emits
-// `int32_t int = _subj0.circle;`. Params, for-vars, fields, and variant
-// spellings all escape C keywords already (see the rest of c_hygiene/).
+// A match-pattern binding may be spelled like a C keyword (`int`), as every
+// other binding form may (see the rest of c_hygiene/). Regression: pattern
+// bindings used to be emitted with their source spelling, so this emitted
+// `int32_t int = _subj0.circle;`.
 union u =
     | circle(i32)
     | blank

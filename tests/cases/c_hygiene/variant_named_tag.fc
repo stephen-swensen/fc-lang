@@ -1,7 +1,8 @@
-// BUG (bugsearch 2026-07-18): a union variant named `tag` with a payload
-// collides with the codegen-injected discriminant member: emitted struct is
-// `{ fc__thing_tag tag; union { int32_t tag; }; }` — C: duplicate member
-// 'tag' (anonymous-union members share the enclosing namespace).
+// A union variant may be named `tag` and carry a payload; it does not collide
+// with the discriminant member the compiler adds. Regression: the emitted
+// struct used to be `{ fc__thing_tag tag; union { int32_t tag; }; }`, and C
+// rejected the duplicate member 'tag' (anonymous-union members share the
+// enclosing namespace).
 union thing =
     | tag(i32)
     | other

@@ -40,10 +40,7 @@ module data =
     // Dynamic array backed by a heap-allocated slice — amortized O(1) append.
     //
     // Reference-semantics container: make() heap-allocates the header and
-    // returns an array_list<'a>*. Every operation takes that pointer, so all
-    // aliases observe the same len/buffer — there is no by-value handle to go
-    // stale after a grow. The pointer is a plain `let` (capturable in closures
-    // by copy) while the pointee stays mutable through it.
+    // returns an array_list<'a>*; every operation takes that pointer.
     module array_list =
 
         private let grow = (l: array_list<'a>*) ->

@@ -1,7 +1,6 @@
-// §7.8 negative space: a module member named after a built-in type — the
-// standard library's `any` combinator (`array_list.any`, `linked_list.any`, …)
-// — resolves as a member and must keep working. This is the concrete reason the
-// rule exempts value bindings.
+// A module member named after a built-in type, such as the standard library's
+// `any` combinator (`array_list.any`, `linked_list.any`, ...), resolves as a
+// member. This is why the built-in-name rule exempts value bindings.
 module list_ops =
     let any = (s: const i32[], pred: (i32) -> bool) ->
         for x in s do

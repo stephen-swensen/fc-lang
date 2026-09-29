@@ -7,8 +7,7 @@
 static const char *g_filename = "<stdin>";
 static int g_error_count = 0;
 
-/* Diagnostic capture state (see diag.h). All NULL/zero by default, which
- * reproduces the original stderr-printing, exit(1) CLI behaviour exactly. */
+/* Server-mode state (see diag.h). NULL means print to stderr and exit(1). */
 static DiagSink  g_sink = NULL;
 static void     *g_sink_ud = NULL;
 static jmp_buf  *g_abort_env = NULL;
@@ -34,23 +33,18 @@ void diag_set_abort_jmp(jmp_buf *env) {
     g_abort_env = env;
 }
 
-/* Format the message into a fixed buffer, then either hand it to the sink (with
- * the location's filename defaulted from g_filename) or print it to stderr in
- * the canonical "file:line:col: error: msg" form. Shared by all three reporters
- * so the sink/stderr split lives in one place. */
+/* Hand the message to the sink, or print it to stderr as
+ * "file:line:col: error: msg". A location without a filename gets g_filename. */
 static void emit(SrcLoc loc, const char *fmt, va_list ap) {
     const char *fn = loc.filename ? loc.filename : g_filename;
     if (g_sink) {
-        /* Sized to the message. The stderr path below never truncates, so a
-         * fixed buffer here would make the editor show a shorter diagnostic
-         * than the CLI for the same error — and the longest messages (a deep
-         * generic instantiation chain) are the ones that most need their tail. */
+        /* Sized to the message, so the editor shows the same text as the CLI;
+         * the longest messages (deep instantiation chains) need their tail. */
         char *buf = str_vsprintf(fmt, ap);
         SrcLoc resolved = { .filename = fn, .line = loc.line, .col = loc.col };
         g_sink(resolved, buf, g_sink_ud);
         free(buf);
     } else {
-        /* CLI path: stream straight to stderr, byte-for-byte as before. */
         fprintf(stderr, "%s:%d:%d: error: ", fn, loc.line, loc.col);
         vfprintf(stderr, fmt, ap);
         fprintf(stderr, "\n");
@@ -71,8 +65,7 @@ _Noreturn void diag_fatal(SrcLoc loc, const char *fmt, ...) {
     emit(loc, fmt, ap);
     va_end(ap);
     g_error_count++;
-    /* Abort just this analysis (server mode) rather than the process. longjmp
-     * never returns, so the _Noreturn contract still holds. */
+    /* In server mode, abort this analysis rather than the process. */
     if (g_abort_env) longjmp(*g_abort_env, 1);
     exit(1);
 }

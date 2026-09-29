@@ -1,0 +1,7 @@
+// A nested module may not share its name with a sibling that is not a type.
+module geo =
+    let point = 3
+    module point =
+        let origin_x = 0
+
+let main = (args: str[]) -> 0

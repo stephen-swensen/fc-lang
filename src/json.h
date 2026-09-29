@@ -4,10 +4,11 @@
 /* Minimal JSON model for the LSP server (src/lsp.c). Everything is arena-
  * allocated from a per-message arena that the server resets between requests,
  * so neither parsing a request nor building a response leaks. Numbers are held
- * as double (every LSP integer — line, character, id — fits exactly under
- * 2^53); the serializer prints integral doubles without a trailing ".0".
- * Strings store an explicit length and are NUL-terminated; they hold the
- * *unescaped* bytes (UTF-8) and are (de)escaped only at the parse/emit edges. */
+ * as double: every LSP integer (line, character, id) is below 2^53, so none
+ * loses precision. The serializer prints integral doubles without a trailing
+ * ".0". Strings store an explicit length and are NUL-terminated; they hold the
+ * unescaped bytes (UTF-8), and escaping happens only at the parse and emit
+ * edges. */
 
 typedef enum {
     JSON_NULL,
@@ -21,7 +22,7 @@ typedef enum {
 typedef struct JsonValue JsonValue;
 
 typedef struct JsonMember {
-    const char *key;        /* interned-into-arena, NUL-terminated */
+    const char *key;        /* arena-owned copy, NUL-terminated */
     JsonValue  *value;
 } JsonMember;
 
@@ -60,5 +61,5 @@ int         json_array_len(const JsonValue *arr);
 
 /* Serialize compactly, appending bytes to a malloc/realloc-grown buffer.
  * The buf/len/cap trio follows the DA_APPEND convention (pass a zeroed trio the
- * first time). The result is NOT NUL-terminated; use len. Caller frees buf. */
+ * first time). The result is not NUL-terminated; use len. Caller frees buf. */
 void json_serialize(const JsonValue *v, char **buf, int *len, int *cap);

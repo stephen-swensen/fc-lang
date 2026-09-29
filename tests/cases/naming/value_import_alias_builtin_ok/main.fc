@@ -1,6 +1,6 @@
-// §7.8 negative space: aliasing a *value* onto a built-in type name is legal,
-// mirroring the exemption for value bindings — the alias enters the value
-// namespace, never the type namespace, so it cannot shadow the primitive.
+// Aliasing a value onto a built-in type name is legal, like a value binding
+// with that name: the alias enters the value namespace, never the type
+// namespace, so it cannot shadow the primitive.
 import compute as any from mylib::helpers
 
 let main = (args: str[]) ->

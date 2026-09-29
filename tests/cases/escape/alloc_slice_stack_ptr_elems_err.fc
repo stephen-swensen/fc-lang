@@ -1,7 +1,8 @@
-// BUG (bugsearch 2026-07-18): alloc(slice)'s deep copy promotes only the
-// top level — copied pointer VALUES still target the dead frame, i.e. stack
-// pointers end up stored in heap memory (ASan: stack-use-after-return).
-// Returning ptrs directly is correctly rejected; alloc(ptrs)! launders it.
+// Heap-copying a slice whose elements point into the stack is a compile
+// error: alloc(slice) copies only the top level, so the heap slice would hold
+// pointers into a dead frame. Regression: returning `ptrs` directly was
+// rejected, but `alloc(ptrs)!` let the stack pointers escape (ASan:
+// stack-use-after-return).
 let bad = () ->
     let mut x = 42
     let ptrs = i32*[1] { &x }

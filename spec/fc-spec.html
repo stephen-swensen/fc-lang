@@ -3200,7 +3200,7 @@ let doubled = (s: str) ->
     let v = parse_port(s)?
     v * 2          // error: result propagation (?) requires the enclosing function
                    // to return a result type, but it returns i32; construct the
-                   // result explicitly on the success paths — ok(...)/err(...)
+                   // result explicitly on the success paths: ok(...)/err(...)
 
 let doubled = (s: str) ->
     let v = parse_port(s)?

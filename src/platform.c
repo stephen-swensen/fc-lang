@@ -33,40 +33,6 @@ static void add_static(Flag **flags, int *count, int *cap,
     DA_APPEND(*flags, *count, *cap, f);
 }
 
-void platform_detect_flags(Flag **flags, int *count, int *cap) {
-    /* OS */
-#if defined(__linux__)
-    add_static(flags, count, cap, "os", "linux");
-#elif defined(__APPLE__)
-    add_static(flags, count, cap, "os", "macos");
-#elif defined(__FreeBSD__)
-    add_static(flags, count, cap, "os", "freebsd");
-#elif defined(_WIN32)
-    add_static(flags, count, cap, "os", "windows");
-#endif
-
-    /* Arch */
-#if defined(__x86_64__) || defined(_M_X64)
-    add_static(flags, count, cap, "arch", "x86_64");
-#elif defined(__aarch64__) || defined(_M_ARM64)
-    add_static(flags, count, cap, "arch", "aarch64");
-#elif defined(__arm__) || defined(_M_ARM)
-    add_static(flags, count, cap, "arch", "arm");
-#elif defined(__riscv)
-    add_static(flags, count, cap, "arch", "riscv64");
-#elif defined(__wasm32__)
-    add_static(flags, count, cap, "arch", "wasm32");
-#endif
-
-    /* Env. Meaningful only on Linux (gnu/musl, with musl detection deferred)
-     * and Windows (gnu under MinGW; native MSVC is unsupported). Implied by
-     * the OS on macOS and FreeBSD, so left unset there. */
-#if defined(__linux__)
-    add_static(flags, count, cap, "env", "gnu");
-#elif defined(_WIN32) && (defined(__MINGW32__) || defined(__MINGW64__))
-    add_static(flags, count, cap, "env", "gnu");
-#endif
-}
 
 const char *platform_get_os(void) {
 #if defined(__linux__)
@@ -108,12 +74,25 @@ const char *platform_get_env(void) {
 #endif
 }
 
+void platform_detect_flags(Flag **flags, int *count, int *cap) {
+    const char *axes[][2] = {
+        { "os",   platform_get_os() },
+        { "arch", platform_get_arch() },
+        /* Env is meaningful only on Linux (gnu; musl is not detected) and
+         * Windows (gnu under MinGW; native MSVC is unsupported). On macOS and
+         * FreeBSD the OS implies it. */
+        { "env",  platform_get_env() },
+    };
+    for (int i = 0; i < 3; i++)
+        if (axes[i][1]) add_static(flags, count, cap, axes[i][0], axes[i][1]);
+}
+
 char *platform_realpath(const char *path) {
 #if defined(_WIN32)
     /* First call sizes the buffer (return value includes the terminating NUL);
      * second call fills it. GetFullPathNameA resolves `..` and makes the path
-     * absolute lexically — it does not require the file to exist, which suits
-     * both our uses (cycle-detection keys and path-dedup keys). */
+     * absolute lexically. It does not require the file to exist, which suits
+     * both uses (cycle-detection keys and path-dedup keys). */
     DWORD need = GetFullPathNameA(path, 0, NULL, NULL);
     if (need == 0) return NULL;
     char *buf = malloc(need);

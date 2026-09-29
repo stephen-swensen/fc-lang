@@ -1,9 +1,8 @@
-// BUG (bugsearch 2026-07-18): an unguarded catch-all arm (`_` or a binding)
-// in non-final position makes codegen emit a bare block for that arm, so the
-// next arm's `else` has no `if` — invalid C (gcc/clang: "'else' without a
-// previous 'if'"). FC deliberately allows redundant arms (first-match-wins,
-// see exhaustiveness/exhaust_union_dup_variant), so this must compile and
-// the catch-all must win.
+// An unguarded catch-all arm (`_` or a binding) may come before other arms;
+// arms are first-match-wins (see exhaustiveness/exhaust_union_dup_variant), so
+// the catch-all wins. Regression: codegen emitted a bare block for the
+// catch-all, leaving the next arm's `else` without an `if` (gcc/clang:
+// "'else' without a previous 'if'").
 let main = (args: str[]) ->
     let v = match 5 with
         | _ -> 1

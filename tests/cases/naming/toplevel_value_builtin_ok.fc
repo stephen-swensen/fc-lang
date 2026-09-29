@@ -1,5 +1,5 @@
-// §7.8 negative space: a top-level `let` binding or function named after a
-// built-in type is legal — the name occupies the value namespace only.
+// A top-level `let` binding or function named after a built-in type is legal;
+// the name occupies the value namespace only.
 let i32 = 5
 let str = (x: i32) -> x + i32
 

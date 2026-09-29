@@ -1,7 +1,7 @@
-// BUG (bugsearch 2026-07-18): an escaped double-quote in the static text of
-// an INTERPOLATED string breaks the emitted snprintf format — the `"` byte
-// is emitted as `\\"` (escaped backslash + raw quote), terminating the C
-// literal early. Static-only strings with \" work (string_escapes.fc).
+// An escaped double quote in the static text of an interpolated string is a
+// single `"` byte, as it is in a plain string (string_escapes.fc).
+// Regression: it used to be emitted into the snprintf format as `\\"` (an
+// escaped backslash and a raw quote), ending the C string literal early.
 let main = (args: str[]) ->
     let x = 7
     let s = "say \"hi\" %d{x}"

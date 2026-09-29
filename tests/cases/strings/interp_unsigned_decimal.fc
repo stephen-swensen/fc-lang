@@ -1,8 +1,6 @@
-// BUG (bugsearch 2026-07-18): %d of an unsigned operand is emitted as
-// `"%lld", (long long)x` regardless of signedness — "%d{u64.max}" prints
-// "-1" instead of "18446744073709551615" (and the out-of-range conversion is
-// implementation-defined in C11). Spec format table: %d covers "all integer
-// types | decimal". The %u/%x paths already switch to unsigned correctly.
+// %d of an unsigned operand formats it as unsigned decimal: "%d{u64.max}" is
+// "18446744073709551615". Regression: %d used to be emitted as
+// `"%lld", (long long)x` regardless of signedness, so this printed "-1".
 let main = (args: str[]) ->
     let s = "%d{u64.max}"
     assert(s.len == 20)

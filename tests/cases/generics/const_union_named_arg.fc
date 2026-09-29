@@ -1,8 +1,6 @@
-// §8.3: a no-payload union variant constructed with a *named* const argument
-// (a module const, bare or in arithmetic) resolves like the same argument in a
-// type position. Before the fix the variant-construction sites hardcoded
-// GP_TYPE, so `maybe_wide<cfg.n>.nothing` failed ("used as a constant is bound
-// to a type") while `wide<cfg.n>` in a type slot worked.
+// A no-payload union variant constructed with a named const argument (a module
+// const, bare or in arithmetic) resolves like the same argument in a type
+// position: `maybe_wide<cfg.n>.nothing` works just as `wide<cfg.n>` does.
 module cfg =
     let n = 4
 

@@ -1,4 +1,4 @@
-// §7.8: a namespace named after a built-in type is rejected. (Multi-file
+// A namespace named after a built-in type is rejected. (Multi-file
 // because a non-global namespace file cannot also hold `let main`.)
 namespace i32
 

@@ -229,3 +229,22 @@ void pattern_for_each_child(Pattern *p, PatternVisitFn fn, void *ctx) {
         break;
     }
 }
+
+Program *program_merge(Arena *a, Program **files, int count) {
+    if (count == 1) return files[0];
+    int total = 0;
+    for (int i = 0; i < count; i++) total += files[i]->decl_count + 1;
+    Program *prog = arena_alloc(a, sizeof(Program));
+    prog->decls = arena_alloc(a, sizeof(Decl *) * (size_t)total);
+    for (int i = 0; i < count; i++) {
+        Program *f = files[i];
+        if (f->decl_count == 0 || f->decls[0]->kind != DECL_NAMESPACE) {
+            Decl *reset = arena_alloc(a, sizeof(Decl));
+            reset->kind = DECL_NAMESPACE;
+            prog->decls[prog->decl_count++] = reset;
+        }
+        for (int j = 0; j < f->decl_count; j++)
+            prog->decls[prog->decl_count++] = f->decls[j];
+    }
+    return prog;
+}

@@ -40,7 +40,7 @@ module sys =
 #end
 
     // Looks up an environment variable by name.
-    // name: const str — variable name; const because env only reads it.
+    // name: const str — variable name.
     // returns: const str? — the value if set, none if unset. Const because the
     //   returned str points into the process environment block.
     let env = (name: const str) ->

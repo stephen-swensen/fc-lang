@@ -21,7 +21,7 @@ typedef enum {
     EXPR_CHAR_LIT,
     EXPR_STRING_LIT,
     EXPR_CSTRING_LIT,
-    EXPR_VOID_LIT,      /* void() — a void-typed expression */
+    EXPR_VOID_LIT,      /* void(): a void-typed expression */
     EXPR_IDENT,
     EXPR_BINARY,
     EXPR_UNARY_PREFIX,
@@ -41,36 +41,36 @@ typedef enum {
     EXPR_BLOCK,
     EXPR_FUNC,
     EXPR_STRUCT_LIT,
-    EXPR_TUPLE_LIT,     /* { expr, expr, ... } — positional anonymous tuple */
+    EXPR_TUPLE_LIT,     /* { expr, expr, ... }: positional anonymous tuple */
     EXPR_ARRAY_LIT,
     EXPR_SLICE_LIT,     /* T[] { ptr = expr, len = expr } */
     EXPR_ALLOC,
     EXPR_FREE,
     EXPR_SIZEOF,
     EXPR_ALIGNOF,
-    EXPR_BITCAST,       /* bitcast(T, x) — reinterpret x's bits as scalar type T */
-    EXPR_ENUM_OF,       /* enum_of(E, x) — checked integer→enum conversion, yields E? */
+    EXPR_BITCAST,       /* bitcast(T, x): reinterpret x's bits as scalar type T */
+    EXPR_ENUM_OF,       /* enum_of(E, x): checked integer-to-enum conversion, yields E? */
     EXPR_DEFAULT,
     EXPR_INTERP_STRING,
     EXPR_ASSIGN,
     EXPR_SOME,
-    EXPR_OK,            /* ok(v) — result construction, infers from payload */
-    EXPR_ERR,           /* err(T, code) — result construction, type-anchored like none(T) */
-    EXPR_ERROR_NAME,    /* error_name(e) — str? name of a declared error code */
-    EXPR_DEREF_FIELD,   /* x->f */
+    EXPR_OK,            /* ok(v): result construction, infers from payload */
+    EXPR_ERR,           /* err(T, code): result construction, type-anchored like none(T) */
+    EXPR_ERROR_NAME,    /* error_name(e): str? name of a declared error code */
+    EXPR_DEREF_FIELD,   /* p.f through a pointer (pass2 rewrites EXPR_FIELD to this) */
     EXPR_LET,           /* let binding inside a block */
     EXPR_LET_DESTRUCT,  /* let { field = name, ... } = expr */
     EXPR_TYPE_VAR_REF,  /* 'a in expression position (for 'a.min etc.) */
     EXPR_ASSERT,
     EXPR_STATIC_ASSERT,  /* compile-time predicate; statement position, emits nothing */
     EXPR_DEFER,
-    EXPR_IGNORE,       /* ignore expr — evaluate for effect, yield void */
+    EXPR_IGNORE,       /* ignore expr: evaluate for effect, yield void */
     EXPR_ATOMIC_LOAD,   /* atomic_load_acquire(p) */
     EXPR_ATOMIC_STORE,  /* atomic_store_release(p, v) */
-    EXPR_GUARD,         /* guarded/unguarded (precondition guards) OR checked/unchecked (overflow) */
+    EXPR_GUARD,         /* guarded/unguarded (precondition guards) or checked/unchecked (overflow) */
     EXPR_ERROR,         /* parse-error placeholder; carries only kind+loc. Exists only when
-                           diag_error_count()>0, so it never reaches codegen (gated). pass2
-                           types it as type_error() silently (the diagnostic was already emitted). */
+                           diag_error_count()>0, so it never reaches codegen. pass2 types it
+                           as type_error() without a new diagnostic (the parser reported one). */
 } ExprKind;
 
 typedef struct Expr Expr;
@@ -81,7 +81,7 @@ typedef struct FieldInit FieldInit;
 
 struct Param {
     const char *name;
-    const char *codegen_name;  /* unique C name minted by pass2 (see make_local_name) */
+    const char *codegen_name;  /* unique C name minted by pass2 (see local_c_name) */
     Type *type;         /* parsed type annotation */
     SrcLoc loc;
 };
@@ -108,19 +108,19 @@ typedef struct InterpSegment {
     Expr *expr;             /* for format segments: the expression (NULL for literals) */
 } InterpSegment;
 
-/* One static_assert line in a struct/union body: an instantiation
- * predicate over the type's const generic params. */
+/* One static_assert, a line in a struct/union body or a statement in a
+ * function body: an instantiation predicate over const generic params. */
 typedef struct StaticAssert {
     Expr *cond;
     const char *msg;        /* NUL-terminated literal content */
     SrcLoc loc;
     const char *owner;      /* source-level owner name for diagnostics
-                               ("uwide", "from_u64") — decl names get mangled */
+                               ("uwide", "from_u64"); decl names get mangled */
     bool judged;            /* condition was fully concrete (no const params)
-                               and pass2 judged it once, up front — a type
-                               that is never monomorphized still gets its
-                               verdict, and mono_register skips a re-judgment
-                               per instance */
+                               and pass2 judged it once, up front. A type that
+                               is never monomorphized still gets its verdict,
+                               and mono_register does not judge it again per
+                               instance */
 } StaticAssert;
 
 typedef struct FieldPattern {
@@ -134,7 +134,7 @@ struct Expr {
     SrcLoc loc;
     Type *type;         /* filled in by pass2 */
     Provenance prov;    /* filled in by pass2: storage provenance for escape analysis */
-    /* Provenance of the values *stored in* this container, as distinct from
+    /* Provenance of the values stored in this container, as distinct from
      * `prov`, which describes its backing store. A slice literal always lives
      * on the stack (`prov == PROV_STACK`) yet may hold heap or static values,
      * so an element load must not inherit the backing's tag. PROV_UNKNOWN
@@ -169,8 +169,10 @@ struct Expr {
             struct Symbol *companion_module;   /* non-NULL when resolved_sym is a struct/union with a companion module */
             SrcLoc resolved_local_loc;         /* def loc of a resolved block-local binding (param, let, for-var,
                                                   match pattern) for editor go-to-def; {0} if global/unresolved */
-            bool resolved_local_is_param;      /* the block-local is a function parameter — hover shows name: type
+            bool resolved_local_is_param;      /* the block-local is a function parameter; hover shows name: type
                                                   only (a param has no doc comment of its own to scan for) */
+            bool is_std_stream;                /* the built-in stdin, stdout or stderr (not a binding
+                                                  that happens to share the name) */
         } ident;
 
         /* EXPR_BINARY */
@@ -179,7 +181,7 @@ struct Expr {
         /* EXPR_UNARY_PREFIX */
         struct { TokenKind op; Expr *operand; } unary_prefix;
 
-        /* EXPR_UNARY_POSTFIX — x! (unwrap-or-abort) and x? (propagation).
+        /* EXPR_UNARY_POSTFIX: x! (unwrap-or-abort) and x? (propagation).
          * expr_text: operand source text for the unwrap abort message (x! only).
          * prop_fn_ret: for x?, the enclosing function's resolved return type,
          * stamped by pass2 once the body is checked; codegen builds the
@@ -196,7 +198,7 @@ struct Expr {
             int type_arg_count;
             bool is_indirect;     /* callee is a function value (fat pointer) */
             bool is_extern_call;  /* callee is an extern function (no _ctx) */
-            bool bare_inst;       /* `name<Types>` in value position with no '(' — explicit type
+            bool bare_inst;       /* `name<Types>` in value position with no '(': explicit type
                                      args but no call; always an error, rejected in pass2 */
             const char *mangled_name;   /* C function name for monomorphized call, NULL for non-generic */
             struct Symbol *resolved_callee; /* resolved in pass2, used by mono discovery */
@@ -227,19 +229,21 @@ struct Expr {
         struct {
             Type *target;
             Expr *operand;
-            int buffer_size;  /* (cstr[N]) bounded str→cstr cast: N > 0; 0 = plain cast.
+            int buffer_size;  /* (cstr[N]) bounded str-to-cstr cast: N > 0; 0 = plain cast.
                                  Copies min(len, N-1) bytes + NUL into a hoisted uint8[N]. */
             const char *codegen_backing_name;  /* hoisted backing array name (set in codegen) */
-            bool licensed;    /* true when this is the direct init of alloc(...)/alloca(...) —
-                                 licenses an otherwise illegal unbounded (cstr) str→cstr cast,
-                                 whose home (heap/dynamic stack) the wrapping alloc/alloca gives. */
+            bool licensed;    /* true when this is the direct init of alloc(...)/alloca(...).
+                                 That allows an otherwise illegal unbounded (cstr) str-to-cstr
+                                 cast, since the wrapping alloc/alloca gives it a home (heap or
+                                 dynamic stack). */
         } cast;
 
-        /* EXPR_GUARD — two orthogonal lexical axes sharing one node:
+        /* EXPR_GUARD: two independent lexical axes sharing one node:
            - guard axis (guarded/unguarded): the value-precondition runtime guards
-             (float→int saturation, integer divide/modulo zero check, slice bounds).
+             (float-to-int saturation, integer divide/modulo zero check, slice bounds).
            - overflow axis (checked/unchecked): integer-overflow detection on
-             `+ - *`, signed `/` at INT_MIN/-1, and lossy integer narrowing casts.
+             `+ - *`, signed `/` at INT_MIN/-1, and lossy integer narrowing casts,
+             plus string truncation by a (cstr[N]) cast or a `%.Ns` precision.
            is_overflow_axis selects which axis; enable is the polarity within it
            (guard axis: true=guarded; overflow axis: true=checked). */
         struct { Expr *body; bool is_overflow_axis; bool enable; } guard;
@@ -287,8 +291,8 @@ struct Expr {
             const char *codegen_ctx_backing_name; /* hoisted _ctx_<lifted> backing local (capturing lambdas) */
             const char *self_codegen_name; /* non-NULL: self-recursive let binding's codegen name */
             bool self_referenced;          /* set by pass2 if the self name is actually used */
-            bool heap_alloc;               /* set by pass2: alloc(lambda) — context goes to the
-                                              heap at the alloc site, no stack backing hoisted */
+            bool heap_alloc;               /* set by pass2: alloc(lambda); the context goes to
+                                              the heap at the alloc site, no stack backing hoisted */
             const char **explicit_type_vars;    /* <'a, 'b> prefix, NULL if implicit-only */
             int explicit_type_var_count;
         } func;
@@ -301,7 +305,7 @@ struct Expr {
             struct Symbol *resolved_sym; /* resolved in pass2, used by mono discovery */
         } struct_lit;
 
-        /* EXPR_TUPLE_LIT — { e0, e1, ... } positional anonymous tuple */
+        /* EXPR_TUPLE_LIT: { e0, e1, ... } positional anonymous tuple */
         struct {
             Expr **elems;
             int elem_count;
@@ -321,26 +325,26 @@ struct Expr {
             bool codegen_backing_rodata;      /* the lifted backing belongs to a frozen
                                                  module constant, so it is emitted
                                                  `static const` and the slice header
-                                                 casts its .ptr — FC has already
+                                                 casts its .ptr; FC has already
                                                  rejected every write through it */
         } array_lit;
 
-        /* EXPR_SLICE_LIT — T[] { ptr = expr, len = expr } */
+        /* EXPR_SLICE_LIT: T[] { ptr = expr, len = expr } */
         struct {
             Type *elem_type;    /* element type (e.g., uint8 for str) */
             Expr *ptr_expr;
             Expr *len_expr;
-            bool  len_nonneg;   /* pass2 proved len >= 0 → codegen skips the
+            bool  len_nonneg;   /* pass2 proved len >= 0, so codegen skips the
                                  * negative-length runtime guard */
         } slice_lit;
 
         /* EXPR_ALLOC */
         struct {
             Type *alloc_type;     /* type to allocate (NULL for init-from-expr form) */
-            Expr *size_expr;      /* array size for alloc(T[N])/alloc(T,N) — NULL for single */
-            Expr *init_expr;      /* init expression for alloc(expr) — NULL for type-only */
-            bool alloc_raw;       /* true for alloc(T, N) → T*?, false for alloc(T[N]) → T[]? */
-            bool is_stack;        /* true for alloca(...) → dynamic stack, no option, no free */
+            Expr *size_expr;      /* array size for alloc(T[N])/alloc(T,N); NULL for single */
+            Expr *init_expr;      /* init expression for alloc(expr); NULL for type-only */
+            bool alloc_raw;       /* true for alloc(T, N) -> T*?, false for alloc(T[N]) -> T[]? */
+            bool is_stack;        /* true for alloca(...): dynamic stack, no option, no free */
             Expr *closure_src;    /* set by pass2 for alloc(f) where f is a local let bound
                                      to a capturing lambda: the lambda whose context layout
                                      the heap copy uses (init_expr stays the EXPR_IDENT) */
@@ -355,12 +359,12 @@ struct Expr {
         /* EXPR_ALIGNOF */
         struct { Type *target; } alignof_expr;
 
-        /* EXPR_BITCAST — bitcast(T, x): reinterpret x's bytes as scalar type T.
+        /* EXPR_BITCAST: bitcast(T, x) reinterprets x's bytes as scalar type T.
          * target and operand must be equal-size fixed-width scalars (checked in
          * pass2); no runtime failure mode, so no guard/checked variant. */
         struct { Type *target; Expr *operand; } bitcast_expr;
 
-        /* EXPR_ENUM_OF — enum_of(E, x): membership-checked conversion of an
+        /* EXPR_ENUM_OF: enum_of(E, x), a membership-checked conversion of an
          * integer to enum E; yields E? (some on a declared value, none otherwise). */
         struct { Type *target; Expr *operand; } enum_of_expr;
 
@@ -371,7 +375,7 @@ struct Expr {
         struct {
             InterpSegment *segments;
             int segment_count;
-            bool is_cstr;       /* true for c"..." interpolation → cstr result */
+            bool is_cstr;       /* true for c"..." interpolation (cstr result) */
             const char *codegen_backing_name; /* non-NULL when the buffer size is a
                                                  compile-time constant and a fixed
                                                  backing array was hoisted to function
@@ -380,22 +384,23 @@ struct Expr {
             int64_t backing_size;             /* byte budget N (excludes the NUL slot);
                                                  the hoisted array is uint8_t[N + 1] */
             bool wrapped;                     /* true when this interp is the direct init of
-                                                 alloc(...)/alloca(...) — licenses an otherwise
-                                                 illegal unbounded (runtime-sized) interpolation */
+                                                 alloc(...)/alloca(...), which allows an
+                                                 otherwise illegal unbounded (runtime-sized)
+                                                 interpolation */
         } interp_string;
 
         /* EXPR_SOME */
         struct { Expr *value; } some_expr;
 
-        /* EXPR_OK — ok(v): result construction, type inferred from payload */
+        /* EXPR_OK: ok(v), result construction, type inferred from payload */
         struct { Expr *value; } ok_expr;
 
-        /* EXPR_ERR — err(T, code): T is the ok-payload type (the node's type is T!);
-         * code is i32, must be non-zero (0 is the ok tag — compile error when provably
-         * zero, runtime guard otherwise, mirroring some(null)). */
+        /* EXPR_ERR: err(T, code). T is the ok-payload type (the node's type is T!);
+         * code is i32 and must be non-zero, since 0 is the ok tag (a compile error
+         * when provably zero, a runtime guard otherwise, as for some(null)). */
         struct { Type *target; Expr *code; } err_expr;
 
-        /* EXPR_ERROR_NAME — error_name(e): str? holding the fully-qualified name of a
+        /* EXPR_ERROR_NAME: error_name(e), a str? holding the fully-qualified name of a
          * declared error code (some("file_io.not_found")), none for reserved-range and
          * negative codes. Backed by a static name table emitted only when used (or
          * unconditionally under --backtraces). */
@@ -430,7 +435,7 @@ struct Expr {
             const char *tmp_name;   /* codegen temp name for the RHS */
         } let_destruct;
 
-        /* EXPR_TYPE_VAR_REF — 'a in expression position (for 'a.min etc.),
+        /* EXPR_TYPE_VAR_REF: 'a in expression position (for 'a.min etc.),
          * or a const generic param 'n used as a value (is_const_param, typed
          * i32; codegen emits the bound value as a literal). */
         struct { const char *name; bool is_const_param; } type_var_ref;
@@ -443,7 +448,7 @@ struct Expr {
             int expr_text_len;
         } assert_expr;
 
-        /* EXPR_STATIC_ASSERT — static_assert(const_expr, "msg"): checked at
+        /* EXPR_STATIC_ASSERT: static_assert(const_expr, "msg"), checked at
          * compile time (immediately when concrete; per instantiation when the
          * condition uses const generic params), emits no code. */
         struct {
@@ -457,10 +462,10 @@ struct Expr {
         /* EXPR_IGNORE */
         struct { Expr *value; } ignore_expr;
 
-        /* EXPR_ATOMIC_LOAD — atomic_load_acquire(p) */
+        /* EXPR_ATOMIC_LOAD: atomic_load_acquire(p) */
         struct { Expr *ptr; } atomic_load;
 
-        /* EXPR_ATOMIC_STORE — atomic_store_release(p, v) */
+        /* EXPR_ATOMIC_STORE: atomic_store_release(p, v) */
         struct { Expr *ptr; Expr *value; } atomic_store;
     };
 };
@@ -478,14 +483,14 @@ typedef enum {
     PAT_SOME,
     PAT_OK,
     PAT_ERR,
-    PAT_CONST_PATH, /* group.member / mod.group.member — a declared error constant.
+    PAT_CONST_PATH, /* group.member / mod.group.member: a declared error constant.
                        Resolved in pass2 and rewritten in place to PAT_INT_LIT with the
                        assigned code, so exhaustiveness/duplicate analysis and codegen
                        see a plain integer literal. */
     PAT_VARIANT,
     PAT_STRUCT,
-    PAT_TUPLE, /* { a, b, ... } — positional tuple destructuring (let-bindings only) */
-    PAT_OR,    /* p1 | p2 | ... — disjunction; alternatives must be binding-free */
+    PAT_TUPLE, /* { a, b, ... }: positional tuple destructuring (let-bindings only) */
+    PAT_OR,    /* p1 | p2 | ...: disjunction; alternatives must be binding-free */
     PAT_ERROR, /* parse-error placeholder; treated like PAT_WILDCARD (matches anything, binds
                   nothing) so a malformed arm produces no spurious exhaustiveness cascade. */
 } PatternKind;
@@ -552,24 +557,25 @@ void pattern_for_each_child(Pattern *p, PatternVisitFn fn, void *ctx);
 
 /* ---- Declaration nodes ---- */
 
-/* Extern error protocols — the `from <protocol>` tail on an extern function
- * returning T!. A closed set, one entry per crisp C failure convention: the
- * protocol names the failure test and where the error code lives, and codegen
- * wraps the raw C return into the declared result at the call site. Codes pass
- * through raw — no arithmetic, ever (spec/result-type-design.md §C interop). */
+/* Extern error protocols: the `from <protocol>` tail on an extern function
+ * returning T!. A closed set, one entry per well-defined C failure convention:
+ * the protocol names the failure test and where the error code lives, and
+ * codegen wraps the raw C return into the declared result at the call site.
+ * Codes pass through unchanged, with no arithmetic (spec: "Extern error
+ * protocols"). */
 typedef enum {
     EXT_PROTO_NONE = 0,     /* no protocol declared */
-    EXT_PROTO_ERROR,        /* malformed protocol clause; parse error already
-                               reported — pass1 skips agreement checks */
-    EXT_PROTO_ERRNO_NEG1,   /* errno(-1):        ret == -1   → err(errno)         */
-    EXT_PROTO_ERRNO_NULL,   /* errno(null):      ret == NULL → err(errno)         */
-    EXT_PROTO_STATUS,       /* status:           ret != 0    → err(ret); void payload */
-    EXT_PROTO_NEG_ERRNO,    /* neg_errno:        ret < 0     → err(ret), raw      */
-    EXT_PROTO_HRESULT,      /* hresult:          ret < 0     → err(ret), raw      */
-    EXT_PROTO_LASTERR_0,    /* last_error(0):    ret == 0    → err(GetLastError())    */
-    EXT_PROTO_LASTERR_NULL, /* last_error(null): ret == NULL → err(GetLastError())    */
-    EXT_PROTO_LASTERR_NEG1, /* last_error(-1):   ret == -1   → err(GetLastError())    */
-    EXT_PROTO_WSA_NEG1,     /* wsa_error(-1):    ret == -1   → err(WSAGetLastError()) */
+    EXT_PROTO_ERROR,        /* malformed protocol clause; the parser already
+                               reported it, so pass1 skips agreement checks */
+    EXT_PROTO_ERRNO_NEG1,   /* errno(-1):        ret == -1   -> err(errno) */
+    EXT_PROTO_ERRNO_NULL,   /* errno(null):      ret == NULL -> err(errno) */
+    EXT_PROTO_STATUS,       /* status:           ret != 0    -> err(ret); void payload */
+    EXT_PROTO_NEG_ERRNO,    /* neg_errno:        ret < 0     -> err(ret), raw */
+    EXT_PROTO_HRESULT,      /* hresult:          ret < 0     -> err(ret), raw */
+    EXT_PROTO_LASTERR_0,    /* last_error(0):    ret == 0    -> err(GetLastError()) */
+    EXT_PROTO_LASTERR_NULL, /* last_error(null): ret == NULL -> err(GetLastError()) */
+    EXT_PROTO_LASTERR_NEG1, /* last_error(-1):   ret == -1   -> err(GetLastError()) */
+    EXT_PROTO_WSA_NEG1,     /* wsa_error(-1):    ret == -1   -> err(WSAGetLastError()) */
 } ExternProtocol;
 
 typedef enum {
@@ -609,19 +615,20 @@ struct Decl {
             bool is_mut;
             bool is_module_member;      /* true if declared inside a module body */
             /* Read-only module constant (is_module_member && !is_mut && non-function)
-             * whose every byte is storage the *compiler* emits — no pointer value and
-             * no slice built over a raw address anywhere in its initializer. Only then
+             * whose storage is all emitted by the compiler: no pointer value and no
+             * slice built over a raw address anywhere in its initializer. Only then
              * are its contents frozen: reference-typed reads out of it carry const and
              * its lifted backing arrays emit `static const`. Set in pass2's
-             * check_decl_let; false leaves the constant read-only in its own storage
-             * only, which is what keeps `let vga = (u8*) 0xA0000usize` writable
+             * check_decl_let. When false, only the constant's own storage is
+             * read-only, which keeps `let vga = (u8*) 0xA0000usize` writable
              * through. */
             bool is_frozen;
             Expr *init;
             Type *resolved_type;    /* filled by pass2 */
-            /* Const-fold cache for module-member lets. Lazily populated during
-             * the const-expr gate in pass2; zero-init (UNVISITED) is correct. */
-            int const_fold_state;       /* 0=unvisited, 1=visiting, 2=done, 3=failed */
+            /* Const-fold cache for module-member lets, filled lazily by the
+             * const-expr gate in pass2. Zero-init is the unvisited state. */
+            int const_fold_state;       /* CONST_FOLD_* in pass2.c: 0=unvisited,
+                                           1=visiting, 2=done, 3=failed */
             Expr *const_fold_value;     /* folded literal tree (may be == init) */
             /* The initializer as written, kept when folding replaces `init`.
              * Checks about what the source refers to (module cycles) read it. */
@@ -662,7 +669,7 @@ struct Decl {
             int static_assert_count;
         } unio;
 
-        /* DECL_ENUM — closed set of named integer constants over a declared repr.
+        /* DECL_ENUM: closed set of named integer constants over a declared repr.
          * variants is the same array pass1 wires into the TYPE_ENUM, so values
          * resolved there are visible everywhere. */
         struct {
@@ -676,7 +683,7 @@ struct Decl {
         /* DECL_MODULE */
         struct {
             const char *name;
-            const char *ns_prefix;  /* namespace prefix (mangled, e.g. "acme_graphics"), NULL = global */
+            const char *ns_prefix;  /* namespace prefix (mangled, e.g. "acme__graphics"), NULL = global */
             const char *from_lib;   /* NULL unless module X from "lib" */
             const char *define_macro; /* NULL unless define "MACRO" "VALUE" */
             const char *define_value; /* NULL unless define present */
@@ -702,23 +709,23 @@ struct Decl {
             SrcLoc module_loc;
             /* What the statement resolved to, stamped by pass1 where the import
              * is processed (the single-resolution invariant: consumers read these
-             * rather than re-resolving). `resolved_sym` is what `name` — and the
-             * `alias`, which is only another spelling of it — denotes;
+             * rather than re-resolving). `resolved_sym` is what `name` denotes
+             * (and `alias`, which is only another spelling of it);
              * `resolved_companion` the module imported alongside a type of the
              * same name; `resolved_module` the module named in the `from` clause.
              * All NULL when the import did not resolve. `resolved_module` is the
-             * *head* of the `from` route; the module the import actually reads
-             * from is the route's last segment, i.e.
+             * head of the `from` route; the module the import reads from is the
+             * route's last segment, i.e.
              * `route_count ? route[route_count-1].sym : resolved_module`. */
             struct Symbol *resolved_sym;
             struct Symbol *resolved_companion;
             struct Symbol *resolved_module;
-            /* The `from` clause names a route of one or more modules. The head —
-             * the name resolved in the enclosing scope — is `from_module`, and
-             * `route` holds the segments written after it (`from a.b.c` → head
-             * "a", route {"b","c"}), each a module member of its predecessor,
-             * exactly as `.` navigates in expression position. Empty for the
-             * one-segment form and for a bare `from ns::`. */
+            /* The `from` clause names a route of one or more modules. The head,
+             * resolved in the enclosing scope, is `from_module`, and `route`
+             * holds the segments written after it (`from a.b.c` has head "a"
+             * and route {"b","c"}), each a module member of its predecessor, as
+             * `.` navigates in expression position. Empty for the one-segment
+             * form and for a bare `from ns::`. */
             ImportRouteSeg *route;
             int route_count;
         } import;
@@ -744,60 +751,8 @@ typedef struct Program {
     int decl_count;
 } Program;
 
-/* True if an interpolated string's buffer size is not a compile-time constant —
- * i.e. it contains a %s/cstr segment with no explicit precision, making its byte
- * budget depend on a runtime string length. Such interpolations must be given a
- * home explicitly (a precision, alloc, or alloca); a bare one is rejected in
- * pass2. Defined in codegen.c so it shares the exact const-size logic the buffer
- * emitter uses (the two can never disagree on what counts as bounded). */
-bool interp_is_runtime_sized(const struct Expr *e);
-
-/* Explicit truncating precision of a `%s` format segment (>= 0), or -1 when the
- * segment is literal, non-%s, or unbounded. A precision hard-caps the segment's
- * bytes (printf semantics), so these segments are governed by the overflow axis
- * (`checked` aborts instead of clipping). Defined in codegen.c beside the format
- * -spec parser so pass2 and the emitter share one notion of "truncating". */
-int interp_seg_trunc_prec(const struct InterpSegment *seg);
-
-/* Largest field width or precision a format spec may carry. Both are passed to
- * the C library as `int`, and C11 guarantees only that `int` reaches 32767 — the
- * same 16-bit floor the emitted arithmetic already honors — so a larger number
- * cannot be represented on every target FC compiles to. pass2 rejects specs over
- * the limit outright rather than letting the digits wrap into an arbitrary field.
- * The cap also bounds the hoisted buffer a single segment can demand. */
-#define INTERP_MAX_FIELD 32767
-
-/* The modifiers a format spec carries, as written. Codegen copies a spec into
- * the emitted C format string verbatim, so this is also exactly what reaches the
- * C formatter — which is why pass2 judges the spec from the same reading. */
-typedef struct InterpSpec {
-    bool minus, plus, space, hash, zero;  /* flags present */
-    char repeated;                        /* a flag written twice (that flag), else 0 */
-    int64_t width;                        /* explicit field width, 0 when absent */
-    int64_t precision;                    /* explicit precision, -1 when absent */
-} InterpSpec;
-
-/* Read a format segment's modifiers. Width and precision saturate one past
- * INTERP_MAX_FIELD so an over-long digit run is reported as too large instead of
- * overflowing the accumulator. Defined in codegen.c beside the format-spec
- * parser, so pass2's judgment and the emitter read a spec identically. */
-void interp_seg_spec(const struct InterpSegment *seg, InterpSpec *out);
-
-/* Pointer-value null-status predicates for null-sentinel options (T*?, any*?,
- * cstr?), where none is represented by a null pointer. provably_nonnull is true
- * only when a value can never be null (codegen elides the some() null-guard);
- * provably_null is true only when it is always null (pass2 rejects some(p) of
- * it). Both are false for anything uncertain → a runtime guard. Defined in
- * codegen.c so the guard/elide/reject decisions share one source of truth. */
-bool ptr_value_provably_nonnull(const struct Expr *e);
-bool ptr_value_provably_null(const struct Expr *e);
-bool int_value_provably_nonzero(const struct Expr *e);
-bool int_value_provably_zero(const struct Expr *e);
-
-/* If e is a resolved reference to a declared error constant (a member of an
- * `error` group, reached as `group.member`/`mod.group.member` or through an
- * import as a bare name), return the member's assigned EXPR_INT_LIT; else
- * NULL. Defined in codegen.c beside the provably-nonzero predicates so the
- * err(T,0) guard-elision and const-folding decisions share one source of
- * truth. */
-const struct Expr *error_const_literal(const struct Expr *e);
+/* One Program holding every file's declarations in order. A file that does
+ * not open with a namespace declaration is preceded by a namespace reset
+ * (DECL_NAMESPACE with a NULL name), so a namespace never carries over from
+ * one file to the next. A single file is returned as it is. */
+Program *program_merge(Arena *a, Program **files, int count);

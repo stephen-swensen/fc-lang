@@ -13,10 +13,12 @@ typedef struct Symbol {
     Type *type;             /* NULL until pass2 resolves it */
     SymbolTable *members;   /* non-NULL for DECL_MODULE */
     struct ImportTable *imports; /* non-NULL for modules with internal imports */
-    struct Symbol *parent;  /* enclosing module's Symbol (for every member kind — modules, lets, types); NULL for top-level. Set after pass1. */
+    struct Symbol *parent;  /* enclosing module's Symbol, for every member kind
+                               (modules, lets, types); NULL for top-level. Set
+                               at the end of pass1 (set_module_parents). */
     bool is_private;
     bool is_generic;
-    const char **type_params;    /* ["'a", "'b"] — explicit vars first, then implicit */
+    const char **type_params;    /* ["'a", "'b"]: explicit vars first, then implicit */
     int type_param_count;
     int explicit_type_param_count;  /* how many of type_params are from <> decl */
     uint8_t *param_kinds;        /* GenParamKind per type_params entry; NULL = all GP_TYPE.
@@ -32,8 +34,8 @@ struct SymbolTable {
 
 /* Import reference: transparent alias pointing to a source module's member */
 typedef struct ImportRef {
-    const char *local_name;        /* interned — name visible in importing scope */
-    const char *source_name;       /* interned — name in source module's members */
+    const char *local_name;        /* interned; name visible in importing scope */
+    const char *source_name;       /* interned; name in source module's members */
     DeclKind kind;
     SymbolTable *source_members;   /* source module's member table (stable pointer) */
     SymbolTable *module_members;   /* for DECL_MODULE imports: the imported module's members */
@@ -42,7 +44,7 @@ typedef struct ImportRef {
     const char **type_params;
     int type_param_count;
     int explicit_type_param_count;
-    uint8_t *param_kinds;          /* mirrors the source Symbol's param_kinds */
+    uint8_t *param_kinds;          /* the source Symbol's param_kinds array (shared) */
 } ImportRef;
 
 typedef struct ImportTable {
@@ -70,7 +72,7 @@ typedef struct FileImportScopes {
  * is diffable across builds). [1, 65535] is reserved platform passthrough
  * (errno / Win32 / WSA); 0 is the ok tag. The registry is rebuilt on every
  * pass1_collect (the LSP re-runs it per edit) and read by codegen (the
- * error_name table / --backtraces aborts) and the CLI (--emit-error-codes). */
+ * error_name table / --backtraces aborts) and the CLI (the .errcodes map). */
 #define FC_ERROR_CODE_BASE 65536
 
 typedef struct ErrorCodeInfo {
@@ -86,14 +88,22 @@ Symbol *symtab_lookup(SymbolTable *t, const char *name);
 Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind);
 Symbol *symtab_lookup_kind_ns(SymbolTable *t, const char *name, DeclKind kind,
                                const char *ns_prefix);
+/* The struct, union or enum named `name`, ignoring namespaces. */
+Symbol *symtab_lookup_type(SymbolTable *t, const char *name);
 Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_prefix);
-void symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl);
+/* Add a symbol and return it. The pointer is valid until the next symtab_add
+ * on the same table, which may move the array. */
+Symbol *symtab_add(SymbolTable *t, const char *name, DeclKind kind, Decl *decl);
 
-/* Free the malloc'd tables hanging off a symtab's module symbols: each module
- * Symbol owns exactly one members table and at most one imports table
- * (ImportRefs only *reference* other tables), so a recursive walk frees each
- * exactly once. Does NOT free t->symbols itself — the caller owns that. */
-void symtab_free_nested(SymbolTable *t);
+/* Free everything a symbol table owns: its symbols and, recursively, each
+ * module's members table and imports table (ImportRefs only reference other
+ * tables, so every table is freed once). */
+void symtab_free(SymbolTable *t);
+void file_scopes_free(FileImportScopes *s);
+
+/* The file-level imports of `filename` (its interned name), NULL when it has
+ * none or either argument is NULL. */
+ImportTable *file_imports_find(FileImportScopes *scopes, const char *filename);
 
 /* Run pass 1: collect top-level declarations into symbol table.
  *

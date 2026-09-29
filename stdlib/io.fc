@@ -1,20 +1,14 @@
 namespace std::
 
-// File I/O over C stdio, plus the filesystem operations around it: open,
-// close, read, write, seek, tell, flush, sync, remove, rename, mkdir,
-// ensure_dir, list_dir, and read_all. Handles are opaque any* (C's FILE*),
-// and the built-in globals stdin, stdout, and stderr are already typed any*
-// and available without importing this module.
+// File I/O over C stdio, plus the filesystem operations around it. Handles
+// are opaque any* (C's FILE*); the built-in globals stdin, stdout, and stderr
+// are already typed any* and need no import.
 //
-// Fallible operations return results — open is any*!, read_all is str!,
-// list_dir is str[]!, tell is i64!, and close/flush/sync/seek/remove/rename/
-// mkdir are void! — with named conditions in `error file`: io.file.not_found,
-// denied, exists, and no_space. A platform code with no curated name passes
-// through raw, so nothing is lost. Predicates (exists, can_read, can_write,
-// eof) stay bool, and the raw byte-count primitives read and write stay i64,
-// because a partial transfer is data rather than a failure. read_char is
-// u8?!: ok(some(b)) is a byte, ok(none) is end of file, err(e) is a real
-// read error.
+// Fallible operations return results, with named conditions in `error file`;
+// a platform code with no curated name passes through raw. Predicates stay
+// bool, and the byte-count primitives read and write stay i64, since a partial
+// transfer is data rather than a failure. read_char is u8?!: ok(some(b)) is a
+// byte, ok(none) is end of file, err(e) is a read error.
 //
 // mkdir reports an existing path as err(io.file.exists); ensure_dir folds
 // just that condition back into ok, so "make sure this directory exists" is
@@ -105,14 +99,14 @@ module io =
     let seek_end = 2
 
     // Writes the bytes of s to file handle f.
-    // s: const str — the data to write; const because write does not modify the buffer.
+    // s: const str — the data to write.
     // f: any* — opaque FILE* handle (e.g. stdout, or from open).
     // returns: i64 — number of bytes actually written.
     let write = (s: const str, f: any*) ->
         (i64) c.fwrite(s.ptr, 1usize, (usize) s.len, f)
 
     // Reads up to n bytes from file handle f into buf.
-    // buf: u8[] — mutable destination buffer; non-const because read fills it.
+    // buf: u8[] — destination buffer.
     // n: i64 — maximum number of bytes to read.
     // f: any* — opaque FILE* handle.
     // returns: i64 — number of bytes actually read, or 0 on EOF/error.
@@ -120,8 +114,8 @@ module io =
         (i64) c.fread(buf.ptr, 1usize, (usize) n, f)
 
     // Opens a file at path with the given mode (e.g. "r", "w", "rb").
-    // path: const str — file path; const because open only reads it.
-    // mode: const str — fopen mode string; const because open only reads it.
+    // path: const str — file path.
+    // mode: const str — fopen mode string.
     // returns: any*! — ok(FILE*) on success; err on failure (e.g.
     //   file.not_found, file.denied, or a raw platform code).
     let open = (path: const str, mode: const str) ->

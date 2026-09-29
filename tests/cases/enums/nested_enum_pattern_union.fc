@@ -1,8 +1,8 @@
-// BUG (bugsearch 2026-07-18): an enum-variant pattern nested inside a union
-// payload emits tagged-union codegen for the enum — `.tag ==
-// fc__color_tag_red` on an int typedef: invalid C. fcc accepts the pattern
-// (exhaustiveness even demands the missing variant). Enum patterns nested
-// under a bare option or result work; only the union-payload path is broken.
+// An enum-variant pattern nested inside a union payload (`| chosen(red)`)
+// matches on the enum's value. Regression: this path used to emit
+// tagged-union code for the enum (`.tag == fc__color_tag_red` on an integer
+// typedef), which is invalid C; enum patterns under an option or result were
+// unaffected.
 enum color =
     | red
     | green

@@ -135,8 +135,8 @@ check("initialize advertises capabilities",
       caps.get("hoverProvider") and caps.get("definitionProvider")
       and caps.get("completionProvider") and caps.get("codeLensProvider")
       and caps.get("inlayHintProvider") and caps.get("textDocumentSync") == 1, str(caps))
-# `>` must be a trigger char so finishing `->` auto-pops member completion (not
-# just Ctrl+Space); `.` and `:` cover value/module/type-name members and `::`.
+# `.` and `:` cover value/module/type-name members and `::`. `>` is not a
+# trigger: `->` is never member access.
 _trig = caps.get("completionProvider", {}).get("triggerCharacters", [])
 check("completion trigger characters are . and : ('->' is not member access)",
       set(_trig) == {".", ":"}, str(_trig))
@@ -2427,6 +2427,63 @@ dres = dresp.get(2, {}).get("result") or {}
 lib_uri = "file://" + urllib.parse.quote(os.path.realpath(os.path.join(droot, "shared", "lib.fc")))
 check("go-to-def into another file returns its canonical, percent-encoded URI",
       dres.get("uri") == lib_uri, f"{dres.get('uri')!r} vs {lib_uri!r}")
+
+# --- a comma-list import declares its names in source order -----------------
+# Each name is its own declaration, so diagnostics about them come out in the
+# order they were written.
+OMAIN = (
+    "module m =\n"
+    "    let a = 1\n"
+    "\n"
+    "let main = (args: str[]) ->\n"
+    "    0\n"
+    "\n"
+    "module user =\n"
+    "    import a, nope1, nope2, nope3 from m\n"
+)
+ouri = "file://" + tempfile.mkdtemp(prefix="fc_lsp_order_") + "/main.fc"
+om = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": ouri, "languageId": "fc",
+         "version": 1, "text": OMAIN}}),
+    req(2, "textDocument/hover", {"textDocument": {"uri": ouri}, "position": {"line": 0, "character": 0}}),
+    req(9, "shutdown", None), note("exit", None),
+]
+_, odiags, _, _, _ = run_session(om)
+onames = [n for d in (odiags[0] if odiags else []) for n in ("nope1", "nope2", "nope3")
+          if f"'{n}'" in d["message"]]
+check("a comma-list import reports its names in source order",
+      onames == ["nope1", "nope2", "nope3"], str(odiags))
+
+# --- an lsp.rsp's --len-repr applies to its unit only --------------------------
+# The same program is over capacity at 16-bit lengths and fine at the default
+# 64. The rsp unit is analyzed first, so the second unit also shows that the
+# setting does not leak.
+LRSRC = (
+    "let main = (args: str[]) ->\n"
+    "    let big = u8[40000] { }\n"
+    "    (i32) big.len\n"
+)
+lr16 = tempfile.mkdtemp(prefix="fc_lsp_lr16_")
+lr64 = tempfile.mkdtemp(prefix="fc_lsp_lr64_")
+with open(os.path.join(lr16, "lsp.rsp"), "w") as f:
+    f.write("--len-repr 16\nmain.fc\n")
+for d in (lr16, lr64):
+    with open(os.path.join(d, "main.fc"), "w") as f: f.write(LRSRC)
+lr = [req(1, "initialize", {"capabilities": {}}), note("initialized", {})]
+for i, d in enumerate((lr16, lr64)):
+    u = "file://" + os.path.join(d, "main.fc")
+    lr.append(note("textDocument/didOpen", {"textDocument": {"uri": u, "languageId": "fc",
+              "version": 1, "text": LRSRC}}))
+    lr.append(req(2 + i, "textDocument/hover", {"textDocument": {"uri": u},
+              "position": {"line": 0, "character": 0}}))
+lr += [req(9, "shutdown", None), note("exit", None)]
+run_session(lr)
+lrpubs = {uri.split("/")[-2]: msgs for uri, msgs in PUBS}
+check("lsp.rsp --len-repr 16 reports the over-capacity literal",
+      any("--len-repr 16" in m for m in lrpubs.get(os.path.basename(lr16), [])), str(lrpubs))
+check("--len-repr from one unit's lsp.rsp does not leak into the next",
+      not lrpubs.get(os.path.basename(lr64)), str(lrpubs))
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

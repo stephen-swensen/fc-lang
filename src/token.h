@@ -18,7 +18,7 @@ typedef enum {
     TOK_STRUCT,
     TOK_UNION,
     TOK_ENUM,
-    TOK_ERROR_KW,       /* 'error' — error-group declaration / the i32 display alias in type position */
+    TOK_ERROR_KW,       /* 'error': error-group declaration, or the i32 display alias in type position */
     TOK_MODULE,
     TOK_NAMESPACE,
     TOK_IMPORT,
@@ -60,12 +60,12 @@ typedef enum {
     TOK_SIZEOF,
     TOK_ALIGNOF,
     TOK_BITCAST,
-    TOK_ENUM_OF,        /* enum_of(E, x) — checked integer→enum conversion, yields E? */
+    TOK_ENUM_OF,        /* enum_of(E, x): checked integer-to-enum conversion, yields E? */
     TOK_DEFAULT,
     TOK_CONST,
     TOK_ASSERT,
-    TOK_STATIC_ASSERT,  /* static_assert — compile-time instantiation predicate */
-    TOK_ERROR_NAME,     /* error_name — declared-error name lookup */
+    TOK_STATIC_ASSERT,  /* static_assert: compile-time instantiation predicate */
+    TOK_ERROR_NAME,     /* error_name: declared-error name lookup */
     TOK_ATOMIC_LOAD,    /* atomic_load_acquire */
     TOK_ATOMIC_STORE,   /* atomic_store_release */
     /* String interpolation */

@@ -1,0 +1,11 @@
+// A nested module may share its name with a sibling type, but a second module
+// of that name is a redefinition, whichever of the three comes first.
+module geo =
+    struct point =
+        x: i32
+    module point =
+        let origin_x = 0
+    module point =
+        let origin_y = 0
+
+let main = (args: str[]) -> 0

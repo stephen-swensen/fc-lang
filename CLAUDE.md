@@ -1,373 +1,58 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code in this repository. Everything a human maintainer
+needs lives in the files below; this file adds only what is specific to an AI
+assistant.
 
-## Project Status
+## Where things are
 
-This is a compiler project for **FC** (version 1.0.0-rc.7), a systems programming language that transpiles to C11. The compiler (`./fcc`) is implemented in C and lives in `src/`. The language specification is in `spec/fc-spec.html`. For a quick reference of FC syntax and semantics, see `spec/examples.fc` — a runnable, commented program that demonstrates all core language features.
+- `docs/ARCHITECTURE.md`: the pipeline, what each source file does, the
+  invariants the compiler relies on, and the language server design.
+- `CONTRIBUTING.md`: build and test targets, the test layout and markers, the
+  checklist for adding a feature or an AST/type kind, code conventions, and
+  the engineering principles behind design decisions.
+- `spec/fc-spec.html`: the language specification. `spec/examples.fc` is a
+  runnable tour of the language; read it first.
+- `spec/TODO.md`: open work, including the language server's known limits.
 
-## Build & Run
+## Rules for the assistant
 
-- **`make`** — Release build (`-O2`). Produces `fcc` at `./build/<os>/fcc` (where `<os>` is `linux`/`windows`/`macos`; `.exe` suffix on Windows). The per-OS subdirectory keeps a shared source tree across two operating systems (e.g. WSL + MSYS2) from cross-execing each other's binaries.
-- **`make print-bin`** — Echo the per-OS binary path. `run.sh`, `tests/run_tests*.sh`, and `demos/*/run.sh` use this instead of replicating OS detection.
-- **`make dev`** — Clean rebuild at `-O0` for clearer diagnostics during dev iteration. Use this when assertion failures, debugger sessions, or sanitizer output need to be readable; `-O2` builds optimize in ways that can muddle line attribution.
-- **`make check`** / **`make test-all`** — Run all tests with both gcc and clang. `check` is the GNU-canonical alias.
-- **`make test-gcc`** / **`make test-clang`** — Test with a single compiler.
-- **`make test-gcc-len16`** / **`make test-clang-len16`** — The whole suite re-based on `--len-repr 16` (16-bit stored slice lengths). Semantics are representation-independent, so the retro configuration is fully testable on the host; keep these green when touching slice codegen. (`FCC_EXTRA_ARGS` is the underlying runner hook.)
-- **`make test-gcc FILTER=pattern`** — Run only tests matching a pattern (e.g., `FILTER=stdlib/data`, `FILTER=closures`).
-- **`make install`** / **`make uninstall`** — Install `fcc` to `$(bindir)` and stdlib to `$(datadir)/fcc/stdlib/` per GNU conventions. Defaults to `PREFIX=/usr/local`; override `PREFIX`, `DESTDIR`, `bindir`, or `datadir` as needed.
-- **`make install-vscode`** / **`make uninstall-vscode`** — Install/remove the VSCode extension (Linux) in `~/.vscode/extensions/`; vendors `vscode-languageclient` via `npm`. The extension drives `fcc --lsp`. See **Editor integration**.
-- **`make test-lsp`** — Run the LSP server wire tests (`tests/lsp/`, needs `python3`). Kept out of `make check` so it can't regress the compiler suite.
-- **`make clean`** — Remove `build/` (every OS subdirectory).
-- **`make help`** — Print the full target reference.
-- **`./run.sh file.fc`** — Compile, link with stdlib, run, and print exit code. Supports `--flag name` and multiple source files.
+- Never commit, and never invoke `/commit`; the user commits. The user may
+  also commit or change branches outside the session, so don't assume the
+  repository state stays put.
+- Run `make check` (or at least `make test-all`) before presenting a final
+  summary of compiler changes, and `make test-gcc-len16` /
+  `make test-clang-len16` when touching slice code. Changes only to `demos/`
+  or `spec/` (other than `spec/examples.fc`) don't need the suite.
+- `spec/fc-spec.html` and `src/` are the only authorities on the language.
+  There is no grammar file; don't create one, and don't treat `spec/hist/` as
+  current. If the spec doesn't settle a question, ask the user and then write
+  the answer into the spec.
+- Before proposing a language design decision, lay out how C, Rust, Zig and
+  similar languages handle it, and check the spec for an existing rule.
+- A compiler bug found while doing something else: confirm it with a
+  reproduction, report it prominently, and ask before fixing it.
 
-**Optimization (default = `-O2`):** plain `make` produces a release-optimized binary. Use `make dev` for the dev-iteration loop (`-O0`, clearer diagnostics), or override with e.g. `make OPT=-O0` or `make OPT="-O0 -fsanitize=address,undefined"`. Tests default to `-O0` for the transpiled C; `make test-gcc-O2` / `test-clang-O2` / `test-all-O2` re-run the suite at `-O2` to catch optimizer-surfaced UB. The compiler-build OPT and the test-C OPT are independent axes. `make clean` is required when switching `OPT` values since Make doesn't track CFLAGS changes — `make dev` takes care of this for you.
+## FC syntax that is easy to get wrong
 
-The compiler is built with `cc -std=c11 -Wall -Wextra -Wpedantic -g` (plus `$(OPT)`). Tests compile the generated C with `cc -std=c11 -Wall -Werror`, so the emitted C must be warning-clean. FC emits all helpers (e.g. imported stdlib functions) as `static __attribute__((unused))`, so `-Wunused-function` stays quiet even though many helpers are unreferenced in any given program — GCC/clang still DCE them at link time.
-
-**Struct initialization**: Always declare stack-allocated structs with `= {0}` before calling their init function (e.g., `Parser parser = {0};`). This prevents uninitialized-field bugs when new fields are added but the init function isn't updated — the kind of bug that only manifests on some platforms. `arena_alloc` already zero-fills heap allocations.
-
-## Git Workflow
-
-- **Never auto-commit**
-- **Never invoke `/commit`** — the user always runs this manually
-- Default branch is `main`; experimental work may happen in other branches
-- Working changes may be discarded and branches may be abandoned — follow the user's lead
-- The user will always be in control of commiting changes, and may do so outside of the claude sessions itself, so don't count on the state of the git repository remaining static
-
-## Language Overview
-
-FC is a C-targeting language with these core design constraints:
-- **Target**: C11 (using `int8_t`/etc. from `<stdint.h>`, `_Static_assert`, anonymous unions)
-- **Memory model**: Manual, no GC, no borrow checker — follows C's philosophy
-- **Syntax**: Indentation-based (offside rule, spaces only — tabs are a compile error)
-- **Comments**: `//` line comments, `/* */` block comments (nestable). No `#` comments.
-- **Type inference**: Directional (bottom-up, inside-out), never global unification
-- **Generics**: Monomorphized at compile time, zero runtime cost
-- **Completeness over partiality**: Prefer conservative-but-complete restrictions over partial solutions that only cover some cases. A feature that works correctly in all scenarios (even if limited) is better than one that works in common cases but has subtle unsound edge cases. Don't ship a partial fix — either solve the full problem space or keep the restriction until you can.
-
-## Compiler Architecture
-
-The compiler pipeline is: **source → lexer → parser → pass1 → pass2 → mono discovery → mono finalize → codegen → C file**.
-
-### Source files (`src/`)
-
-- **`main.c`** — Entry point. Expands response-file args (`args.c`), reads input files, runs the pipeline, writes output.
-- **`args.c/h`** — gcc-style `@response` file expansion, shared by the CLI and the LSP. `args_expand` splices each `@file` (recursively, with cycle detection; `#`/`//` line comments; newlines act as whitespace) into a flat token stream, tagging each token with the directory of the response file it came from (NULL = typed directly). `args_parse` then interprets the stream (host auto-detect, `--flag` overrides, `-o`, inputs) — applying **file-relative path resolution** and **shell-style glob expansion** (POSIX `glob`) only to positional tokens that originate inside a response file (tokens typed directly were already shell-processed). A relative path inside a response file resolves against that file's own directory (a deliberate divergence from gcc's cwd-relative behavior, so a project file is relocatable and `fcc @x.rsp` matches the LSP's discovery). The CLI takes `@file` explicitly (no auto-discovery); the LSP discovers `lsp.rsp` by convention (see **Editor integration**).
-- **`lexer.c/h`** — Tokenizer. Scans source into tokens, then runs a layout pass that converts indentation into `INDENT`/`DEDENT`/`NEWLINE` tokens (offside rule). Also handles same-level match blocks where `|` acts as a delimiter.
-- **`token.c/h`** — Token types and interning. All identifier/keyword strings are interned for pointer-equality comparison.
-- **`parser.c/h`** — Pratt parser. Produces an AST of `Expr` and `Decl` nodes. Handles expressions (12 precedence levels), statements, patterns, and declarations. **Error-recovery (resilient) parsing:** `expect`/`expect_typearg_gt`/`expect_extern_c_name` are non-fatal — on a token mismatch they `diag_error` and return *without* consuming, so the parser always produces a (possibly error-laden) tree instead of aborting on the first syntax error. Unparseable regions become `EXPR_ERROR`/`PAT_ERROR`/`DECL_ERROR` placeholder nodes (kind+loc only; they exist only when `diag_error_count()>0` so they never reach codegen). Forward progress is guaranteed by a *leaf-bump* rule (the `parse_prefix`/`parse_pattern_atom` defaults consume the offending token unless it is a hard stop) plus a `recover_progress` watchdog in every item loop; the top-level and module-body loops additionally `recover_to(DECL_START)` (Dragon-Book hierarchical sync). Only the **lexer** still `diag_fatal`s (layout errors — see below).
-- **`ast.h`** — AST node definitions. `Expr` (expressions, including `let` bindings), `Pattern` (match patterns), `Decl` (top-level declarations), `Program` (root).
-- **`ast.c`** — The child visitors: `expr_for_each_child` / `expr_any_child` (early-exit search) and `pattern_for_each_child`. Their switches list every kind with no `default`, so a new kind is a `-Wswitch` warning there. Every whole-tree walker (codegen's collectors, mono discovery, pass2's generic validation / pre-taint / defer and marker checks, the module-cycle check, the LSP walkers) handles only the kinds it treats specially and hands the rest to the visitor. Write new walkers the same way.
-- **`pass1.c/h`** — First pass. Walks declarations to collect top-level names, struct/union layouts, and function signatures into a `SymbolTable`. Enables forward references. For module-scoped types: mangles declaration names (e.g., `inner` → `m__inner`), canonicalizes generic stub names in field types to use mangled forms, and registers module types in the global symtab under mangled names so they're findable from any context. Also assigns deterministic codes to `error`-group constants at the end of collection (the parser desugars `error g = | m…` to a `DECL_MODULE` flagged `is_error_group` whose members are synthesized i32-const lets; pass1 sorts fully-qualified names, numbers them from `FC_ERROR_CODE_BASE` = 65536, and keeps the registry behind `error_name`/`--backtraces` name tables and the automatic `<output>.errcodes` map the CLI writes per build).
-- **`pass2.c/h`** — Second pass (type checker). Walks expressions with a scope chain, infers types bottom-up, resolves identifiers, checks type compatibility, validates casts and widening. Assigns unique codegen names to local bindings for shadowing support. Registers monomorphized generic instances. Uses `ModuleScopeChain` for arbitrary-depth parent module symbol lookup with interleaved import/parent resolution: at each module level, members are checked then that level's imports before moving to the parent, so a child's import can shadow a parent's member. `scope_lookup_capture` stops at the current module boundary (first `is_global` scope); parent resolution is handled by the interleaved loop. `resolve_symbol`/`resolve_symbol_kind` encode this interleaved order as the canonical lookup for all name resolution. **Single-resolution invariant:** EXPR_IDENT stores `resolved_sym` (the Symbol it resolved to) and `companion_module` (for struct/union names with a companion module) directly on the AST node. EXPR_FIELD, EXPR_CALL, and `find_callee_symbol` read these stored pointers instead of re-resolving — this is the architectural guarantee that prevents name shadowing bugs where a parameter/local shares a name with a module or type. Performs intraprocedural escape analysis: tags pointer/slice expressions with provenance (stack/heap/static/unknown) and rejects returning stack pointers, freeing non-heap memory, or storing stack pointers in heap structs. Uses `diag_error` (not `diag_fatal`) so multiple type errors are reported in a single compilation; erroneous expressions receive the poison type `TYPE_ERROR` which propagates silently to suppress cascading false positives.
-- **`monomorph.c/h`** — Monomorphization table and utilities. Tracks generic instantiations (functions, structs, unions) with their mangled names and concrete types. Three phases run after pass2: (1) `mono_discover_transitive()` finds all transitive instantiations (generic functions calling other generic functions) via a fixpoint AST walk, using `resolved_callee`/`resolved_sym` from pass2 for module-scoped symbol lookup. (2) `mono_finalize_types()` discovers nested struct types referenced only in field types (not directly constructed), resolves all type names via `mono_resolve_type_names()`, and topologically sorts entries so by-value struct dependencies are emitted before their dependents. (3) `mono_resolve_type_names()` canonicalizes generic struct/union names in a type tree to mangled C identifiers, using the global symtab to resolve module-scoped names.
-- **`codegen.c/h`** — C code emitter. Walks the typed AST and emits C11 source. Handles typedef generation for slices/options, function declarations, struct/union definitions, and expression emission. Emits monomorphized copies of generic functions/structs using a substitution context (`SubstCtx`) that replaces type variables with concrete types at emit time.
-- **`types.c/h`** — Type representation and utilities. Defines `Type` (i8–u64, isize, usize, f32/64, bool, str, cstr, pointer, slice, option, struct, union, function), plus helpers like `type_is_numeric()`, `type_eq()`, `type_name()`.
-- **`diag.c/h`** — Diagnostics. `diag_error()` reports an error with source location and continues (used by pass2 *and now the parser* for error accumulation); `diag_fatal()` reports and exits immediately — used only by the **lexer** for unrecoverable layout errors (tabs, unterminated string/comment, inconsistent indentation) now that the parser recovers in-band. `diag_error_count()` gates **codegen** (codegen never runs with any error) but no longer gates pass2: pass2 runs past recoverable parse/pass1 errors so the LSP keeps type info on the well-formed parts of a file (the CLI still exits non-zero, reporting all errors first). **No warnings:** FC has exactly one diagnostic severity — error. Don't add a warning channel, a `-W…` family, or an opt-in advisory pass. Style/hygiene checks (unused bindings, shadowed names, unused imports) are deliberately out of scope for the compiler; they belong to the programmer (and possibly to a future LSP/editor integration). A diagnostic is either important enough to fail the build or it isn't emitted. **Server mode:** `diag_set_sink()` redirects diagnostics to a collector (vs. stderr) and `diag_set_abort_jmp()` makes `diag_fatal*` `longjmp` (vs. `exit(1)`) so the in-process LSP survives mid-typing fatals; both default off, leaving the CLI path byte-for-byte unchanged.
-- **`common.c/h`** — Shared utilities. Arena allocator, dynamic array macro (`DA_APPEND`).
-- **`analyze.c/h`**, **`json.c/h`**, **`lsp.c/h`** — The in-process language server (`fcc --lsp`), independent of the normal compile path. `analyze()` runs lexer→parser→pass1→pass2 over an in-memory source (merging the installed stdlib so `std::` resolves), collecting diagnostics and keeping the typed AST alive for queries; `json.c` is a minimal JSON-RPC value model; `lsp.c` is the stdio message loop + handlers (diagnostics, hover, definition, completion, and each `let`'s inferred type offered as **both** a type-above CodeLens and an inline inlay hint — the client's `fc.typeDisplay` setting picks which renders). See **Editor integration** below. **Note:** `pass2_check` now takes the AST `Arena*` (the type nodes it synthesizes are AST-referenced and freed with that arena) — this fixed a latent leak and is what lets a long-running server reclaim each analysis.
-
-### Feature-addition discipline
-
-Lessons distilled from post-feature multi-agent reviews (most recently const generics, whose 10 confirmed findings all trace to these patterns). When adding a feature — especially a major one — extend the existing architecture; don't slip the feature in between the cracks with parallel machinery:
-
-- **Extend existing channels; never add a twin.** New data should ride existing structures (const args ride the `Type**` type-arg arrays) and new checks should extend existing walkers, tables, and resolution paths. If you're copying a recursive walker to add one parameter, merge them instead — twins drift (a duplicated instantiation-size walker silently lost the `TYPE_FUNC` descent its sibling had).
-- **A choke point only covers what flows through it.** Before relying on a single enforcement site (`mono_register`, `resolve_symbol`), enumerate what never reaches it and cover those cases explicitly (static_asserts in *non-generic* type bodies never reach mono — they needed up-front judgment in pass2).
-- **The concrete/degenerate case is part of the feature.** Machinery built for the generic path must also serve the fully-concrete case (`u8[4 * 2]`, `u8[cfg.word]` in a non-generic struct) — Completeness-over-partiality applies to implementation paths, not just language rules.
-- **Deferred errors need a guaranteed drain.** Any stash-now/report-later error channel must have a pipeline-end backstop that converts unclaimed errors into diagnostics. The worst compiler failure mode is exit 0 with broken output (mono once swallowed const-eval errors exactly this way).
-- **Semantic questions get semantic answers.** Don't approximate a name-dependent parse decision with token-lookahead heuristics — FC compiles whole-program, so global knowledge is cheap (the `<` disambiguation pre-pass). A heuristic that's right "in practice" is a review finding waiting to happen.
-- **A generic instance means exactly what the same code with concrete types means.** pass2 checks a generic body once, with type variables, so any check it defers for a type variable must be made again for each instance by the same rule the concrete code gets (`validate_generic_expr`, sharing the rule itself, e.g. `binary_operand_error`), and any conversion the concrete path inserts (`wrap_widen`) must be emitted for instances too (`widen_for_instance` in codegen). A deferral without both is a divergence: silent truncation, or C that one compiler rejects.
-- **New Type/Expr kind or changed repr ⇒ audit every consumer.** A new `ExprKind` goes into the visitor in `ast.c` first; the walkers built on it then see its children. Still sweep every other switch/case-analysis over that domain before calling the feature done (codegen's zero-initializer brace-depth logic missed the option repr and regressed a previously-passing program).
-
-## Key Language Design Decisions
-
-### Type System
-- No explicit type annotations on bindings — always inferred from RHS
-- Function parameter types are always required (they anchor inference)
-- No function overloading — names always resolve to exactly one function
-- Implicit widening only where lossless (e.g., `i32` → `i64`, NOT int → float) — applies in binary expressions, comparisons, function call arguments, slice indices, and for-range endpoints. An `i32` literal like `0` widens to `i64` when compared to `.len` or used as a slice bound.
-- Integer-to-float always requires an explicit cast
-- No `null` in the language — option types (`T?`) replace nullable values
-- **Type aliases are true aliases**: `str` and `cstr` are desugared to their underlying types (`u8[]` and `u8*`) internally with a `const char *alias` field on `Type` for display purposes. They are fully interchangeable with their underlying types — `str` and `u8[]` are the same type, `cstr` and `u8*` are the same type. The alias only affects `type_name()` output in diagnostics, never type equality or semantics. C interop details (e.g., `const char*` for C string functions) are handled only at extern call boundaries in codegen, not in the type system.
-
-### Compilation Model
-- **Two-pass**: First pass collects top-level names/types/layouts; second pass type-checks expressions
-- Top-level declarations can reference each other regardless of order
-- Local bindings resolve left-to-right within function bodies
-- **Name resolution order**: local scope → current module members → current module imports → parent members → parent imports → *(repeat for each ancestor)* → file-level imports → global declarations. At each module level, members are checked then imports before moving to the parent (interleaved resolution). A child's import can shadow a parent's member.
-- **File-level imports are per-file**: each file's imports are visible only to modules defined in that file, never to other files (even in the same namespace). They sit at the bottom of the import chain, after all module-level imports.
-- **Imports must come first**: imports must appear at the top of a file (after any `namespace` declaration) and at the top of a module body, before all other declarations. The compiler enforces this.
-
-### Generated C Patterns
-- **Slice length representation (`--len-repr <16|32|64>`, default 64):** `.len` is semantically `i64` on every profile (the type checker never sees the flag); the flag sizes only the *stored* width (`fc_len_t`) and the guard compares. Soundness invariant: every stored len is proven in `[0, FC_LEN_MAX]` at slice construction — compile-time lens statically in pass2 (string/slice literals, fixed-array sizes, const-generic instances), runtime lens via `fc_chk_len`/`fc_len_cap` aborts (raw parts, `alloca`, cstr→str, argv, interpolation), and over-capacity `alloc(T[n] { })` returns `none`. Reads emit `((int64_t)….len)`; bounds compares emit at `max(index static width, len width)` (`guard_bits` in codegen.c); `&s.len` is a compile error. When touching slice construction or guards, every new len store must pass through this invariant — and run `make test-gcc-len16`.
-- Signed integer arithmetic uses cast-through-unsigned to define overflow: `(int32_t) ((uint32_t) a + (uint32_t) b)`
-- Shift amounts are masked to avoid C UB: `a << (b & 31)` for 32-bit types
-- Bounds checks emit `abort()` before slice accesses
-- Option unwrap (`x!`) emits a tag check before value read
-- Struct/union equality emits generated comparison functions
-
-### C name namespaces (invariant)
-
-FC identifiers cannot contain `__`, which is what makes the emitted C name
-spaces separable. Three disjoint spaces, and new generated names must land in
-one of them deliberately:
-
-- **`fc__…` — user declarations.** Every declaration that reaches C file scope
-  is `fc__` + its FC path components joined by `__` (`fc__name`,
-  `fc__mod__name`, `fc__ns__mod__name`; `mangle_root` in pass1.c). Rooting the
-  *whole* path, not just file-scope decls, is what keeps a module or namespace
-  named `fc` from colliding with the top-level prefix. The path scheme is still
-  not injective — namespaces and module nesting flatten onto one separator — so
-  `check_c_name_collisions` (end of pass1) reports a second claimant of any
-  emitted name rather than letting two globals silently merge. Extern C names
-  are the one user-written spelling emitted verbatim, so the parser rejects any
-  beginning with `fc__` (`extern_c_name_in_reserved_root`) — that seals the
-  space against spellings the claim check cannot see, like post-mono instance
-  names (`fc__pair__3_i32`); names merely *containing* `fc__`, or with the
-  single-underscore `fc_` prefix, stay legal externs.
-- **`fc_<kind>_…` — compiler-derived names.** `fc_str`, `fc_main`, `fc_eq_*`,
-  `fc_fn_*`, `fc_tag_*` (a union's tag enum), `fc_tv_*` (its enumerators).
-  Unreachable from source because no user name starts with `fc__`. A derived
-  name must not be built by *suffixing* a user name (`<union>_tag` sat inside
-  `fc__<name>` space and collided with a user type named `shape_tag`), and two
-  kinds of derived name need two prefixes, not one shared prefix with different
-  tails. **Any join of two names must be shown injective**, not assumed: an FC
-  identifier may begin *or* end with `_`, so `<a>__<b>` aliases across the
-  boundary (`fc_tv_<U>__<V>` did, which is why enumerators are variant-first —
-  `V` has no `__` and `U` always starts with `fc__`, so the split is forced).
-  `mangled_tail` (pass1.c) splits non-overlapping from the left for the same
-  reason. A derived name built from a **type** (`fc_slice_…`, `fc_option_…`,
-  `fc_result_…`, `fc_fn_…`, all spelled by `emit_type_ident`) must distinguish
-  exactly what the emitted C type distinguishes, and the set that decides
-  whether to emit one must be keyed by that same relation — `type_ident_eq`,
-  its deliberate twin, never `type_eq*`. Coarser merges two C types onto one
-  typedef and the loser carries the wrong spelling (a `const T*` payload stored
-  into a `T*` field, rejected under `-Werror`); finer splits a name C never
-  distinguished and breaks assignment between the two. So `const` is *in* the
-  ident for a pointer or `any*` (`_cptr`) and *out* of it for a slice's element
-  (slice storage is spelled modulo const — `emit_slice_elem_ident`).
-- **`_l_<name>_<id>` / `_<temp><n>` — function-local names.** pass2 mints
-  `_l_<name>_<id>` for *every* binding form — `let`, parameter, for-loop
-  variable, pattern binding (`local_c_name` in pass2.c). That is what keeps
-  source names out of file scope (no list of borrowed libc symbols to
-  maintain), subsumes the C-keyword escape, and makes a source name that spells
-  a codegen temp (`_subj0`, `_sg0_0`, `_ctx`) harmless. Adding a new binding
-  form means routing it through `local_c_name` too.
-
-`c_safe_ident` now escapes only *member* names (struct fields, union variant
-payloads), which live in per-type namespaces.
-
-### No fixed buffers for names, paths, or types
-
-Whenever formatted text embeds an **FC identifier, a qualified name, a type
-spelling, a diagnostic descriptor, or a filesystem path**, size the allocation
-to the result. All of those are unbounded, `snprintf` reports a cut only in a
-return value that name-building code routinely drops, and — the reason this is
-an invariant rather than a style note — **a truncated name is not invalid, it is
-a different valid name**. It fails silently and plausibly:
-
-- a member path cut inside a member name lands on a *shorter member of the same
-  type* (`.u.abq` → `.u.ab`), which compiles clean under `-Wall -Werror` and
-  reads the wrong bytes;
-- two namespaces cut to a common prefix mangle onto one C symbol and merge;
-- a dotted type name cut short resolves to another symbol, or to none;
-- a digit string cut short parses fine and sets no `ERANGE`, so the literal is
-  simply the wrong number;
-- a descriptor that keys a memo makes two different instantiations compare
-  equal, silently skipping work.
-
-`common.h` provides the exact-size builders: `str_sprintf`/`str_vsprintf`
-(malloc'd, caller frees), `arena_sprintf` (arena lifetime), `str_appendf` (grow
-an accumulator, `NULL` starts it), and `intern_sprintf` (format then intern —
-the shape most name building wants). `path_cat` in codegen.c and
-`dup_type_name` in lsp.c are the local wrappers.
-
-A fixed buffer is fine only where the content is **bounded by construction** —
-a compiler-generated `_fc_back_%d`, an integer or `%g` float rendering, a
-mangling tag — and reads that way at a glance.
-
-`type_name()` has no arena, so it returns into rotating per-kind slots that own
-heap strings: the pointer stays valid until that slot comes round again. Hold
-more than a couple at once and you need a copy (`dup_type_name`).
-
-### Types and Literals
-- Default integer: `i32`; default float: `f64`
-- Suffixed literals: `42i8`, `42u64`, `3.14f32`
-- Platform-width types: `isize` (signed, `ptrdiff_t`), `usize` (unsigned, `size_t`); suffixes `42isize`, `42usize`
-- No implicit widening to/from `isize`/`usize` — explicit casts required
-- String types: `str` = `u8[]` (fat pointer), `cstr` = `u8*` (null-terminated, C interop)
-- String interpolation: `%spec{expr}` where `expr` is any arbitrary FC expression — e.g., `"sum=%d{x + y}"`, `"len=%d{(i32) buf.len}"`. Format specifiers: `%d`/`%x` (int), `%f` (float, width/precision optional), `%s` (str/cstr). Stack-allocated via `alloca`; use `alloc(s)!` to promote to heap.
-- `any*` = opaque pointer (`void*`), cannot be dereferenced
-
-### Control Flow
-- `if`, `match`, `loop` are expressions
-- `return`, `break`, `continue` are void-typed expressions (enable early-return in expression positions). `return` is the idiomatic way to produce void in an else branch: `if x > 3 then f() else return`
-- `loop` produces a value via `break value`; `for` is always void
-- `for` has three forms: `for i in 0..n` (range, exclusive end), `for x in slice` (element), `for i, x in slice` (index + element). Loop variable type is inferred from endpoints/slice via widening.
-- `match` is exhaustive; wildcard `_` satisfies exhaustiveness
-- `defer <expr>` schedules an expression to run at block scope exit (LIFO order). Block-scoped: runs when the enclosing function body, loop/for body, if/else block, match arm, or nested block exits. `return` unwinds all defers to function scope; `break`/`continue` unwind to loop boundary. Each loop iteration gets a fresh defer queue. Return value of deferred expression is discarded.
-
-### Union Syntax
-- Variant declarations require `|` before each variant: `| circle(i32)`, not `circle(i32)`
-- Variant **construction** requires the union type name: `shape.circle(5)`, `shape.empty`
-- Variant **pattern matching** uses bare names: `| circle(r) -> ...`, `| empty -> ...`
-- Each variant carries zero or one payload (not multiple — use a struct for compound data)
-```fc
-union shape =
-    | circle(i32)       // one payload
-    | rect(point)         // struct payload for compound data
-    | empty               // no payload
-
-let s = shape.circle(5)  // construction: qualified
-match s with
-| circle(r) -> r * r     // pattern: bare name
-| rect(p) -> p.x + p.y
-| empty -> 0
-```
-
-### Function Syntax
-- Functions/lambdas do **not** have return type annotations — the return type is always inferred
-- `->` introduces the function **body**, never a return type — this applies to all functions including void-returning ones
-- Correct: `let f = (x: i32) -> x * 2` or with a block body: `let f = (x: i32) ->\n    x * 2`
-- Correct void function: `let greet = (name: str) ->\n    print(name)`
-- **Wrong**: `let f = (x: i32) -> i32 = x * 2` — this is not valid FC syntax
-- **Wrong**: `let f = (x: i32) -> void` — `void` is not a return type annotation; what follows `->` is the body
-- The `->` token introduces the function body (or separates param types in function type syntax like `(i32) -> i32`)
-
-### Bindings
-- `let`: immutable binding, addressable read-only (`&x` → `const T*`), capturable in closures (by copy)
-- `let mut`: mutable binding, addressable (`&x` → `T*`), not capturable in closures
-- Both `let` and `let mut` allow field/element mutation — `let` controls reassignability, not content mutation
-- Shadowing is allowed (any combination of `let`/`let mut`)
-- Self-assignment (`x = x`) is a compile error — it's always a no-op
-
-### Operators
-- No compound assignment (`+=`, `-=`, etc.) — only plain `=`
-- Bitwise operators bind tighter than comparison (fixes C's `x & mask == 0` wart)
-- `!` is postfix option-unwrap AND prefix boolean-not (context-dependent)
-- `.` is field access and **auto-derefs one pointer level** — `ptr.field` == `(*ptr).field` (a `.`-on-pointer `EXPR_FIELD` is rewritten to `EXPR_DEREF_FIELD` in pass2). For a `T**`, deref the extra level explicitly: `(*pp).f` / `(**pp).f`. (Adopted as final syntax 2026-07-02; rationale in `spec/auto-deref-decision.md`.)
-- `->` means: function type arrow, match arm separator, OR lambda body introducer (context-dependent). It is **not** pointer field access — `ptr->field` is a compile error pointing at `.`.
-
-### Match Arm Indentation
-Match arms (`|` pipes) align with the `match` keyword, **not** indented under it. The lexer's layout pass treats `|` as a same-level delimiter:
-```fc
-match x with
-| some(v) -> use(v)
-| none -> fallback()
-```
-
-### Const Generics
-- Generic parameters may be compile-time **integer values** as well as types: same `'x` sigil, kind inferred from occurrence position (`'a` in a type slot = type param; `'n` in a size/value slot = const param). One var in both kinds of position is a compile error.
-- A struct whose body declares `limbs: u32['n / 32]` (struct bodies are indented blocks, as always) instantiates as `wide<128>`, `wide<256>` — distinct types, one definition. Functions infer const params from argument types (`(a: wide<'n>)`) or take them explicitly via the `<'n>` prefix.
-- Const args: int literals, `'n`, named module consts (bare or dotted), bare `+ - * / %` arithmetic; shifts/comparisons need parens (`wide<('n >> 2)>`). i64 domain, two's-complement wrap; div-by-zero and non-positive array sizes are per-instance errors with instantiation-chain diagnostics (fully concrete forms — incl. in non-generic types, `u8[4 * 2]`, `u8[cfg.word]` — fold and are judged up front in pass2). Expression-position `name<...>` is claimed as an instantiation only when `name` is a generic declaration (semantic gate via a pre-parse token scan, `parser_collect_generic_names`); otherwise `<` keeps its comparison reading.
-- In expression position `'n` behaves as an i32 literal of the bound value (widening applies; fit checked per instance).
-- **No value recursion**: `f<'n + 1>` inside `f` (directly or mutually) is an infinite instance family and is rejected (`MONO_MAX_PER_TEMPLATE` cap) — FC prunes no branches at compile time. Const params parameterize layout, not compile-time iteration.
-- **`static_assert(cond, "msg")`**: compile-time instantiation predicate — a line in struct/union bodies, a statement in function bodies. Checked per instance in `mono_register` (the single choke point); concrete conditions judged immediately in pass2. Condition restricted to the const-expr grammar (NO calls — the comptime fence: *compile-time evaluation may decide whether an instantiation exists, never what it contains*); message must be a string literal; placement anywhere among type-body members and any straight-line statement position in functions (contract-first is convention, not law — FC has no style errors); rejected nested in if/match/loop/for/defer/lambda (it is unconditional, no branch pruning). Emits no code.
-- Representation: `TYPE_CONST_INT`/`TYPE_CONST_EXPR` ride the existing `Type**` type-arg arrays; `fixed_array.size_ref` carries symbolic sizes, folded by `type_substitute` via the context-free `const_type_eval` (types.c). Param kinds live in `param_kinds` arrays (`GenParamKind`) parallel to `type_params` on Symbol/Decl/ImportRef, inferred by a pass1 fixpoint + pass2 lazy body evidence. Mangling: `__k<value>` (`wide<256>` → `wide__6___k256`).
-
-### Naming Conventions (FC code)
-- All user-defined names use **lowercase snake_case**: `let my_func`, `struct my_point`, `union my_shape`, `module my_module`
-- This applies to struct names, union names, variant names, function names, module names, variable names
-- Type keywords are lowercase: `i32`, `f64`, `bool`, `str`
-- Test `.fc` files must follow these conventions
-
-## Testing
-
-Tests live in `tests/cases/`, organized into subdirectories by functional category (expressions, bindings, functions, control_flow, structs, unions, pattern_matching, exhaustiveness, equality, casts_widening, options, pointers, slices, strings, memory, modules, closures, generics, type_properties, native_types, extern, const, escape, io). Standard library tests live in `tests/cases/stdlib/` as multi-file tests with `deps` files pointing to `stdlib/*.fc`. Browse the directories to see what's covered.
-
-Each **single-file test** is an `.fc` file optionally paired with:
-- `.expected_exit` — expected exit code (0–255). If omitted, the expected exit code is 0.
-- `.error` — substring expected in compiler stderr; the test must fail to compile.
-
-Most tests use `assert` (which calls `abort()`, exit code 134) for correctness checks and omit `.expected_exit`, so a passing test simply exits 0.
-
-Each **multi-file test** is a subdirectory containing:
-- Multiple `.fc` files (e.g. `main.fc`, `lib.fc`) — all compiled together
-- `expected_exit` or `error` (no dot prefix) — the expected result
-- `deps` (optional) — one path per line (relative to project root) for external dependencies like `stdlib/io.fc`
-- `flags` (optional) — one conditional-compilation name per line, each passed as `--flag <name>`
-- `fcc_args` (optional) — literal extra `fcc` args, one per line (`#` comments skipped) — e.g. `--backtraces`
-- `expected_stderr_contains` (optional) — substring lines (fixed-string) that must each appear in the run's stderr; used by `--backtraces` tests where exact frame layout varies but key tokens are stable
-- `skip_windows` (optional) — a marker file (contents ignored) that opts the test out on Windows (MSYS2/UCRT). Used by the `--backtraces` tests: FC's backtrace frames rely on `execinfo` `backtrace()`, which is glibc/macOS-only, so the emitted `fc_dump_backtrace` is a no-op stub on Windows and prints no frames. Skipped tests are reported as `SKIP` and counted separately from pass/fail.
-
-Run with `make check` (or `make test-all`). The test runner compiles FC→C with `./fcc`, then C→binary with both `gcc` and `clang` using `-std=c11 -Wall -Werror`. Test names display as `modules/cross_ns_import`, etc. Every test file (including `.error` tests) must have a valid `let main` function — error tests put the bad code inside `main`'s body, not at top level. The generated C is compiled with `-Werror`, so all variables must be used.
-
-### Multi-file tests
-
-Multi-file tests each get their own subdirectory within a category dir, making it clear which files belong together. For example:
-```
-modules/cross_ns_import/
-    main.fc          # file with main, imports from lib
-    lib.fc           # file defining the namespace/module
-    expected_exit    # expected exit code
-```
-The test runner discovers all `.fc` files in the subdirectory and compiles them together. If a `deps` file exists, the listed files are also included in compilation. Use `deps` instead of copying stdlib files into test directories — e.g., a `deps` file containing `stdlib/io.fc` for tests that use `std::io`.
-
-### Test coverage philosophy
-
-Every new feature, bug fix, or spec change must include tests covering the happy path, edge cases, error cases, and feature interactions. Aim for thorough coverage — not just one type or one syntax form, but all meaningful combinations. Exit codes are mod 256 — keep expected values under 256.
-
-Corner-case classes that reviews have caught untested (write these alongside the happy paths, not after):
-- **The negative space of a new claim.** When new grammar or resolution takes territory that previously meant something else (`name<...>` vs comparison), test that the old readings still work in programs adjacent to the feature.
-- **Error conditions through indirect paths.** Trigger each new error transitively (e.g. a const-eval failure reached through mono's transitive discovery), not only at the direct declaration/call site — indirect paths are where errors get swallowed.
-- **Interactions with every existing type shape.** Exercise new type/codegen machinery against options, unions, nested structs, and fixed arrays, not just the shape the feature was built for.
-- **The non-generic twin of a generic feature**, and vice versa — whichever path you developed on, the other one is the untested one.
-
-## Workflow
-
-- During development, use `make test-gcc FILTER=pattern` for fast iteration on relevant tests
-- Run `make test-all` to confirm all tests pass (both gcc and clang) before presenting a final summary of changes
-- Skip tests for changes that only touch `demos/` or `spec/` (except `spec/examples.fc`) — demo apps and spec documents don't affect compiler tests
-
-## Editor integration
-
-`fcc --lsp` runs an in-process LSP server (JSON-RPC over stdio) — no separate process or runtime. The VSCode extension lives in `editors/vscode/` (plain JS, launches `fcc --lsp` via `vscode-languageclient`); its TextMate grammar is mirrored from `spec/fc.vim`.
-
-- **Pipeline reuse:** `analyze()` (`src/analyze.c`) re-runs lexer→parser→pass1→pass2 per edit (full-document sync) and keeps the typed AST + symbols alive for queries. Features: live diagnostics (severity always Error), hover (`type_name` of the node, plus a doc comment scanned from source — the contiguous `//` run directly above the definition and the `//` trailing a struct/union field; see `extract_doc_comment` in `src/lsp.c`. A token that names a **type or module** — a reference, a struct-literal type name, the name on its own declaration line, or a **written type annotation** (a param's `: T`, a struct field's or union payload's type, a slice literal's element type, a cast/alloc/sizeof/default/enum_of target — the AST records no token loc for these, so `consider_type_annotation` recovers the base-name token textually from the annotation's start and resolves leftover `TYPE_STUB`s through the global symtab) — renders a declaration-form header instead of `name: type` (`enum dir of u8`, `struct point`, `module sfx`, `error file_io`), and when a **reference** names half of a companion pair the hover merges both docs as labeled sections — the type's, then a `module <name>` fence with the module's — separated by a U+2500 text rule (markdown `---` renders in the theme's `editorHoverWidget.border` color, invisible in borderless-hover themes). Declaration-site names deliberately don't merge: a module only becomes a companion where a reference resolves it as one. `FindCtx` carries this via `type_ref_sym`/`companion`/`decl_site`, and `locate` recovers the companion for references that didn't come through pass2's ident path (`companion_of_type_sym`); **built-in intrinsics** — `alloc`/`alloca`/`free`/`some`/`none`/`default`/`sizeof`/`alignof`/`assert`/`atomic_*` and the `stdin`/`stdout`/`stderr` globals — have no decl to read, so a static `BUILTIN_DOCS` table supplies a curated signature + prose, plus the occurrence's concrete result type; the keyword node is matched in `find_in_expr` via `consider_builtin`, which reads the keyword spelling from source so `none` and `default` (both `EXPR_DEFAULT`) get distinct docs), go-to-definition (top-level/module symbols via `resolved_sym->decl`, module members `mod.member` via `EXPR_FIELD.resolved_member` set in pass2, struct-literal type names, union variant constructors `u.variant` → the union decl, **block-locals — params/`let`s/`for`-vars/match bindings — via `EXPR_IDENT.resolved_local_loc` stamped in pass2 from each binding's `def_loc`, and plain struct fields `s.field` → the field's `StructField.loc`**), **import statements** (every identifier written in an import — the imported name, its `as` alias, and the module in the `from` clause — hovers and jumps like a use-site reference to the same symbol would, in all forms: `from mod`, `from ns::`, `from ns::mod`, `import a.b`, `import *`, comma lists, and imports in a module body. The parser records the three token locs on `Decl.import` and pass1 stamps `import.resolved_sym`/`resolved_companion`/`resolved_module` where it already resolves the statement — the single-resolution invariant, so `consider_import` in `src/lsp.c` is a pure position match. Safe to hold those `Symbol*`s because import processing is pass1 phase 3, after the last `symtab_add`. An `as` alias reports the **source** name (the thing it aliases) over the alias token's span; an unresolved import and a namespace path segment — which names no declaration — deliberately offer nothing), completion (keywords + `.`/`::`/`->` members + **lexically-scoped bare names**: `complete_scope` in `src/lsp.c` walks the decl tree by line span to the cursor and offers each enclosing module's members + imports and the enclosing function's params/locals, then file imports and top-level symbols, all deduped through a `NameSet`; the compiler-internal mangled type twins like `vgagraph__huffnode` — registered by pass1 so type stubs resolve — are filtered via `sym_is_mangled_type_twin`. `complete_members` covers every member-access form, mirroring pass2's EXPR_FIELD/EXPR_DEREF_FIELD resolution: module members; struct fields; union variants; **synthetic/built-in members** — a slice's `len`/`ptr`, an option's `is_some`/`is_none`, and a numeric *type name*'s `min`/`max`/`bits` (+ float `nan`/`inf`/`neg_inf`/`epsilon`) via `complete_type_properties`; and a `.` on a pointer auto-derefs one level to the pointee struct's fields (the retired `->` did this explicitly). Member completion *replaces* the bare-name list — it returns exactly the object's members. **An import statement is its own completion world** (`complete_import`, checked ahead of the member branch): what may be written left of `from` is decided by the `from` clause — a module's public members, or, for a bare `from ns::`, that namespace's top-level module/struct/union/enum — and right of `from` only modules may continue a route, so the head offers the modules visible where pass1 looks one up (the enclosing namespace's, plus those a whole-module import already brought into the same scope) alongside the namespaces a `::` path may start with, a `ns::` offers that namespace's modules and its next path segment, and a route `.` offers the preceding segment's nested modules. Names already written in a comma list drop out, and the `as`-alias position and a wildcard offer nothing. It reads the statement from the **source line**, not the AST — a half-typed import is exactly what the parser recovers from, so its Decl is a `DECL_ERROR` or is missing the part being completed — and it always answers with its own candidates or none, never the lexical-scope list. Known limit, accepted: with no `from` written yet there is nothing to resolve names against), and each `let`'s inferred type shown on the line above (CodeLens) or inline after the name (inlay hint, `let x: T`) — the server emits both from one shared AST walk (`lens_emit` with an `inlay` flag), and the VSCode `fc.typeDisplay` setting (`inline` (default)/`codelens`/`off`) selects which the editor renders via client-side provider gating. A **lambda** binding renders return-only (`: -> ret` inline / `:-> ret` as a lens — inline keeps the space-after-colon of the plain `: T` hints) because its parameter types are already written at the definition site; non-lambda bindings — including a function-reference alias like `let f = g`, whose params are not visible there — show the full type. Hover always shows the full type. Field-name hover/definition is now positionally exact for any object shape (`a.b`, `a.b.c`, `s . field`) via `EXPR_FIELD.name_loc` recorded by the parser. The `FindCtx` carries a `def_loc` (drives go-to-def when there's no Symbol) and a separate `doc_loc`/`doc_is_field` (drives the hover doc comment) so a variant constructor can keep go-to-def on the union while its doc reads the variant's own line.
-- **Project unit via `lsp.rsp`:** the server walks up from the open file's directory looking for an `lsp.rsp` response file (the by-convention name; behaves exactly as `fcc @lsp.rsp` would). When found it is **authoritative**: the compilation unit is precisely its listed inputs (globbed, file-relative; the open buffer overrides its on-disk twin via the same canonical-path/content dedup) plus its `--flag`s and `--len-repr` (so editor capacity diagnostics match the CLI; reset to 64 per unit) — with **no sibling glob and no blanket stdlib feed**, so the editor resolves names identically to the CLI and a project pins its own stdlib subset by listing the files it uses. Discovery + expansion run through `args.c`; the server synthesizes a single `@<abspath>` token and reuses `args_expand`/`args_parse`. A broken `lsp.rsp` (e.g. a missing nested `@file`) does **not** silently fall through: the heuristic below runs but one file-level "lsp.rsp ignored: …" diagnostic is attached to the open file so the fallback is visible. `analyze()` takes caller-supplied conditional-compilation flags (host auto-detect for the heuristic path, or the `lsp.rsp` `--flag`s) rather than hardcoding them.
-- **One analysis per compilation unit (shared across its docs):** the server keys each open document to a **unit** — the discovered `lsp.rsp` path, else the document's directory (`unit_key` in `src/lsp.c`) — and holds one `UnitEntry` (`result`/`last_good`) per unit, shared by every open doc with that key. A single analysis of a unit already merges every open doc's *live* buffer, so `flush_dirty` re-analyzes each **dirty unit once** (any open doc in it as the fresh primary) rather than once per open tab: N tabs of one project cost **one** analysis, not N — flat instead of linear (measured on wolf-fc: ~44 ms regardless of tab count vs. ~30 ms × tabs before; 8 tabs 236 ms → 39 ms). Only units containing a changed doc re-run; untouched units keep their result — where **containing is membership, not key equality**: each `UnitEntry` records the canonical path of every source its last analysis merged (`UnitEntry.files`), and a dirty doc re-runs every unit that lists it as well as the unit it keys. An `lsp.rsp` reaches across directories, so a shared file is routinely a member of units it does not key (`demos/shared/sdl2.fc` keys its own directory; both demos' `lsp.rsp` list it) — and a unit left un-re-run keeps serving an AST of the file's previous revision while queries read its *current* text, so a hover resolves a stale declaration line and a moved doc comment silently vanishes until the server restarts. For the same reason `store_find_by_path` matches on canonical path (docs cache theirs in `LspDoc.real`): a unit's file spelled `../shared/sdl2.fc` must be recognized as the open document, or its live buffer loses to the copy on disk and its diagnostics land on a second, `..`-spelled URI. `query_result(S, doc)` resolves a doc's unit and returns its typed result (or retained `last_good`). Units with no open docs are pruned (`unit_prune`); closing a file re-analyzes the rest (the closed file may still be a unit member on disk) and republishes, while closing the last document drops all units and clears everything.
-- **Project-wide diagnostics:** diagnostics are published for **every file in the compilation unit — open buffer or not — not just the open document** (`publish_project_diagnostics` in `src/lsp.c`). Each unit analysis already computes diagnostics for all its files keyed by filename; the server aggregates them across all units (deduped), then emits one `publishDiagnostics` per file's URI (synthesizing a `file://` URI and reading the file's disk text for range mapping when it isn't open). So an edit that breaks (or fixes) a file the user hasn't opened still surfaces (or clears) there, and errors cascade to all dependent files. A file that goes clean, drops out of the unit, or is closed is cleared with an explicit empty publish, diffed against the server's "last published non-empty" URI set (`pub_uris`). **stdlib feed files are never surfaced** (presumed clean, not the user's code, often read-only) unless the user actually opened one.
-- **stdlib feed (no `lsp.rsp`):** the installed stdlib (`FCC_STDLIB_DIR`, else the baked-in `$(datadir)/fcc/stdlib`, else `./stdlib`) is merged into every analysis. When the open document (or a sibling) *is* a feed file — most commonly because Go To Definition opened a stdlib module — the matching feed entry is dropped so the file isn't analyzed twice (which would trip a spurious pass1 redefinition diagnostic and waste an analysis; before pass2 was ungated it also silently blanked all overlays). The dedup (in `analyze_unit`) keys on **canonical absolute path** (`realpath`, via `canon_path`) **OR byte-identical content**: path catches the same on-disk file however its path was spelled (incl. an open buffer with unsaved edits — the live buffer must win); content catches a *separate identical copy at a different path* (e.g. the repo's `stdlib/data.fc` vs the installed `/usr/local/share/.../data.fc`, whose realpaths differ). The content check is length-gated, so a full `memcmp` runs only for a genuine same-length candidate. Two *different* files that merely share a basename — a project's own `data.fc` vs the stdlib's — match neither key and are correctly kept. (`src/lsp.c` defines `_DEFAULT_SOURCE` to expose `realpath` under `-std=c11`.) **Safety net:** pass2 now runs past recoverable parse/pass1 errors, so it is gated only by a **hard lexer abort** (a `diag_fatal` longjmp on an unrecoverable layout error). In that case, if no diagnostic lands on the open file, `analyze()` surfaces one file-level "analysis incomplete" diagnostic on the open document naming the offending include — so the editor never goes silently blank. (An ordinary recoverable error in a merged file no longer triggers this; pass2 keeps the open file's overlays live.)
-- **Library mode (no entry point):** `pass1_collect` takes a `require_main` flag — `true` for the CLI, `false` for `analyze()`. The server analyzes library code (a stdlib module, a file of helpers) that has no `let main`, so it suppresses the "no entry point" error and the entry-point-file restriction on top-level `let`. The `main` *signature* check (pass2) is unaffected: it only fires when a `main` actually exists. The CLI still requires `main`.
-- **Robustness:** the **lexer's** `_Noreturn diag_fatal` sites (layout errors) are caught via `setjmp`/`longjmp` (`diag_set_abort_jmp`) so a mid-typing fatal aborts one analysis, not the server. (The parser no longer longjmps — it recovers in-band, so syntax errors keep the analysis alive rather than aborting it.) The wire test in `tests/lsp/` asserts this survival.
-- **Stale-overlay retention:** type-aware queries (hover, definition, completion, CodeLens) read `query_result(doc)` (`src/lsp.c`), which returns the fresh analysis when it actually type-checked (`AnalysisResult.typed`, set from `pass2_ran`) and otherwise the last one that did, retained on `LspDoc.last_good`. With **error-recovery parsing and ungated pass2** now in place (see `spec/hist/archived-todos.md`), the *fresh* analysis is the primary path: a mid-typing state like `let r2 = ` or a trailing `.` is recovered into error nodes and pass2 still types the rest of the file, so `query_result` returns the fresh result and overlays stay live and correctly positioned on the untouched lines. `last_good` now matters only for the one remaining *unrecoverable* state — a **hard lexer abort** (`program == NULL`/`aborted`, e.g. a stray tab or unterminated string) — where every node's type is `NULL`; there the stale result keeps overlays from flickering off. **Diagnostics deliberately bypass this** (`publish_diagnostics` always uses the fresh `result`), so the squiggle stays live even while overlays are served stale. `result` and `last_good` may alias (when the freshest analysis is the good one); `analyze_doc` retires the previous result with `!=`-guarded frees and `doc_free_results` frees both, so nothing is freed twice (verified clean under ASan across a clean→broken→clean edit cycle). When stale serving does occur, the retained AST carries positions from an earlier revision, so a line you haven't touched still resolves while the line under edit may miss (never a crash).
-- **Per-analysis leak closed (was ~13KB/keystroke):** the long-running server now reclaims everything each analysis. pass1's *referenced* Type nodes and generic `type_params` arrays are arena-allocated (`intern->arena`, which is the AST arena freed by `analysis_free`) — see `arena_dup_names` and the `arena_alloc(intern->arena, …)` sites in `src/pass1.c`. pass2's self-recursion placeholder is arena-backed, and the per-lambda `LambdaCtx.returns`/`entries` scratch arrays are freed (captures are arena-copied into the AST). Verified clean: a 40-edit ASan session importing `std::` reports zero leaks. (CLI behavior is byte-for-byte unchanged — it just frees the arena at exit instead of relying on process teardown.)
-- **Open items / known limits:** the single source of truth is `spec/TODO.md` → "Editor / LSP server" (resolved items move to `spec/hist/archived-todos.md`). Don't re-enumerate them here or in the VSCode README.
-
-## Spec Reference
-
-The `spec/` folder contains:
-- **`fc-spec.html`** — Full language specification. Self-contained HTML with embedded markdown rendered by `marked.js`. Open in a browser to read.
-- **`examples.fc`** — Runnable quick reference demonstrating all core syntax and semantics. Read this first for a fast overview of the language.
-- **`TODO.md`** — Outstanding spec/compiler tasks.
-- **`niche.md`** — The retro-platforms positioning and the emitted-C dialect/runtime audit.
-- **`freestanding.md`** — Planning doc for the freestanding profile (Lane 1 gates: `fc_trap`, allocator hook, float/atomics gates, freestanding interpolation formatter, stdlib layering, `--profile` bundles). Source of truth for that work.
-- **`hist/`** — Historical design artifacts and analysis documents.
-
-**`fc-spec.html` and the compiler are the only authorities on the language.** A
-question about what FC permits is answered by the spec prose plus what `src/`
-implements — nothing else. There is deliberately **no BNF grammar file**:
-`spec/grammar.bnf` was deleted because it had drifted into describing forms the
-language does not have, and a second normative-looking document that nothing
-validates is worse than none. Don't recreate it, and don't treat a stale
-reference to it in `spec/hist/` or a design doc as authority — those files
-record what was believed at the time. If a syntax question isn't settled by the
-spec, settle it with the user and write the answer into the spec.
-
-The drift was not hypothetical: `grammar.bnf` sanctioned `import a.b.c` and
-`import ns::a.b`, neither of which FC has ever accepted, and its
-`["as" IDENT]` on a dotted import prompted a feature that had to be reverted —
-the spec's own import section requires a `from` clause on every import.
-
-Spec sections are organized as:
-- Part 1 — Foundations (types, literals, operators, let/mut, inference)
-- Part 2 — Control flow (if, match, loop, for)
-- Part 3 — Functions (lambdas, closures, capture)
-- Part 4 — Type system (structs, unions, options, pointers, slices, function types)
-- Part 5 — Generics (type variables, monomorphization)
-- Part 6 — Program structure (modules, namespaces, imports, conditional compilation)
-- Part 7 — Memory management (alloc, free, stack/heap)
-- Part 8 — C interop (extern, any*, variadics)
-- Part 9 — Standard library (std::io, std::sys, std::math, std::wideint, std::text, std::net, std::data, std::random)
+- No type annotations on `let`; the type comes from the right-hand side.
+  Function parameters always have types.
+- Functions have no return type annotation. `->` introduces the body:
+  `let f = (x: i32) -> x * 2`. `let f = (x: i32) -> i32 = ...` and
+  `-> void` are both wrong.
+- Match arms line up with `match`, not indented under it:
+  ```fc
+  match x with
+  | some(v) -> use(v)
+  | none -> fallback()
+  ```
+- Union variants are declared with a leading `|`, constructed qualified
+  (`shape.circle(5)`), and matched bare (`| circle(r) -> ...`). Each variant
+  has zero or one payload.
+- `.` on a pointer dereferences one level (`p.field`). `->` is never field
+  access.
+- `for` needs `do`: `for i in 0..n do ...`, `for x in xs do ...`. There is
+  no `while`; use `loop` with `break`.
+- No compound assignment (`+=`), no `null` (use options), comments are `//`
+  and `/* */` only, and indentation is spaces only.
+- All names are lowercase `snake_case`, types and modules included.
