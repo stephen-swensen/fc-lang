@@ -1,0 +1,13 @@
+// A slice index in a match arm's `when` guard is a guarded operation, so an
+// `unguarded` around the match has something to suppress.
+let f = (xs: i32[], o: i32?) ->
+    unguarded
+        match o with
+        | some(i) when xs[i] > 0 -> 1
+        | _ -> 0
+
+let main = (args: str[]) ->
+    let xs = i32[2] { 1, 2 }
+    assert(f(xs, some(1)) == 1)
+    assert(f(xs, none(i32)) == 0)
+    0

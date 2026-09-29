@@ -1,0 +1,11 @@
+module a =
+    let f = (x: i32) ->
+        let { p, q } = b.pair(x)
+        p + q
+
+module b =
+    let pair = (x: i32) -> { x, x }
+    let h = (x: i32) -> a.f(x)
+
+let main = (args: str[]) ->
+    0

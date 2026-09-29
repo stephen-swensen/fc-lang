@@ -388,9 +388,23 @@ static bool has_pending_defers(void) {
     return false;
 }
 
+static void collect_hoisted_bindings(Expr *e);
 static void collect_hoisted_pat(Pattern *pat, Type *type, bool is_mut);
 
-/* Recursively collect hoist candidates (every local let) and addressed names */
+/* Give e a backing slot declared at function entry, named once so a body that
+ * is emitted more than once reuses the name. */
+static void add_fn_backing(Expr *e, const char **name) {
+    if (!*name) *name = arena_sprintf(g_arena, "_fc_back_%d", g_fn_backing_counter++);
+    DA_APPEND(g_fn_backings, g_fn_backing_count, g_fn_backing_cap, e);
+}
+
+static void collect_hoisted_child(Expr *child, void *ctx) {
+    (void)ctx;
+    collect_hoisted_bindings(child);
+}
+
+/* Recursively collect hoist candidates (every local let), addressed names, and
+ * the stack temporaries that get a function-entry backing slot. */
 static void collect_hoisted_bindings(Expr *e) {
     if (!e) return;
     switch (e->kind) {
@@ -401,42 +415,12 @@ static void collect_hoisted_bindings(Expr *e) {
                             e->let_expr.let_is_mut };
             DA_APPEND(g_hoist_cand, g_hoist_cand_count, g_hoist_cand_cap, c);
         }
-        break;
+        return;
     case EXPR_LET_DESTRUCT:
         collect_hoisted_bindings(e->let_destruct.init);
-        /* Destructured bindings become hoist candidates too */
         collect_hoisted_pat(e->let_destruct.pattern, e->let_destruct.init_type,
                             e->let_destruct.is_mut);
-        break;
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            collect_hoisted_bindings(e->block.stmts[i]);
-        break;
-    case EXPR_IF:
-        collect_hoisted_bindings(e->if_expr.cond);
-        collect_hoisted_bindings(e->if_expr.then_body);
-        collect_hoisted_bindings(e->if_expr.else_body);
-        break;
-    case EXPR_LOOP:
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            collect_hoisted_bindings(e->loop_expr.body[i]);
-        break;
-    case EXPR_FOR:
-        collect_hoisted_bindings(e->for_expr.iter);
-        if (e->for_expr.range_end) collect_hoisted_bindings(e->for_expr.range_end);
-        for (int i = 0; i < e->for_expr.body_count; i++)
-            collect_hoisted_bindings(e->for_expr.body[i]);
-        break;
-    case EXPR_MATCH:
-        collect_hoisted_bindings(e->match_expr.subject);
-        for (int i = 0; i < e->match_expr.arm_count; i++)
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                collect_hoisted_bindings(e->match_expr.arms[i].body[j]);
-        break;
-    case EXPR_BINARY:
-        collect_hoisted_bindings(e->binary.left);
-        collect_hoisted_bindings(e->binary.right);
-        break;
+        return;
     case EXPR_UNARY_PREFIX:
         /* &x on a local binding forces x to be hoisted to function scope so
          * the resulting pointer outlives the block x was declared in. */
@@ -447,184 +431,61 @@ static void collect_hoisted_bindings(Expr *e) {
             DA_APPEND(g_addressed, g_addressed_count, g_addressed_cap,
                       e->unary_prefix.operand->ident.codegen_name);
         }
-        collect_hoisted_bindings(e->unary_prefix.operand);
-        break;
-    case EXPR_UNARY_POSTFIX:
-        collect_hoisted_bindings(e->unary_postfix.operand);
-        break;
-    case EXPR_CALL:
-        collect_hoisted_bindings(e->call.func);
-        for (int i = 0; i < e->call.arg_count; i++)
-            collect_hoisted_bindings(e->call.args[i]);
-        break;
-    case EXPR_INDEX:
-        collect_hoisted_bindings(e->index.object);
-        collect_hoisted_bindings(e->index.index);
-        break;
-    case EXPR_FIELD: case EXPR_DEREF_FIELD:
-        collect_hoisted_bindings(e->field.object);
-        break;
-    case EXPR_ASSIGN:
-        collect_hoisted_bindings(e->assign.target);
-        collect_hoisted_bindings(e->assign.value);
-        break;
-    case EXPR_RETURN:
-        if (e->return_expr.value) collect_hoisted_bindings(e->return_expr.value);
-        break;
-    case EXPR_BREAK:
-        if (e->break_expr.value) collect_hoisted_bindings(e->break_expr.value);
-        break;
-    case EXPR_DEFER:
-        collect_hoisted_bindings(e->defer_expr.value);
-        break;
-    case EXPR_IGNORE:
-        collect_hoisted_bindings(e->ignore_expr.value);
         break;
     case EXPR_CAST:
-        /* (cstr[N]) bounded str→cstr cast: hoist a fixed uint8[N] backing to
-         * function entry so the truncating copy reuses one slot across loop
-         * iterations (and so the produced cstr keeps function-frame lifetime). */
-        if (e->cast.buffer_size > 0) {
-            if (!e->cast.codegen_backing_name) {
-                char buf[40];
-                int n = snprintf(buf, sizeof buf, "_fc_back_%d", g_fn_backing_counter++);
-                e->cast.codegen_backing_name = arena_strdup(g_arena, buf, n);
-            }
-            DA_APPEND(g_fn_backings, g_fn_backing_count, g_fn_backing_cap, e);
-        }
-        collect_hoisted_bindings(e->cast.operand);
-        break;
-    case EXPR_BITCAST:
-        collect_hoisted_bindings(e->bitcast_expr.operand);
-        break;
-    case EXPR_ENUM_OF:
-        collect_hoisted_bindings(e->enum_of_expr.operand);
-        break;
-    case EXPR_SOME:
-        collect_hoisted_bindings(e->some_expr.value);
-        break;
-    case EXPR_OK:
-        collect_hoisted_bindings(e->ok_expr.value);
-        break;
-    case EXPR_ERR:
-        collect_hoisted_bindings(e->err_expr.code);
-        break;
-    case EXPR_ERROR_NAME:
-        collect_hoisted_bindings(e->error_name_expr.code);
-        break;
-    case EXPR_GUARD:
-        collect_hoisted_bindings(e->guard.body);
-        break;
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            collect_hoisted_bindings(e->struct_lit.fields[i].value);
+        /* (cstr[N]) bounded str->cstr cast: the truncating copy lands in a fixed
+         * uint8[N] slot, reused across loop iterations, and the produced cstr
+         * keeps function-frame lifetime. */
+        if (e->cast.buffer_size > 0)
+            add_fn_backing(e, &e->cast.codegen_backing_name);
         break;
     case EXPR_ARRAY_LIT:
-        /* Hoist a fixed backing array (size N is a compile-time literal, enforced
-         * in pass2) to function entry so the slot is reused per loop iteration.
-         * Skip zero-length literals — C has no zero-length arrays — and let them
-         * fall back to alloca at the use site. */
+        /* The size N is a compile-time literal (enforced in pass2), so the array
+         * gets a fixed slot reused per loop iteration. C has no zero-length
+         * arrays, so an empty literal falls back to alloca at the use site. */
         if (e->array_lit.size_expr &&
             e->array_lit.size_expr->kind == EXPR_INT_LIT &&
-            e->array_lit.size_expr->int_lit.value > 0) {
-            if (!e->array_lit.codegen_backing_name) {
-                char buf[40];
-                int n = snprintf(buf, sizeof buf, "_fc_back_%d", g_fn_backing_counter++);
-                e->array_lit.codegen_backing_name = arena_strdup(g_arena, buf, n);
-            }
-            DA_APPEND(g_fn_backings, g_fn_backing_count, g_fn_backing_cap, e);
-        }
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            collect_hoisted_bindings(e->array_lit.elems[i]);
-        break;
-    case EXPR_SLICE_LIT:
-        collect_hoisted_bindings(e->slice_lit.ptr_expr);
-        collect_hoisted_bindings(e->slice_lit.len_expr);
-        break;
-    case EXPR_ALLOC:
-        if (e->alloc_expr.size_expr) collect_hoisted_bindings(e->alloc_expr.size_expr);
-        if (e->alloc_expr.init_expr) {
-            /* alloc(T[N]{...}) and alloc("...%d") emit their array/interp init
-             * straight into the heap buffer — no stack backing.  Recurse past the
-             * top node into its children so nested stack temporaries are still
-             * hoisted, but don't give the heap-bound init itself a backing. */
-            Expr *init = e->alloc_expr.init_expr;
-            if (init->kind == EXPR_ARRAY_LIT) {
-                for (int i = 0; i < init->array_lit.elem_count; i++)
-                    collect_hoisted_bindings(init->array_lit.elems[i]);
-            } else if (init->kind == EXPR_INTERP_STRING) {
-                for (int i = 0; i < init->interp_string.segment_count; i++)
-                    if (!init->interp_string.segments[i].is_literal &&
-                        init->interp_string.segments[i].expr)
-                        collect_hoisted_bindings(init->interp_string.segments[i].expr);
-            } else {
-                collect_hoisted_bindings(init);
-            }
-        }
-        break;
-    case EXPR_FREE:
-        collect_hoisted_bindings(e->free_expr.operand);
-        break;
-    case EXPR_ATOMIC_LOAD:
-        collect_hoisted_bindings(e->atomic_load.ptr);
-        break;
-    case EXPR_ATOMIC_STORE:
-        collect_hoisted_bindings(e->atomic_store.ptr);
-        collect_hoisted_bindings(e->atomic_store.value);
-        break;
-    case EXPR_ASSERT:
-        collect_hoisted_bindings(e->assert_expr.condition);
-        if (e->assert_expr.message) collect_hoisted_bindings(e->assert_expr.message);
-        break;
-    case EXPR_SLICE:
-        collect_hoisted_bindings(e->slice.object);
-        if (e->slice.lo) collect_hoisted_bindings(e->slice.lo);
-        if (e->slice.hi) collect_hoisted_bindings(e->slice.hi);
+            e->array_lit.size_expr->int_lit.value > 0)
+            add_fn_backing(e, &e->array_lit.codegen_backing_name);
         break;
     case EXPR_INTERP_STRING: {
-        /* Constant-size buffer (no runtime-length %s) → hoist a fixed backing
-         * array to function entry, reused per iteration.  Runtime-sized buffers
-         * stay on alloca (documented: grows per loop iteration; use alloc(s)! to
-         * promote to the heap). */
+        /* A constant-size buffer (no runtime-length %s) gets a fixed slot.
+         * Runtime-sized buffers stay on alloca, which grows per loop iteration
+         * (documented; alloc(s)! promotes to the heap). */
         int64_t bsize = 0;
         if (interp_const_buffer_size(e, &bsize)) {
-            if (!e->interp_string.codegen_backing_name) {
-                char buf[40];
-                int n = snprintf(buf, sizeof buf, "_fc_back_%d", g_fn_backing_counter++);
-                e->interp_string.codegen_backing_name = arena_strdup(g_arena, buf, n);
-            }
+            add_fn_backing(e, &e->interp_string.codegen_backing_name);
             e->interp_string.backing_size = bsize;
-            DA_APPEND(g_fn_backings, g_fn_backing_count, g_fn_backing_cap, e);
         }
-        for (int i = 0; i < e->interp_string.segment_count; i++)
-            if (!e->interp_string.segments[i].is_literal && e->interp_string.segments[i].expr)
-                collect_hoisted_bindings(e->interp_string.segments[i].expr);
         break;
     }
-    case EXPR_FUNC:
-        /* A capturing lambda's context struct is a stack value created in *this*
-         * function's frame; per §"Stack frames and lifetime" it must have
-         * function-frame lifetime, not the lifetime of whatever block-tail it sits
-         * in.  Hoist a named _ctx_<lifted> backing to function entry — same scheme
-         * as slice-literal/interp backings — so the .ctx pointer the closure carries
-         * stays valid for the whole call.  The single slot is reused per loop
-         * iteration (identical to slice-literal reuse semantics).  Don't recurse
-         * into the body: it is its own function/hoisting scope, and any capturing
-         * lambda constructed inside it is hoisted into that frame when it is emitted.
-         * A heap-allocated closure (alloc(lambda)) mallocs its context at the alloc
-         * site instead — no stack backing. */
-        if (e->func.capture_count > 0 && !e->func.heap_alloc) {
-            if (!e->func.codegen_ctx_backing_name) {
-                char buf[40];
-                int n = snprintf(buf, sizeof buf, "_fc_back_%d", g_fn_backing_counter++);
-                e->func.codegen_ctx_backing_name = arena_strdup(g_arena, buf, n);
-            }
-            DA_APPEND(g_fn_backings, g_fn_backing_count, g_fn_backing_cap, e);
+    case EXPR_ALLOC:
+        /* alloc(T[N]{...}) and alloc("...%d") build their init straight into the
+         * heap buffer, so the init node itself gets no stack slot; its children
+         * may still need theirs. */
+        collect_hoisted_bindings(e->alloc_expr.size_expr);
+        if (e->alloc_expr.init_expr) {
+            Expr *init = e->alloc_expr.init_expr;
+            if (init->kind == EXPR_ARRAY_LIT || init->kind == EXPR_INTERP_STRING)
+                expr_for_each_child(init, collect_hoisted_child, NULL);
+            else
+                collect_hoisted_bindings(init);
         }
-        break;
+        return;
+    case EXPR_FUNC:
+        /* A capturing lambda's context struct is created in this function's
+         * frame and must live as long as the frame (spec: "Stack frames and
+         * lifetime"), not just the block the lambda sits in, so it gets a
+         * function-entry slot too. The body is not walked: it is its own
+         * function, with its own hoisting scope. alloc(lambda) puts the context
+         * on the heap instead. */
+        if (e->func.capture_count > 0 && !e->func.heap_alloc)
+            add_fn_backing(e, &e->func.codegen_ctx_backing_name);
+        return;
     default:
         break;
     }
+    expr_for_each_child(e, collect_hoisted_child, NULL);
 }
 
 /* Collect hoisted bindings from destructuring pattern */
@@ -6143,8 +6004,6 @@ static void typeset_add(TypeSet *ts, Type *t) {
     }
 }
 
-static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeSet *fns);
-
 static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, TypeSet *fns) {
     if (!t) return;
     /* Apply type variable substitution if available */
@@ -6375,25 +6234,28 @@ static void collect_eq_from_pattern(Pattern *pat, TypeSet *eqs) {
     }
 }
 
-static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeSet *fns) {
+/* The sets collect_types_expr fills, bundled into one visitor context. */
+typedef struct {
+    TypeSet *slices;
+    TypeSet *options;
+    TypeSet *fns;
+} TypeSets;
+
+/* Collect the slice, option, result and function types an expression tree
+ * uses, and the types that need generated equality or enum_of helpers.
+ * `sets` is a TypeSets. */
+static void collect_types_expr(Expr *e, void *sets) {
     if (!e) return;
-    collect_types_in_type(e->type, slices, options, fns);
+    TypeSets *s = sets;
+    collect_types_in_type(e->type, s->slices, s->options, s->fns);
 
     switch (e->kind) {
     case EXPR_BINARY:
-        collect_types_expr(e->binary.left, slices, options, fns);
-        collect_types_expr(e->binary.right, slices, options, fns);
-        if (g_eq_set && (e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ)) {
-            Type *cmp_type = e->binary.left->type;
-            if (cmp_type) collect_eq_types(cmp_type, g_eq_set);
-        }
-        break;
-    case EXPR_UNARY_PREFIX:
-        collect_types_expr(e->unary_prefix.operand, slices, options, fns);
-        break;
-    case EXPR_UNARY_POSTFIX:
-        collect_types_expr(e->unary_postfix.operand, slices, options, fns);
-        break;
+        expr_for_each_child(e, collect_types_expr, sets);
+        if (g_eq_set && (e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ) &&
+            e->binary.left->type)
+            collect_eq_types(e->binary.left->type, g_eq_set);
+        return;
     case EXPR_CALL:
         /* A *direct* call emits its callee by name, so it needs no function-type
          * typedef — and collecting one is actively wrong for a generic callee.
@@ -6403,167 +6265,60 @@ static void collect_types_expr(Expr *e, TypeSet *slices, TypeSet *options, TypeS
          * `() -> wide<'n>` read with the caller's 'n, emitting a typedef over
          * the phantom `wide<64>` that is never instantiated.  Only an indirect
          * call, whose callee really is a function value, needs the typedef. */
-        if (e->call.is_indirect) {
-            collect_types_expr(e->call.func, slices, options, fns);
-        } else if (e->call.func &&
-                   (e->call.func->kind == EXPR_FIELD ||
-                    e->call.func->kind == EXPR_DEREF_FIELD)) {
-            collect_types_expr(e->call.func->field.object, slices, options, fns);
-        } else if (e->call.func && e->call.func->kind != EXPR_IDENT) {
-            collect_types_expr(e->call.func, slices, options, fns);
-        }
+        if (e->call.is_indirect)
+            collect_types_expr(e->call.func, sets);
+        else if (e->call.func->kind == EXPR_FIELD || e->call.func->kind == EXPR_DEREF_FIELD)
+            collect_types_expr(e->call.func->field.object, sets);
+        else if (e->call.func->kind != EXPR_IDENT)
+            collect_types_expr(e->call.func, sets);
         for (int i = 0; i < e->call.arg_count; i++)
-            collect_types_expr(e->call.args[i], slices, options, fns);
-        break;
-    case EXPR_FIELD:
-    case EXPR_DEREF_FIELD:
-        collect_types_expr(e->field.object, slices, options, fns);
-        break;
-    case EXPR_INDEX:
-        collect_types_expr(e->index.object, slices, options, fns);
-        collect_types_expr(e->index.index, slices, options, fns);
-        break;
-    case EXPR_SLICE:
-        collect_types_expr(e->slice.object, slices, options, fns);
-        if (e->slice.lo) collect_types_expr(e->slice.lo, slices, options, fns);
-        if (e->slice.hi) collect_types_expr(e->slice.hi, slices, options, fns);
-        break;
-    case EXPR_IF:
-        collect_types_expr(e->if_expr.cond, slices, options, fns);
-        collect_types_expr(e->if_expr.then_body, slices, options, fns);
-        if (e->if_expr.else_body) collect_types_expr(e->if_expr.else_body, slices, options, fns);
-        break;
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            collect_types_expr(e->block.stmts[i], slices, options, fns);
-        break;
+            collect_types_expr(e->call.args[i], sets);
+        return;
     case EXPR_FUNC:
-        for (int i = 0; i < e->func.body_count; i++)
-            collect_types_expr(e->func.body[i], slices, options, fns);
-        /* Also check param types */
+        expr_for_each_child(e, collect_types_expr, sets);
         for (int i = 0; i < e->func.param_count; i++)
-            collect_types_in_type(e->func.params[i].type, slices, options, fns);
-        break;
+            collect_types_in_type(e->func.params[i].type, s->slices, s->options, s->fns);
+        return;
     case EXPR_LET:
-        collect_types_in_type(e->let_expr.let_type, slices, options, fns);
-        collect_types_expr(e->let_expr.let_init, slices, options, fns);
-        break;
-    case EXPR_RETURN:
-        if (e->return_expr.value) collect_types_expr(e->return_expr.value, slices, options, fns);
-        break;
-    case EXPR_ASSIGN:
-        collect_types_expr(e->assign.target, slices, options, fns);
-        collect_types_expr(e->assign.value, slices, options, fns);
+        collect_types_in_type(e->let_expr.let_type, s->slices, s->options, s->fns);
         break;
     case EXPR_CAST:
-        collect_types_in_type(e->cast.target, slices, options, fns);
-        collect_types_expr(e->cast.operand, slices, options, fns);
-        break;
-    case EXPR_BITCAST:
-        /* target is a scalar (no typedef); walk the operand for nested types */
-        collect_types_expr(e->bitcast_expr.operand, slices, options, fns);
+        collect_types_in_type(e->cast.target, s->slices, s->options, s->fns);
         break;
     case EXPR_ENUM_OF:
-        /* the result type E? needs its option typedef, and the enum needs its
-         * membership-check helper pair */
-        collect_types_in_type(e->type, slices, options, fns);
+        /* the enum needs its membership-check helper pair */
         if (g_enum_of_set) typeset_add(g_enum_of_set, e->enum_of_expr.target);
-        collect_types_expr(e->enum_of_expr.operand, slices, options, fns);
-        break;
-    case EXPR_GUARD:
-        collect_types_expr(e->guard.body, slices, options, fns);
-        break;
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            collect_types_expr(e->struct_lit.fields[i].value, slices, options, fns);
-        break;
-    case EXPR_SOME:
-        collect_types_expr(e->some_expr.value, slices, options, fns);
-        break;
-    case EXPR_OK:
-        collect_types_expr(e->ok_expr.value, slices, options, fns);
-        break;
-    case EXPR_ERR:
-        collect_types_expr(e->err_expr.code, slices, options, fns);
-        break;
-    case EXPR_ERROR_NAME:
-        collect_types_expr(e->error_name_expr.code, slices, options, fns);
         break;
     case EXPR_ARRAY_LIT:
-        collect_types_in_type(e->array_lit.elem_type, slices, options, fns);
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            collect_types_expr(e->array_lit.elems[i], slices, options, fns);
+        collect_types_in_type(e->array_lit.elem_type, s->slices, s->options, s->fns);
         break;
     case EXPR_SLICE_LIT:
-        collect_types_in_type(e->slice_lit.elem_type, slices, options, fns);
-        collect_types_expr(e->slice_lit.ptr_expr, slices, options, fns);
-        collect_types_expr(e->slice_lit.len_expr, slices, options, fns);
+        collect_types_in_type(e->slice_lit.elem_type, s->slices, s->options, s->fns);
         break;
     case EXPR_MATCH:
-        collect_types_expr(e->match_expr.subject, slices, options, fns);
+        /* A string-literal pattern compares with the generated str equality. */
+        collect_types_expr(e->match_expr.subject, sets);
         for (int i = 0; i < e->match_expr.arm_count; i++) {
-            if (g_eq_set)
-                collect_eq_from_pattern(e->match_expr.arms[i].pattern, g_eq_set);
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                collect_types_expr(e->match_expr.arms[i].body[j], slices, options, fns);
+            MatchArm *arm = &e->match_expr.arms[i];
+            if (g_eq_set) collect_eq_from_pattern(arm->pattern, g_eq_set);
+            collect_types_expr(arm->guard, sets);
+            for (int j = 0; j < arm->body_count; j++)
+                collect_types_expr(arm->body[j], sets);
         }
-        break;
-    case EXPR_LOOP:
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            collect_types_expr(e->loop_expr.body[i], slices, options, fns);
-        break;
-    case EXPR_FOR:
-        collect_types_expr(e->for_expr.iter, slices, options, fns);
-        if (e->for_expr.range_end) collect_types_expr(e->for_expr.range_end, slices, options, fns);
-        for (int i = 0; i < e->for_expr.body_count; i++)
-            collect_types_expr(e->for_expr.body[i], slices, options, fns);
-        break;
-    case EXPR_BREAK:
-        if (e->break_expr.value) collect_types_expr(e->break_expr.value, slices, options, fns);
-        break;
-    case EXPR_ALLOC:
-        if (e->alloc_expr.size_expr) collect_types_expr(e->alloc_expr.size_expr, slices, options, fns);
-        if (e->alloc_expr.init_expr) collect_types_expr(e->alloc_expr.init_expr, slices, options, fns);
-        break;
-    case EXPR_FREE:
-        collect_types_expr(e->free_expr.operand, slices, options, fns);
-        break;
-    case EXPR_ATOMIC_LOAD:
-        collect_types_expr(e->atomic_load.ptr, slices, options, fns);
-        break;
-    case EXPR_ATOMIC_STORE:
-        collect_types_expr(e->atomic_store.ptr, slices, options, fns);
-        collect_types_expr(e->atomic_store.value, slices, options, fns);
-        break;
-    case EXPR_ASSERT:
-        collect_types_expr(e->assert_expr.condition, slices, options, fns);
-        if (e->assert_expr.message)
-            collect_types_expr(e->assert_expr.message, slices, options, fns);
-        break;
-    case EXPR_IGNORE:
-        collect_types_expr(e->ignore_expr.value, slices, options, fns);
-        break;
-    case EXPR_DEFER:
-        collect_types_expr(e->defer_expr.value, slices, options, fns);
-        break;
+        return;
     case EXPR_SIZEOF:
-        collect_types_in_type(e->sizeof_expr.target, slices, options, fns);
+        collect_types_in_type(e->sizeof_expr.target, s->slices, s->options, s->fns);
         break;
     case EXPR_ALIGNOF:
-        collect_types_in_type(e->alignof_expr.target, slices, options, fns);
+        collect_types_in_type(e->alignof_expr.target, s->slices, s->options, s->fns);
         break;
     case EXPR_DEFAULT:
-        collect_types_in_type(e->default_expr.target, slices, options, fns);
-        break;
-    case EXPR_INTERP_STRING:
-        for (int i = 0; i < e->interp_string.segment_count; i++) {
-            if (!e->interp_string.segments[i].is_literal)
-                collect_types_expr(e->interp_string.segments[i].expr, slices, options, fns);
-        }
+        collect_types_in_type(e->default_expr.target, s->slices, s->options, s->fns);
         break;
     default:
         break;
     }
+    expr_for_each_child(e, collect_types_expr, sets);
 }
 
 /* ---- Lambda collection ---- */
@@ -6604,20 +6359,15 @@ static void trampolineset_add(TrampolineSet *ts, const char *name, Type *type) {
     }
 }
 
-static void collect_trampolines_expr(Expr *e, TrampolineSet *ts);
-
 /* Pre-pass for module-member initializers: assigns a unique backing-array
- * name to every EXPR_ARRAY_LIT inside a const-safe init tree, and appends
+ * name to every EXPR_ARRAY_LIT inside a constant initializer, and appends
  * the node to g_const_backings so the file-scope emission pass can emit
  * `static T _fc_const_backing_N[] = {...};` before the module-member defs.
- *
- * Recurses only through expression kinds that is_const_expr accepts — other
- * kinds cannot appear here because pass2 has already gated the init.  A
- * special case: EXPR_STRUCT_LIT fields whose type is a fixed array take an
- * inline aggregate initializer at the use site rather than a backing array,
- * so we skip backing assignment for those specific children.
- */
-static void collect_const_backings(Expr *e, bool rodata) {
+ * pass2 has already restricted the initializer to constant forms. A struct
+ * field whose type is a fixed array takes an inline aggregate initializer at
+ * the use site rather than a backing array. `rodata` points to a bool: the
+ * constant is frozen, so its backings are emitted `static const`. */
+static void collect_const_backings(Expr *e, void *rodata) {
     if (!e) return;
     switch (e->kind) {
     case EXPR_ARRAY_LIT: {
@@ -6647,16 +6397,12 @@ static void collect_const_backings(Expr *e, bool rodata) {
             int n = snprintf(buf, sizeof buf, "_fc_const_backing_%d",
                              g_const_backing_counter++);
             e->array_lit.codegen_backing_name = arena_strdup(g_arena, buf, n);
-            e->array_lit.codegen_backing_rodata = rodata;
+            e->array_lit.codegen_backing_rodata = *(bool *)rodata;
             DA_APPEND(g_const_backings, g_const_backing_count,
                       g_const_backing_cap, e);
         }
-        break;
+        return;
     }
-    case EXPR_SLICE_LIT:
-        collect_const_backings(e->slice_lit.ptr_expr, rodata);
-        collect_const_backings(e->slice_lit.len_expr, rodata);
-        break;
     case EXPR_STRUCT_LIT: {
         Type *st = e->type;
         for (int i = 0; i < e->struct_lit.field_count; i++) {
@@ -6682,379 +6428,70 @@ static void collect_const_backings(Expr *e, bool rodata) {
                 collect_const_backings(v, rodata);
             }
         }
-        break;
+        return;
     }
-    case EXPR_SOME:
-        collect_const_backings(e->some_expr.value, rodata);
-        break;
-    case EXPR_OK:
-        collect_const_backings(e->ok_expr.value, rodata);
-        break;
-    case EXPR_ERR:
-        collect_const_backings(e->err_expr.code, rodata);
-        break;
-    case EXPR_ERROR_NAME:
-        collect_const_backings(e->error_name_expr.code, rodata);
-        break;
-    case EXPR_CALL:
-        if (e->call.func->kind == EXPR_FIELD &&
-            e->call.func->field.is_variant_constructor) {
-            for (int i = 0; i < e->call.arg_count; i++)
-                collect_const_backings(e->call.args[i], rodata);
-        }
-        break;
-    case EXPR_UNARY_PREFIX:
-        collect_const_backings(e->unary_prefix.operand, rodata);
-        break;
-    case EXPR_BINARY:
-        collect_const_backings(e->binary.left, rodata);
-        collect_const_backings(e->binary.right, rodata);
-        break;
-    case EXPR_CAST:
-        collect_const_backings(e->cast.operand, rodata);
-        break;
-    case EXPR_BITCAST:
-        collect_const_backings(e->bitcast_expr.operand, rodata);
-        break;
-    case EXPR_ENUM_OF:
-        collect_const_backings(e->enum_of_expr.operand, rodata);
-        break;
-    case EXPR_GUARD:
-        collect_const_backings(e->guard.body, rodata);
-        break;
     default:
-        /* Leaves: literals, extern-const/no-payload variant EXPR_FIELD, type
-         * operators.  Nothing to lift. */
         break;
     }
+    expr_for_each_child(e, collect_const_backings, rodata);
 }
 
-static void collect_trampolines_expr(Expr *e, TrampolineSet *ts) {
+/* Record the FC functions that are handed to C as raw function pointers and so
+ * need a trampoline: arguments of function type at an extern call, and `&f`.
+ * `set` is a TrampolineSet. */
+static void collect_trampolines_expr(Expr *e, void *set) {
     if (!e) return;
-    switch (e->kind) {
-    case EXPR_CALL:
-        /* Check if this is an extern call with function-type arguments */
-        if (e->call.is_extern_call) {
-            Type *call_ft = e->call.func->type;
-            for (int i = 0; i < e->call.arg_count; i++) {
-                Type *pt = (call_ft && call_ft->kind == TYPE_FUNC && i < call_ft->func.param_count)
-                    ? call_ft->func.param_types[i] : NULL;
-                if (!pt || pt->kind != TYPE_FUNC) continue;
-                Expr *arg = e->call.args[i];
-                if (arg->kind == EXPR_IDENT && !arg->ident.is_local && arg->type &&
-                    arg->type->kind == TYPE_FUNC) {
-                    /* Top-level function passed at extern boundary */
-                    const char *fname = arg->ident.codegen_name
-                        ? arg->ident.codegen_name : arg->ident.name;
-                    trampolineset_add(ts, fname, arg->type);
-                } else if (arg->kind == EXPR_FUNC && arg->func.capture_count == 0 &&
-                           arg->func.lifted_name && arg->type &&
-                           arg->type->kind == TYPE_FUNC) {
-                    /* Non-capturing lambda passed at extern boundary */
-                    trampolineset_add(ts, lambda_c_name(arg), arg->type);
-                }
+    TrampolineSet *ts = set;
+    if (e->kind == EXPR_CALL && e->call.is_extern_call) {
+        Type *call_ft = e->call.func->type;
+        for (int i = 0; i < e->call.arg_count; i++) {
+            Type *pt = (call_ft && call_ft->kind == TYPE_FUNC && i < call_ft->func.param_count)
+                ? call_ft->func.param_types[i] : NULL;
+            if (!pt || pt->kind != TYPE_FUNC) continue;
+            Expr *arg = e->call.args[i];
+            if (arg->kind == EXPR_IDENT && !arg->ident.is_local && arg->type &&
+                arg->type->kind == TYPE_FUNC) {
+                /* Top-level function passed at extern boundary */
+                const char *fname = arg->ident.codegen_name
+                    ? arg->ident.codegen_name : arg->ident.name;
+                trampolineset_add(ts, fname, arg->type);
+            } else if (arg->kind == EXPR_FUNC && arg->func.capture_count == 0 &&
+                       arg->func.lifted_name && arg->type &&
+                       arg->type->kind == TYPE_FUNC) {
+                /* Non-capturing lambda passed at extern boundary */
+                trampolineset_add(ts, lambda_c_name(arg), arg->type);
             }
         }
-        collect_trampolines_expr(e->call.func, ts);
-        for (int i = 0; i < e->call.arg_count; i++)
-            collect_trampolines_expr(e->call.args[i], ts);
-        break;
-    case EXPR_BINARY:
-        collect_trampolines_expr(e->binary.left, ts);
-        collect_trampolines_expr(e->binary.right, ts);
-        break;
-    case EXPR_UNARY_PREFIX:
+    } else if (e->kind == EXPR_UNARY_PREFIX && e->unary_prefix.op == TOK_AMP) {
         /* &f on a top-level function or non-capturing lambda yields a raw C
-         * function pointer — record it so the trampoline is emitted. */
-        if (e->unary_prefix.op == TOK_AMP) {
-            Expr *operand = e->unary_prefix.operand;
-            if (operand->kind == EXPR_IDENT && !operand->ident.is_local &&
-                operand->type && operand->type->kind == TYPE_FUNC) {
-                const char *name = operand->ident.codegen_name
-                    ? operand->ident.codegen_name : operand->ident.name;
-                trampolineset_add(ts, name, operand->type);
-            } else if (operand->kind == EXPR_FIELD && operand->field.codegen_name &&
-                       operand->type && operand->type->kind == TYPE_FUNC) {
-                trampolineset_add(ts, operand->field.codegen_name, operand->type);
-            } else if (operand->kind == EXPR_FUNC && operand->func.capture_count == 0 &&
-                       operand->func.lifted_name && operand->type &&
-                       operand->type->kind == TYPE_FUNC) {
-                trampolineset_add(ts, lambda_c_name(operand), operand->type);
-            }
+         * function pointer. */
+        Expr *operand = e->unary_prefix.operand;
+        if (operand->kind == EXPR_IDENT && !operand->ident.is_local &&
+            operand->type && operand->type->kind == TYPE_FUNC) {
+            const char *name = operand->ident.codegen_name
+                ? operand->ident.codegen_name : operand->ident.name;
+            trampolineset_add(ts, name, operand->type);
+        } else if (operand->kind == EXPR_FIELD && operand->field.codegen_name &&
+                   operand->type && operand->type->kind == TYPE_FUNC) {
+            trampolineset_add(ts, operand->field.codegen_name, operand->type);
+        } else if (operand->kind == EXPR_FUNC && operand->func.capture_count == 0 &&
+                   operand->func.lifted_name && operand->type &&
+                   operand->type->kind == TYPE_FUNC) {
+            trampolineset_add(ts, lambda_c_name(operand), operand->type);
         }
-        collect_trampolines_expr(e->unary_prefix.operand, ts);
-        break;
-    case EXPR_UNARY_POSTFIX:
-        collect_trampolines_expr(e->unary_postfix.operand, ts);
-        break;
-    case EXPR_FIELD:
-    case EXPR_DEREF_FIELD:
-        collect_trampolines_expr(e->field.object, ts);
-        break;
-    case EXPR_INDEX:
-        collect_trampolines_expr(e->index.object, ts);
-        collect_trampolines_expr(e->index.index, ts);
-        break;
-    case EXPR_SLICE:
-        collect_trampolines_expr(e->slice.object, ts);
-        if (e->slice.lo) collect_trampolines_expr(e->slice.lo, ts);
-        if (e->slice.hi) collect_trampolines_expr(e->slice.hi, ts);
-        break;
-    case EXPR_IF:
-        collect_trampolines_expr(e->if_expr.cond, ts);
-        collect_trampolines_expr(e->if_expr.then_body, ts);
-        if (e->if_expr.else_body) collect_trampolines_expr(e->if_expr.else_body, ts);
-        break;
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            collect_trampolines_expr(e->block.stmts[i], ts);
-        break;
-    case EXPR_FUNC:
-        for (int i = 0; i < e->func.body_count; i++)
-            collect_trampolines_expr(e->func.body[i], ts);
-        break;
-    case EXPR_LET:
-        collect_trampolines_expr(e->let_expr.let_init, ts);
-        break;
-    case EXPR_LET_DESTRUCT:
-        collect_trampolines_expr(e->let_destruct.init, ts);
-        break;
-    case EXPR_RETURN:
-        if (e->return_expr.value) collect_trampolines_expr(e->return_expr.value, ts);
-        break;
-    case EXPR_ASSIGN:
-        collect_trampolines_expr(e->assign.target, ts);
-        collect_trampolines_expr(e->assign.value, ts);
-        break;
-    case EXPR_CAST:
-        collect_trampolines_expr(e->cast.operand, ts);
-        break;
-    case EXPR_BITCAST:
-        collect_trampolines_expr(e->bitcast_expr.operand, ts);
-        break;
-    case EXPR_ENUM_OF:
-        collect_trampolines_expr(e->enum_of_expr.operand, ts);
-        break;
-    case EXPR_GUARD:
-        collect_trampolines_expr(e->guard.body, ts);
-        break;
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            collect_trampolines_expr(e->struct_lit.fields[i].value, ts);
-        break;
-    case EXPR_SOME:
-        collect_trampolines_expr(e->some_expr.value, ts);
-        break;
-    case EXPR_OK:
-        collect_trampolines_expr(e->ok_expr.value, ts);
-        break;
-    case EXPR_ERR:
-        collect_trampolines_expr(e->err_expr.code, ts);
-        break;
-    case EXPR_ERROR_NAME:
-        collect_trampolines_expr(e->error_name_expr.code, ts);
-        break;
-    case EXPR_ARRAY_LIT:
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            collect_trampolines_expr(e->array_lit.elems[i], ts);
-        break;
-    case EXPR_SLICE_LIT:
-        collect_trampolines_expr(e->slice_lit.ptr_expr, ts);
-        collect_trampolines_expr(e->slice_lit.len_expr, ts);
-        break;
-    case EXPR_MATCH:
-        collect_trampolines_expr(e->match_expr.subject, ts);
-        for (int i = 0; i < e->match_expr.arm_count; i++)
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                collect_trampolines_expr(e->match_expr.arms[i].body[j], ts);
-        break;
-    case EXPR_LOOP:
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            collect_trampolines_expr(e->loop_expr.body[i], ts);
-        break;
-    case EXPR_FOR:
-        collect_trampolines_expr(e->for_expr.iter, ts);
-        if (e->for_expr.range_end) collect_trampolines_expr(e->for_expr.range_end, ts);
-        for (int i = 0; i < e->for_expr.body_count; i++)
-            collect_trampolines_expr(e->for_expr.body[i], ts);
-        break;
-    case EXPR_BREAK:
-        if (e->break_expr.value) collect_trampolines_expr(e->break_expr.value, ts);
-        break;
-    case EXPR_ALLOC:
-        if (e->alloc_expr.size_expr) collect_trampolines_expr(e->alloc_expr.size_expr, ts);
-        if (e->alloc_expr.init_expr) collect_trampolines_expr(e->alloc_expr.init_expr, ts);
-        break;
-    case EXPR_FREE:
-        collect_trampolines_expr(e->free_expr.operand, ts);
-        break;
-    case EXPR_ATOMIC_LOAD:
-        collect_trampolines_expr(e->atomic_load.ptr, ts);
-        break;
-    case EXPR_ATOMIC_STORE:
-        collect_trampolines_expr(e->atomic_store.ptr, ts);
-        collect_trampolines_expr(e->atomic_store.value, ts);
-        break;
-    case EXPR_ASSERT:
-        collect_trampolines_expr(e->assert_expr.condition, ts);
-        if (e->assert_expr.message)
-            collect_trampolines_expr(e->assert_expr.message, ts);
-        break;
-    case EXPR_IGNORE:
-        collect_trampolines_expr(e->ignore_expr.value, ts);
-        break;
-    case EXPR_DEFER:
-        collect_trampolines_expr(e->defer_expr.value, ts);
-        break;
-    default:
-        break;
     }
+    expr_for_each_child(e, collect_trampolines_expr, set);
 }
 
-static void collect_lambdas_expr(Expr *e, LambdaSet *ls) {
+/* Collect every lambda that is lifted to its own C function, in source order.
+ * `set` is a LambdaSet. */
+static void collect_lambdas_expr(Expr *e, void *set) {
     if (!e) return;
     if (e->kind == EXPR_FUNC && e->func.lifted_name) {
+        LambdaSet *ls = set;
         DA_APPEND(ls->exprs, ls->count, ls->cap, e);
     }
-    switch (e->kind) {
-    case EXPR_BINARY:
-        collect_lambdas_expr(e->binary.left, ls);
-        collect_lambdas_expr(e->binary.right, ls);
-        break;
-    case EXPR_UNARY_PREFIX:
-        collect_lambdas_expr(e->unary_prefix.operand, ls);
-        break;
-    case EXPR_UNARY_POSTFIX:
-        collect_lambdas_expr(e->unary_postfix.operand, ls);
-        break;
-    case EXPR_CALL:
-        collect_lambdas_expr(e->call.func, ls);
-        for (int i = 0; i < e->call.arg_count; i++)
-            collect_lambdas_expr(e->call.args[i], ls);
-        break;
-    case EXPR_FIELD:
-    case EXPR_DEREF_FIELD:
-        collect_lambdas_expr(e->field.object, ls);
-        break;
-    case EXPR_INDEX:
-        collect_lambdas_expr(e->index.object, ls);
-        collect_lambdas_expr(e->index.index, ls);
-        break;
-    case EXPR_SLICE:
-        collect_lambdas_expr(e->slice.object, ls);
-        if (e->slice.lo) collect_lambdas_expr(e->slice.lo, ls);
-        if (e->slice.hi) collect_lambdas_expr(e->slice.hi, ls);
-        break;
-    case EXPR_IF:
-        collect_lambdas_expr(e->if_expr.cond, ls);
-        collect_lambdas_expr(e->if_expr.then_body, ls);
-        if (e->if_expr.else_body) collect_lambdas_expr(e->if_expr.else_body, ls);
-        break;
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            collect_lambdas_expr(e->block.stmts[i], ls);
-        break;
-    case EXPR_FUNC:
-        for (int i = 0; i < e->func.body_count; i++)
-            collect_lambdas_expr(e->func.body[i], ls);
-        break;
-    case EXPR_LET:
-        collect_lambdas_expr(e->let_expr.let_init, ls);
-        break;
-    case EXPR_LET_DESTRUCT:
-        collect_lambdas_expr(e->let_destruct.init, ls);
-        break;
-    case EXPR_RETURN:
-        if (e->return_expr.value) collect_lambdas_expr(e->return_expr.value, ls);
-        break;
-    case EXPR_ASSIGN:
-        collect_lambdas_expr(e->assign.target, ls);
-        collect_lambdas_expr(e->assign.value, ls);
-        break;
-    case EXPR_CAST:
-        collect_lambdas_expr(e->cast.operand, ls);
-        break;
-    case EXPR_BITCAST:
-        collect_lambdas_expr(e->bitcast_expr.operand, ls);
-        break;
-    case EXPR_ENUM_OF:
-        collect_lambdas_expr(e->enum_of_expr.operand, ls);
-        break;
-    case EXPR_GUARD:
-        collect_lambdas_expr(e->guard.body, ls);
-        break;
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            collect_lambdas_expr(e->struct_lit.fields[i].value, ls);
-        break;
-    case EXPR_SOME:
-        collect_lambdas_expr(e->some_expr.value, ls);
-        break;
-    case EXPR_OK:
-        collect_lambdas_expr(e->ok_expr.value, ls);
-        break;
-    case EXPR_ERR:
-        collect_lambdas_expr(e->err_expr.code, ls);
-        break;
-    case EXPR_ERROR_NAME:
-        collect_lambdas_expr(e->error_name_expr.code, ls);
-        break;
-    case EXPR_ARRAY_LIT:
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            collect_lambdas_expr(e->array_lit.elems[i], ls);
-        break;
-    case EXPR_SLICE_LIT:
-        collect_lambdas_expr(e->slice_lit.ptr_expr, ls);
-        collect_lambdas_expr(e->slice_lit.len_expr, ls);
-        break;
-    case EXPR_MATCH:
-        collect_lambdas_expr(e->match_expr.subject, ls);
-        for (int i = 0; i < e->match_expr.arm_count; i++) {
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                collect_lambdas_expr(e->match_expr.arms[i].body[j], ls);
-        }
-        break;
-    case EXPR_LOOP:
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            collect_lambdas_expr(e->loop_expr.body[i], ls);
-        break;
-    case EXPR_FOR:
-        collect_lambdas_expr(e->for_expr.iter, ls);
-        if (e->for_expr.range_end) collect_lambdas_expr(e->for_expr.range_end, ls);
-        for (int i = 0; i < e->for_expr.body_count; i++)
-            collect_lambdas_expr(e->for_expr.body[i], ls);
-        break;
-    case EXPR_BREAK:
-        if (e->break_expr.value) collect_lambdas_expr(e->break_expr.value, ls);
-        break;
-    case EXPR_ALLOC:
-        if (e->alloc_expr.size_expr) collect_lambdas_expr(e->alloc_expr.size_expr, ls);
-        if (e->alloc_expr.init_expr) collect_lambdas_expr(e->alloc_expr.init_expr, ls);
-        break;
-    case EXPR_FREE:
-        collect_lambdas_expr(e->free_expr.operand, ls);
-        break;
-    case EXPR_ATOMIC_LOAD:
-        collect_lambdas_expr(e->atomic_load.ptr, ls);
-        break;
-    case EXPR_ATOMIC_STORE:
-        collect_lambdas_expr(e->atomic_store.ptr, ls);
-        collect_lambdas_expr(e->atomic_store.value, ls);
-        break;
-    case EXPR_ASSERT:
-        collect_lambdas_expr(e->assert_expr.condition, ls);
-        if (e->assert_expr.message)
-            collect_lambdas_expr(e->assert_expr.message, ls);
-        break;
-    case EXPR_IGNORE:
-        collect_lambdas_expr(e->ignore_expr.value, ls);
-        break;
-    case EXPR_DEFER:
-        collect_lambdas_expr(e->defer_expr.value, ls);
-        break;
-    default:
-        break;
-    }
+    expr_for_each_child(e, collect_lambdas_expr, set);
 }
 
 /* ---- Eq function generation ---- */
@@ -7577,24 +7014,32 @@ static const char *fmt_lambda_display(Arena *arena, const char *file, int line) 
     return "<lambda>";
 }
 
+static void detect_features_expr(Expr *e);
+
+static void detect_features_child(Expr *child, void *ctx) {
+    (void)ctx;
+    detect_features_expr(child);
+}
+
+/* Record which headers and runtime helpers the emitted C needs: <stdio.h> for
+ * every runtime abort message, <math.h>/<float.h> for float properties, and
+ * <errno.h> for errno-protocol externs. */
 static void detect_features_expr(Expr *e) {
     if (!e) return;
     if (g_needs_stdio && g_needs_math && g_needs_float && g_needs_errno)
         return; /* all found */
 
     switch (e->kind) {
-    case EXPR_ERROR:   /* unreachable: error nodes never reach codegen */
-        return;
     case EXPR_STATIC_ASSERT:
-        return;   /* proven at compile time — emits nothing, needs nothing */
+        return;   /* proven at compile time; emits nothing */
+    case EXPR_ARRAY_LIT:
+        /* The size is folded at compile time and never evaluated at run time. */
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            detect_features_expr(e->array_lit.elems[i]);
+        return;
     case EXPR_INTERP_STRING:
         g_needs_stdio = true;
-        for (int i = 0; i < e->interp_string.segment_count; i++) {
-            if (e->interp_string.segments[i].expr)
-                detect_features_expr(e->interp_string.segments[i].expr);
-        }
-        return;
-
+        break;
     case EXPR_FIELD:
     case EXPR_DEREF_FIELD:
         /* Direct float type properties resolved by pass2 */
@@ -7605,7 +7050,7 @@ static void detect_features_expr(Expr *e) {
             if (strstr(cn, "FLT_") || strstr(cn, "DBL_"))
                 g_needs_float = true;
         }
-        /* Type variable property access — conservatively check property name */
+        /* Type variable property access: conservatively check the property name */
         if (e->field.object && e->field.object->kind == EXPR_TYPE_VAR_REF) {
             const char *prop = e->field.name;
             if (strcmp(prop, "nan") == 0 || strcmp(prop, "inf") == 0 ||
@@ -7615,29 +7060,21 @@ static void detect_features_expr(Expr *e) {
                 strcmp(prop, "epsilon") == 0)
                 g_needs_float = true;
         }
-        detect_features_expr(e->field.object);
-        return;
-
+        break;
     case EXPR_BINARY:
         /* Integer div/mod emits a by-zero abort with stderr message */
         if ((e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) &&
             e->type && type_is_integer(e->type))
             g_needs_stdio = true;
-        detect_features_expr(e->binary.left);
-        detect_features_expr(e->binary.right);
-        return;
-    case EXPR_UNARY_PREFIX:
-        detect_features_expr(e->unary_prefix.operand);
-        return;
+        break;
     case EXPR_UNARY_POSTFIX:
         if (e->unary_postfix.op == TOK_BANG)
             g_needs_stdio = true;
-        detect_features_expr(e->unary_postfix.operand);
-        return;
+        break;
     case EXPR_CALL:
         /* A protocol extern call (from <protocol>) may need <errno.h> and,
          * for the out-of-band code sources (errno / GetLastError / WSA),
-         * emits the err(T,0) guard (fc_zero_err → stderr). */
+         * emits the err(T,0) guard (fc_zero_err -> stderr). */
         if (e->call.resolved_callee &&
             e->call.resolved_callee->kind == DECL_EXTERN &&
             e->call.resolved_callee->decl) {
@@ -7656,82 +7093,24 @@ static void detect_features_expr(Expr *e) {
             default: break;
             }
         }
-        detect_features_expr(e->call.func);
-        for (int i = 0; i < e->call.arg_count; i++)
-            detect_features_expr(e->call.args[i]);
-        return;
-    case EXPR_CAST:
-        detect_features_expr(e->cast.operand);
-        return;
-    case EXPR_BITCAST:
-        detect_features_expr(e->bitcast_expr.operand);
-        return;
-    case EXPR_ENUM_OF:
-        detect_features_expr(e->enum_of_expr.operand);
-        return;
+        break;
     case EXPR_GUARD:
         /* A `checked` body emits fc_overflow (stderr) on overflow. pass2 rejects a
          * checked marker with no governed op, so any that survives will emit one. */
         if (e->guard.is_overflow_axis && e->guard.enable)
             g_needs_stdio = true;
-        detect_features_expr(e->guard.body);
-        return;
-    case EXPR_IF:
-        detect_features_expr(e->if_expr.cond);
-        detect_features_expr(e->if_expr.then_body);
-        detect_features_expr(e->if_expr.else_body);
-        return;
-    case EXPR_MATCH:
-        detect_features_expr(e->match_expr.subject);
-        for (int i = 0; i < e->match_expr.arm_count; i++) {
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                detect_features_expr(e->match_expr.arms[i].body[j]);
-        }
-        return;
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            detect_features_expr(e->block.stmts[i]);
-        return;
-    case EXPR_LET:
-        detect_features_expr(e->let_expr.let_init);
-        return;
-    case EXPR_LET_DESTRUCT:
-        detect_features_expr(e->let_destruct.init);
-        return;
+        break;
     case EXPR_ASSIGN:
         /* Assignment to fixed-array field emits an overflow abort with stderr */
-        if (e->assign.target &&
-            (e->assign.target->kind == EXPR_FIELD ||
+        if ((e->assign.target->kind == EXPR_FIELD ||
              e->assign.target->kind == EXPR_DEREF_FIELD) &&
             e->assign.target->field.fixed_array_type)
             g_needs_stdio = true;
-        detect_features_expr(e->assign.target);
-        detect_features_expr(e->assign.value);
-        return;
-    case EXPR_LOOP:
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            detect_features_expr(e->loop_expr.body[i]);
-        return;
-    case EXPR_FOR:
-        detect_features_expr(e->for_expr.iter);
-        if (e->for_expr.range_end) detect_features_expr(e->for_expr.range_end);
-        for (int i = 0; i < e->for_expr.body_count; i++)
-            detect_features_expr(e->for_expr.body[i]);
-        return;
-    case EXPR_RETURN:
-        detect_features_expr(e->return_expr.value);
-        return;
-    case EXPR_BREAK:
-        detect_features_expr(e->break_expr.value);
-        return;
-    case EXPR_FUNC:
-        for (int i = 0; i < e->func.body_count; i++)
-            detect_features_expr(e->func.body[i]);
-        return;
+        break;
     case EXPR_SOME: {
         /* A null-sentinel some(p) over a not-provably-non-null pointer emits a
-         * null-pointer abort via stderr (fc_null_some).  A type variable may
-         * monomorphize to a pointer, so treat it as possibly guarded too — at
+         * null-pointer abort via stderr (fc_null_some). A type variable may
+         * monomorphize to a pointer, so treat it as possibly guarded too; at
          * worst this pulls in stdio.h for a program that does not need it. */
         Type *inner = e->type && e->type->kind == TYPE_OPTION
                           ? e->type->option.inner : NULL;
@@ -7739,63 +7118,28 @@ static void detect_features_expr(Expr *e) {
                       inner->kind == TYPE_TYPE_VAR) &&
             !ptr_value_provably_nonnull(e->some_expr.value))
             g_needs_stdio = true;
-        detect_features_expr(e->some_expr.value);
-        return;
+        break;
     }
-    case EXPR_OK:
-        detect_features_expr(e->ok_expr.value);
-        return;
     case EXPR_ERR:
         /* A not-provably-nonzero code emits the zero-code abort (fc_zero_err) */
         if (!int_value_provably_nonzero(e->err_expr.code))
             g_needs_stdio = true;
-        detect_features_expr(e->err_expr.code);
-        return;
+        break;
     case EXPR_ERROR_NAME:
         g_uses_error_name = true;
-        detect_features_expr(e->error_name_expr.code);
-        return;
-    case EXPR_ALLOC:
-        detect_features_expr(e->alloc_expr.init_expr);
-        detect_features_expr(e->alloc_expr.size_expr);
-        return;
-    case EXPR_FREE:
-        detect_features_expr(e->free_expr.operand);
-        return;
-    case EXPR_ATOMIC_LOAD:
-        detect_features_expr(e->atomic_load.ptr);
-        return;
-    case EXPR_ATOMIC_STORE:
-        detect_features_expr(e->atomic_store.ptr);
-        detect_features_expr(e->atomic_store.value);
-        return;
+        break;
     case EXPR_ASSERT:
         g_needs_stdio = true;
-        detect_features_expr(e->assert_expr.condition);
-        if (e->assert_expr.message)
-            detect_features_expr(e->assert_expr.message);
-        return;
-    case EXPR_IGNORE:
-        detect_features_expr(e->ignore_expr.value);
-        return;
-    case EXPR_DEFER:
-        detect_features_expr(e->defer_expr.value);
-        return;
+        break;
     case EXPR_INDEX:
         /* Slice indexing emits a bounds-check abort with stderr message */
-        if (e->index.object && e->index.object->type &&
-            e->index.object->type->kind == TYPE_SLICE)
+        if (e->index.object->type && e->index.object->type->kind == TYPE_SLICE)
             g_needs_stdio = true;
-        detect_features_expr(e->index.object);
-        detect_features_expr(e->index.index);
-        return;
+        break;
     case EXPR_SLICE:
         /* Subslice emits a bounds-check abort with stderr message */
         g_needs_stdio = true;
-        detect_features_expr(e->slice.object);
-        detect_features_expr(e->slice.lo);
-        detect_features_expr(e->slice.hi);
-        return;
+        break;
     case EXPR_STRUCT_LIT:
         /* Struct literal with fixed-array field emits an overflow abort with stderr */
         if (e->type && e->type->kind == TYPE_STRUCT) {
@@ -7806,25 +7150,13 @@ static void detect_features_expr(Expr *e) {
                 }
             }
         }
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            detect_features_expr(e->struct_lit.fields[i].value);
-        return;
-    case EXPR_ARRAY_LIT:
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            detect_features_expr(e->array_lit.elems[i]);
-        return;
-    case EXPR_TUPLE_LIT:
-        for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            detect_features_expr(e->tuple_lit.elems[i]);
-        return;
+        break;
     case EXPR_SLICE_LIT:
         /* A runtime-len slice literal emits a negative-length abort via stderr
-         * (fc_neg_len).  Provably non-negative lens skip the guard. */
+         * (fc_neg_len). Provably non-negative lens skip the guard. */
         if (!e->slice_lit.len_nonneg)
             g_needs_stdio = true;
-        detect_features_expr(e->slice_lit.ptr_expr);
-        detect_features_expr(e->slice_lit.len_expr);
-        return;
+        break;
     case EXPR_IDENT:
         /* Built-in globals stdin/stdout/stderr require stdio.h */
         if (e->ident.name &&
@@ -7832,21 +7164,11 @@ static void detect_features_expr(Expr *e) {
              strcmp(e->ident.name, "stdout") == 0 ||
              strcmp(e->ident.name, "stderr") == 0))
             g_needs_stdio = true;
-        return;
-    case EXPR_SIZEOF:
-    case EXPR_ALIGNOF:
-    case EXPR_DEFAULT:
-    case EXPR_INT_LIT:
-    case EXPR_FLOAT_LIT:
-    case EXPR_BOOL_LIT:
-    case EXPR_VOID_LIT:
-    case EXPR_CHAR_LIT:
-    case EXPR_STRING_LIT:
-    case EXPR_CSTRING_LIT:
-    case EXPR_CONTINUE:
-    case EXPR_TYPE_VAR_REF:
-        return;
+        break;
+    default:
+        break;
     }
+    expr_for_each_child(e, detect_features_child, NULL);
 }
 
 static void detect_features_decl(Decl *d) {
@@ -8310,6 +7632,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     TypeSet fns = {0};
     TypeSet eqs = {0};
     TypeSet enum_ofs = {0};
+    TypeSets sets = { &slices, &options, &fns };
     g_eq_set = &eqs;
     g_results_set = &results;
     g_enum_of_set = &enum_ofs;
@@ -8319,7 +7642,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         if (is_generic_decl(d)) continue;
         if (d->kind == DECL_LET) {
             collect_types_in_type(d->let.resolved_type, &slices, &options, &fns);
-            collect_types_expr(d->let.init, &slices, &options, &fns);
+            collect_types_expr(d->let.init, &sets);
         }
         if (d->kind == DECL_STRUCT) {
             for (int j = 0; j < d->struc.field_count; j++)
@@ -8354,7 +7677,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         SubstCtx subst = { inst->type_param_names, inst->type_args, inst->type_param_count };
         g_subst = &subst;
         for (int j = 0; j < fn->func.body_count; j++)
-            collect_types_expr(fn->func.body[j], &slices, &options, &fns);
+            collect_types_expr(fn->func.body[j], &sets);
         g_subst = NULL;
     }
     g_eq_set = NULL;
@@ -8766,7 +8089,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         Decl *d = all_decls[i];
         if (d->kind == DECL_LET && !is_func_decl(d) && d->let.is_module_member &&
             d->let.init && d->let.init->kind != EXPR_FUNC) {
-            collect_const_backings(d->let.init, d->let.is_frozen);
+            bool rodata = d->let.is_frozen;
+            collect_const_backings(d->let.init, &rodata);
         }
     }
 

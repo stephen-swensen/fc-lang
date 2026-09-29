@@ -1410,6 +1410,42 @@ check("completion: a top-level function sees its own locals/params",
 check("completion: a module-internal local does not leak to a top-level scope",
       "expanded_len" not in intop, str([l for l in intop if "expand" in (l or "")]))
 
+# --- every binding form and every expression position is walked ----------------
+# Completion offers a function's bindings of every form (for-loop variables,
+# destructured names, match-arm bindings), even ones never referenced, and both
+# completion and inlay hints reach a `let` inside a lambda inside a tuple literal.
+LOCALS = (
+    "let main = (args: str[]) ->\n"                                        # 0
+    "    let t = { (x: i32) -> let doubled = x * 2 in doubled, 0 }\n"       # 1
+    "    for i, item in args do\n"                                         # 2
+    "        let { first, second } = { 1, 2 }\n"                           # 3
+    "        match some(3) with\n"                                         # 4
+    "        | some(inner) -> assert(true)\n"                              # 5
+    "        | none -> assert(false)\n"                                    # 6
+    "    \n"                                                               # 7  cursor
+    "    let g = t[0]\n"                                                   # 8
+    "    g(1)\n"                                                           # 9
+)
+lo = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    open_doc(1, LOCALS),
+    req(2, "textDocument/completion", {"textDocument": {"uri": URI}, "position": {"line": 7, "character": 4}}),
+    req(3, "textDocument/inlayHint", {"textDocument": {"uri": URI},
+        "range": {"start": {"line": 0, "character": 0}, "end": {"line": 10, "character": 0}}}),
+    req(9, "shutdown", None), note("exit", None),
+]
+loresp, _, _, _, _ = run_session(lo)
+lo_res = loresp.get(2, {}).get("result") or {}
+lo_labels = [it.get("label") for it in ((lo_res.get("items") if isinstance(lo_res, dict) else lo_res) or [])]
+check("completion: for-loop variables, destructured names and match bindings are offered",
+      all(x in lo_labels for x in ("i", "item", "first", "second", "inner")), str(lo_labels))
+check("completion: a let inside a lambda inside a tuple literal is offered",
+      "doubled" in lo_labels, str(lo_labels))
+lo_ih = loresp.get(3, {}).get("result") or []
+check("inlayHint: a let inside a lambda inside a tuple literal gets a hint",
+      any(h.get("position", {}).get("line") == 1 and h.get("label") == ": i32" for h in lo_ih),
+      json.dumps(lo_ih)[:300])
+
 # --- completion: scope walk survives the multi-file merge's namespace sentinels.
 # analyze() injects a line-0 / NULL-filename DECL_NAMESPACE "reset sentinel"
 # before every merged file that doesn't open with a namespace (src/analyze.c). In

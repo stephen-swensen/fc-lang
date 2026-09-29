@@ -1,0 +1,15 @@
+// A slice literal inside a tuple literal in a module constant gets a static
+// backing array, like one directly in the constant.
+struct holder =
+    pair: {i32[], i32}
+
+module m =
+    let t = { i32[2] { 1, 2 }, 3 }
+    let nested = { 0, { i32[3] { 7, 8, 9 }, 1 } }
+    let h = holder { pair = { i32[1] { 4 }, 5 } }
+
+let main = (args: str[]) ->
+    assert(m.t[0][1] == 2)
+    assert(m.nested[1][0][2] == 9)
+    assert(m.h.pair[0][0] == 4)
+    0

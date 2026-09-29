@@ -1,0 +1,15 @@
+// Lambdas and option types that appear only inside a match arm's `when` guard
+// are lifted and declared like those anywhere else.
+let main = (args: str[]) ->
+    let o = some(5)
+    let r = match o with
+        | some(v) when ((x: i32) -> x > 3)(v) -> v
+        | _ -> 0
+    assert(r == 5)
+    let k = 2
+    let s = match o with
+        | some(v) when ((x: i32) -> x == k)(v) -> 1
+        | some(v) when some(7u16)! == 7u16 -> v
+        | _ -> 0
+    assert(s == 5)
+    0

@@ -43,6 +43,22 @@ CLAUDE.md.
   stable reference.
 - When this plan is finished, move it to `spec/hist/`.
 
+## Status
+
+- **Phases 1 and 2: done (2026-09-28).** `src/ast.c` provides
+  `expr_for_each_child`, `expr_any_child` and `pattern_for_each_child`. Every
+  whole-tree walker listed in phase 2 now uses them. B1-B10 are fixed and
+  tested, and the module-cycle check has moved to the end of pass2.
+- Tests for B11-B21 are written together with their fixes in phase 3, so each
+  checkpoint leaves the suite green.
+- Moving the walkers found five more bugs of the same kind, now fixed and
+  tested (listed under B22-B26 below).
+- Open question: the cycle check still counts only references made in a
+  top-level module's own member initializers and imports, as before. A
+  reference from inside a nested module, or through a type annotation, does
+  not make its enclosing top-level module depend on the target. Decide
+  whether that should change.
+
 ## Phase 1: Tests for the confirmed bugs (about 1/2 day)
 
 Write each program below as a test in the matching `tests/cases/` category.
@@ -274,6 +290,27 @@ B21. `import a, b, c from m` produces declarations in the order a, c, b,
 because `pending_decls` is drained from the back (parser.c, the module-body
 and top-level decl loops). No visible effect is known beyond diagnostic
 order. It is fixed as part of phase 4 (removing `pending_decls`).
+
+### Found while doing phase 2 (all fixed)
+
+Each of these was a hand-written walker that skipped a child the visitor now
+covers.
+
+- B22. An `unguarded` or `checked` marker whose only governed operation was
+  in a match arm's `when` guard was rejected as redundant.
+  (`unguarded/match_guard_index`, `checked/match_guard_overflow`)
+- B23. A `defer` whose expression used `?` inside a match guard was accepted,
+  and the compiler then segfaulted. (`defer/propagate_in_match_guard_err`)
+- B24. An operation on type variables in a match guard was never checked per
+  instance, so fcc exited 0 and the C failed to compile.
+  (`generics/match_guard_op_err`)
+- B25. A recursive function whose self-call sat inside a tuple or struct
+  literal was reported as "never returns". The wrong branch-ordering decision
+  came from `expr_refs_self` not searching literals.
+  (`functions/rec_order_literal`)
+- B26. A slice literal inside a tuple literal in a module constant was
+  emitted with a null pointer, and reading it segfaulted.
+  (`tuples/module_const_slice_elem`)
 
 ## Phase 2: One shared expression visitor (about 2-3 days)
 

@@ -1,0 +1,12 @@
+module a =
+    let f = (o: i32?) ->
+        match o with
+        | some(v) when b.pos(v) -> v
+        | _ -> 0
+
+module b =
+    let pos = (x: i32) -> x > 0
+    let h = (x: i32) -> a.f(some(x))
+
+let main = (args: str[]) ->
+    0

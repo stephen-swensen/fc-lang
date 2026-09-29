@@ -1,0 +1,13 @@
+// A slice literal inside a tuple literal reuses one backing slot hoisted to
+// function entry, like any other stack slice literal in a loop. 100_000
+// iterations of a 2 KB array would need ~200 MB of stack if each iteration
+// allocated its own.
+let main = (args: str[]) ->
+    let mut acc = 0i64
+    for i in 0..100000 do
+        let t = { i32[512] { }, i }
+        t[0][0] = i
+        t[0][511] = t[1]
+        acc = acc + (i64) (t[0][0] + t[0][511])
+    assert(acc == 9999900000i64)
+    0

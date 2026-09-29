@@ -1,0 +1,15 @@
+// A self-call inside a tuple or struct literal consumes the recursive result,
+// so the branch holding it is checked after the base case that anchors the
+// return type.
+struct pair =
+    a: i32
+    b: i32
+
+let g = (n: i32) -> if n > 0 then { g(n - 1)[0] + 1, n } else { 0, 0 }
+
+let h = (n: i32) -> if n > 0 then pair { a = h(n - 1).a + 2, b = n } else pair { a = 0, b = 0 }
+
+let main = (args: str[]) ->
+    assert(g(3)[0] == 3)
+    assert(h(3).a == 6)
+    0

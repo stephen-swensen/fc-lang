@@ -405,189 +405,50 @@ static LocalBinding *scope_find_binding(Scope *s, const char *name) {
     return NULL;
 }
 
-/* One pre-taint sweep over a loop-body expression tree. Taints any in-scope mut
- * binding assigned a may-be-stack value; sets *changed when a binding newly
- * becomes stack so the caller can iterate to a fixpoint (covering p = q; q = &x
- * chains regardless of textual order). Does not descend into nested lambdas:
- * mut bindings cannot be captured, so an assignment there cannot target an outer
- * mut binding. */
-static void pretaint_walk(Scope *scope, Expr *e, bool *changed) {
-    if (!e) return;
-    switch (e->kind) {
-    case EXPR_ASSIGN:
-        if (e->assign.target->kind == EXPR_IDENT &&
-            expr_may_yield_stack(scope, e->assign.value)) {
-            LocalBinding *b = scope_find_binding(scope, e->assign.target->ident.name);
+typedef struct {
+    Scope *scope;
+    bool changed;   /* a binding newly became stack-tainted this sweep */
+} Pretaint;
+
+/* One pre-taint sweep over a loop-body expression tree: taint any in-scope mut
+ * binding assigned a may-be-stack value. The caller repeats sweeps until
+ * nothing changes, which covers p = q; q = &x chains in any textual order.
+ * Nested lambdas are not searched: mut bindings cannot be captured, so an
+ * assignment there cannot target an outer mut binding. */
+static void pretaint_walk(Expr *e, void *pretaint) {
+    Pretaint *pt = pretaint;
+    if (e->kind == EXPR_FUNC) return;
+    if (e->kind == EXPR_ASSIGN && expr_may_yield_stack(pt->scope, e->assign.value)) {
+        Expr *target = e->assign.target;
+        if (target->kind == EXPR_IDENT) {
+            LocalBinding *b = scope_find_binding(pt->scope, target->ident.name);
             if (b && b->is_mut && b->prov != PROV_STACK && type_has_provenance(b->type)) {
                 b->prov = PROV_STACK;
-                *changed = true;
+                pt->changed = true;
             }
         }
         /* The same textual-order problem for `c[i] = &x`: a later iteration
          * reads back what an earlier one stored, so the element taint has to
          * be in place before the body is checked. Unlike the binding taint
-         * this needs no mutability — `let` containers are content-mutable. */
-        if (e->assign.target->kind == EXPR_INDEX &&
-            e->assign.target->index.object->kind == EXPR_IDENT &&
-            expr_may_yield_stack(scope, e->assign.value)) {
-            LocalBinding *b = scope_find_binding(scope,
-                e->assign.target->index.object->ident.name);
+         * this needs no mutability, since `let` containers are content-mutable. */
+        if (target->kind == EXPR_INDEX && target->index.object->kind == EXPR_IDENT) {
+            LocalBinding *b = scope_find_binding(pt->scope, target->index.object->ident.name);
             if (b && b->elem_prov != PROV_STACK) {
                 b->elem_prov = PROV_STACK;
-                *changed = true;
+                pt->changed = true;
             }
         }
-        pretaint_walk(scope, e->assign.target, changed);
-        pretaint_walk(scope, e->assign.value, changed);
-        break;
-    case EXPR_FUNC:
-        break;   /* nested lambda: own scope, cannot reach outer mut bindings */
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            pretaint_walk(scope, e->block.stmts[i], changed);
-        break;
-    case EXPR_IF:
-        pretaint_walk(scope, e->if_expr.cond, changed);
-        pretaint_walk(scope, e->if_expr.then_body, changed);
-        pretaint_walk(scope, e->if_expr.else_body, changed);
-        break;
-    case EXPR_MATCH:
-        pretaint_walk(scope, e->match_expr.subject, changed);
-        for (int i = 0; i < e->match_expr.arm_count; i++)
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                pretaint_walk(scope, e->match_expr.arms[i].body[j], changed);
-        break;
-    case EXPR_LOOP:
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            pretaint_walk(scope, e->loop_expr.body[i], changed);
-        break;
-    case EXPR_FOR:
-        pretaint_walk(scope, e->for_expr.iter, changed);
-        if (e->for_expr.range_end) pretaint_walk(scope, e->for_expr.range_end, changed);
-        for (int i = 0; i < e->for_expr.body_count; i++)
-            pretaint_walk(scope, e->for_expr.body[i], changed);
-        break;
-    case EXPR_LET:
-        pretaint_walk(scope, e->let_expr.let_init, changed);
-        break;
-    case EXPR_LET_DESTRUCT:
-        pretaint_walk(scope, e->let_destruct.init, changed);
-        break;
-    case EXPR_RETURN:
-        pretaint_walk(scope, e->return_expr.value, changed);
-        break;
-    case EXPR_BREAK:
-        pretaint_walk(scope, e->break_expr.value, changed);
-        break;
-    case EXPR_DEFER:
-        pretaint_walk(scope, e->defer_expr.value, changed);
-        break;
-    case EXPR_IGNORE:
-        pretaint_walk(scope, e->ignore_expr.value, changed);
-        break;
-    case EXPR_BINARY:
-        pretaint_walk(scope, e->binary.left, changed);
-        pretaint_walk(scope, e->binary.right, changed);
-        break;
-    case EXPR_UNARY_PREFIX:
-        pretaint_walk(scope, e->unary_prefix.operand, changed);
-        break;
-    case EXPR_UNARY_POSTFIX:
-        pretaint_walk(scope, e->unary_postfix.operand, changed);
-        break;
-    case EXPR_CALL:
-        pretaint_walk(scope, e->call.func, changed);
-        for (int i = 0; i < e->call.arg_count; i++)
-            pretaint_walk(scope, e->call.args[i], changed);
-        break;
-    case EXPR_FIELD:
-    case EXPR_DEREF_FIELD:
-        pretaint_walk(scope, e->field.object, changed);
-        break;
-    case EXPR_INDEX:
-        pretaint_walk(scope, e->index.object, changed);
-        pretaint_walk(scope, e->index.index, changed);
-        break;
-    case EXPR_SLICE:
-        pretaint_walk(scope, e->slice.object, changed);
-        pretaint_walk(scope, e->slice.lo, changed);
-        pretaint_walk(scope, e->slice.hi, changed);
-        break;
-    case EXPR_CAST:
-        pretaint_walk(scope, e->cast.operand, changed);
-        break;
-    case EXPR_BITCAST:
-        pretaint_walk(scope, e->bitcast_expr.operand, changed);
-        break;
-    case EXPR_ENUM_OF:
-        pretaint_walk(scope, e->enum_of_expr.operand, changed);
-        break;
-    case EXPR_GUARD:
-        pretaint_walk(scope, e->guard.body, changed);
-        break;
-    case EXPR_SOME:
-        pretaint_walk(scope, e->some_expr.value, changed);
-        break;
-    case EXPR_OK:
-        pretaint_walk(scope, e->ok_expr.value, changed);
-        break;
-    case EXPR_ERROR_NAME:
-        pretaint_walk(scope, e->error_name_expr.code, changed);
-        break;
-    case EXPR_ERR:
-        pretaint_walk(scope, e->err_expr.code, changed);
-        break;
-    case EXPR_ASSERT:
-        pretaint_walk(scope, e->assert_expr.condition, changed);
-        pretaint_walk(scope, e->assert_expr.message, changed);
-        break;
-    case EXPR_ALLOC:
-        pretaint_walk(scope, e->alloc_expr.init_expr, changed);
-        pretaint_walk(scope, e->alloc_expr.size_expr, changed);
-        break;
-    case EXPR_FREE:
-        pretaint_walk(scope, e->free_expr.operand, changed);
-        break;
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            pretaint_walk(scope, e->struct_lit.fields[i].value, changed);
-        break;
-    case EXPR_ARRAY_LIT:
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            pretaint_walk(scope, e->array_lit.elems[i], changed);
-        break;
-    case EXPR_TUPLE_LIT:
-        for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            pretaint_walk(scope, e->tuple_lit.elems[i], changed);
-        break;
-    case EXPR_SLICE_LIT:
-        pretaint_walk(scope, e->slice_lit.ptr_expr, changed);
-        pretaint_walk(scope, e->slice_lit.len_expr, changed);
-        break;
-    case EXPR_INTERP_STRING:
-        for (int i = 0; i < e->interp_string.segment_count; i++)
-            if (!e->interp_string.segments[i].is_literal)
-                pretaint_walk(scope, e->interp_string.segments[i].expr, changed);
-        break;
-    case EXPR_ATOMIC_LOAD:
-        pretaint_walk(scope, e->atomic_load.ptr, changed);
-        break;
-    case EXPR_ATOMIC_STORE:
-        pretaint_walk(scope, e->atomic_store.ptr, changed);
-        pretaint_walk(scope, e->atomic_store.value, changed);
-        break;
-    default:
-        break;
     }
+    expr_for_each_child(e, pretaint_walk, pretaint);
 }
 
 /* Pre-taint a loop body to a fixpoint before it is type-checked. */
 static void pretaint_loop_body(Scope *scope, Expr **body, int count) {
-    bool changed = true;
-    while (changed) {
-        changed = false;
+    Pretaint pt = { scope, true };
+    while (pt.changed) {
+        pt.changed = false;
         for (int i = 0; i < count; i++)
-            pretaint_walk(scope, body[i], &changed);
+            if (body[i]) pretaint_walk(body[i], &pt);
     }
 }
 
@@ -728,62 +589,15 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e);
  * order; they only ever change the order of checking, never the resulting types,
  * so a misjudgment can at worst forgo an ordering improvement. */
 
-/* Does e syntactically reference the recursive function `self` (called or used
-   as a value)? Does not descend into nested lambda bodies — a self-reference
-   there is deferred (the lambda is a value, not evaluated as part of e), so it
-   does not make e's own value depend on the not-yet-inferred return type. */
-static bool expr_refs_self(Expr *e, const char *self) {
-    if (!e || !self) return false;
-    switch (e->kind) {
-    case EXPR_IDENT:        return e->ident.name == self;
-    case EXPR_BINARY:       return expr_refs_self(e->binary.left, self) ||
-                                   expr_refs_self(e->binary.right, self);
-    case EXPR_UNARY_PREFIX: return expr_refs_self(e->unary_prefix.operand, self);
-    case EXPR_UNARY_POSTFIX:return expr_refs_self(e->unary_postfix.operand, self);
-    case EXPR_CALL:
-        if (expr_refs_self(e->call.func, self)) return true;
-        for (int i = 0; i < e->call.arg_count; i++)
-            if (expr_refs_self(e->call.args[i], self)) return true;
-        return false;
-    case EXPR_FIELD:
-    case EXPR_DEREF_FIELD:  return expr_refs_self(e->field.object, self);
-    case EXPR_INDEX:        return expr_refs_self(e->index.object, self) ||
-                                   expr_refs_self(e->index.index, self);
-    case EXPR_SLICE:        return expr_refs_self(e->slice.object, self) ||
-                                   (e->slice.lo && expr_refs_self(e->slice.lo, self)) ||
-                                   (e->slice.hi && expr_refs_self(e->slice.hi, self));
-    case EXPR_CAST:         return expr_refs_self(e->cast.operand, self);
-    case EXPR_BITCAST:      return expr_refs_self(e->bitcast_expr.operand, self);
-    case EXPR_ENUM_OF:      return expr_refs_self(e->enum_of_expr.operand, self);
-    case EXPR_GUARD:        return expr_refs_self(e->guard.body, self);
-    case EXPR_SOME:         return expr_refs_self(e->some_expr.value, self);
-    case EXPR_OK:           return expr_refs_self(e->ok_expr.value, self);
-    case EXPR_ERR:          return expr_refs_self(e->err_expr.code, self);
-    case EXPR_ERROR_NAME:   return expr_refs_self(e->error_name_expr.code, self);
-    case EXPR_ASSERT:       return expr_refs_self(e->assert_expr.condition, self);
-    case EXPR_IF:           return expr_refs_self(e->if_expr.cond, self) ||
-                                   expr_refs_self(e->if_expr.then_body, self) ||
-                                   (e->if_expr.else_body && expr_refs_self(e->if_expr.else_body, self));
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            if (expr_refs_self(e->block.stmts[i], self)) return true;
-        return false;
-    case EXPR_MATCH:
-        if (expr_refs_self(e->match_expr.subject, self)) return true;
-        for (int i = 0; i < e->match_expr.arm_count; i++) {
-            MatchArm *arm = &e->match_expr.arms[i];
-            for (int j = 0; j < arm->body_count; j++)
-                if (expr_refs_self(arm->body[j], self)) return true;
-        }
-        return false;
-    case EXPR_RETURN:       return e->return_expr.value && expr_refs_self(e->return_expr.value, self);
-    case EXPR_BREAK:        return e->break_expr.value && expr_refs_self(e->break_expr.value, self);
-    case EXPR_IGNORE:      return expr_refs_self(e->ignore_expr.value, self);
-    /* Other forms (literals, nested EXPR_FUNC, struct/tuple/slice literals, …) do
-       not contribute a self-recursive call to a value position we order against;
-       treat them as self-free. */
-    default:                return false;
-    }
+/* Does e syntactically reference the recursive function (called or used as a
+   value)? `self` is its interned name. Nested lambda bodies are not searched:
+   a self-reference there is deferred (the lambda is a value, not evaluated as
+   part of e), so it does not make e's own value depend on the not-yet-inferred
+   return type. */
+static bool expr_refs_self(Expr *e, void *self) {
+    if (e->kind == EXPR_IDENT) return e->ident.name == self;
+    if (e->kind == EXPR_FUNC) return false;
+    return expr_any_child(e, expr_refs_self, self);
 }
 
 /* Can checking this branch anchor the recursive return type — i.e. does it have a
@@ -809,7 +623,7 @@ static bool branch_can_anchor(Expr *e, const char *self) {
     case EXPR_GUARD:
         return branch_can_anchor(e->guard.body, self);
     default:
-        return !expr_refs_self(e, self);
+        return !expr_refs_self(e, (void *)self);
     }
 }
 
@@ -3673,452 +3487,333 @@ static bool check_inst_type_operand(const InstFrame *frame, Arena *arena, Type *
     return check_inst_sizes_frame(conc, frame, loc);
 }
 
-/* Walk a generic function body with concrete type bindings and validate
- * operations that were deferred during template type-checking (i.e. binary
- * operations on type variables and type property access).
- * Returns true if validation passed. */
+/* One per-instance validation of a generic body: the concrete bindings it is
+ * checked under, the chain of instantiations that led to it, and whether it
+ * has passed so far. */
+typedef struct {
+    Arena *arena;
+    const char **type_params;
+    Type **bindings;
+    int ntp;
+    const InstFrame *frame;
+    bool ok;
+} GenericCheck;
+
+static void validate_generic_expr(Expr *e, void *check);
+
+/* A binary operation deferred at template time because an operand's type
+ * involves type variables: apply the operator's rules to the concrete types. */
+static void check_generic_binary(Expr *e, GenericCheck *gc) {
+    Type *lt_raw = e->binary.left->type;
+    Type *rt_raw = e->binary.right->type;
+    if (!lt_raw || !rt_raw) return;
+    if (!type_contains_type_var(lt_raw) && !type_contains_type_var(rt_raw)) return;
+
+    Type *lt = type_substitute(gc->arena, lt_raw, gc->type_params, gc->bindings, gc->ntp);
+    Type *rt = type_substitute(gc->arena, rt_raw, gc->type_params, gc->bindings, gc->ntp);
+    TokenKind op = e->binary.op;
+    const InstFrame *frame = gc->frame;
+
+    if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR ||
+        op == TOK_SLASH || op == TOK_PERCENT) {
+        if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
+            gen_inst_diag(frame, e->loc, "arithmetic requires numeric operands, got %s and %s",
+                type_name(lt), type_name(rt));
+            gc->ok = false;
+        } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
+            gen_inst_diag(frame, e->loc, "type mismatch: %s vs %s",
+                type_name(lt), type_name(rt));
+            gc->ok = false;
+        }
+    } else if (op == TOK_EQEQ || op == TOK_BANGEQ) {
+        if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
+            gen_inst_diag(frame, e->loc, "comparison type mismatch: %s vs %s",
+                type_name(lt), type_name(rt));
+            gc->ok = false;
+        }
+    } else if (op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
+        if (lt->kind == TYPE_ENUM && rt->kind == TYPE_ENUM && type_eq(lt, rt)) {
+            /* same-enum ordering is admissible (lockstep with the
+             * concrete checker's enum-ordering branch) */
+        } else if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
+            gen_inst_diag(frame, e->loc, "ordering comparison requires numeric or pointer types, got %s and %s",
+                type_name(lt), type_name(rt));
+            gc->ok = false;
+        } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
+            gen_inst_diag(frame, e->loc, "comparison type mismatch: %s vs %s",
+                type_name(lt), type_name(rt));
+            gc->ok = false;
+        }
+    } else if (op == TOK_AMPAMP || op == TOK_PIPEPIPE) {
+        if (!type_eq(lt, type_bool()) || !type_eq(rt, type_bool())) {
+            gen_inst_diag(frame, e->loc, "logical operator requires bool operands");
+            gc->ok = false;
+        }
+    } else if (op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET ||
+               op == TOK_LTLT || op == TOK_GTGT) {
+        if (!type_is_integer(lt) || !type_is_integer(rt)) {
+            gen_inst_diag(frame, e->loc, "bitwise/shift operator requires integer operands");
+            gc->ok = false;
+        } else if (op != TOK_LTLT && op != TOK_GTGT &&
+                   !type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
+            gen_inst_diag(frame, e->loc, "type mismatch: %s vs %s",
+                type_name(lt), type_name(rt));
+            gc->ok = false;
+        }
+    }
+}
+
+/* A unary minus or bitwise not on a type-variable operand. */
+static void check_generic_unary(Expr *e, GenericCheck *gc) {
+    Type *ot_raw = e->unary_prefix.operand->type;
+    if (!ot_raw || !type_contains_type_var(ot_raw)) return;
+    Type *ot = type_substitute(gc->arena, ot_raw, gc->type_params, gc->bindings, gc->ntp);
+    if (e->unary_prefix.op == TOK_MINUS) {
+        /* Same rule as the concrete path: signed/float only, never unsigned. */
+        if (!type_is_signed(ot) && !type_is_float(ot)) {
+            gen_inst_diag(gc->frame, e->loc, "unary minus requires a signed integer or float operand, got %s",
+                type_name(ot));
+            gc->ok = false;
+        }
+    } else if (e->unary_prefix.op == TOK_TILDE) {
+        if (!type_is_integer(ot)) {
+            gen_inst_diag(gc->frame, e->loc, "bitwise not requires integer operand, got %s",
+                type_name(ot));
+            gc->ok = false;
+        }
+    }
+}
+
+/* A property of a type variable ('a.nan, 'a.min, ...) must exist on the
+ * concrete type. */
+static void check_generic_type_property(Expr *e, GenericCheck *gc) {
+    if (e->field.object->kind != EXPR_TYPE_VAR_REF) return;
+    const char *tv_name = e->field.object->type_var_ref.name;
+    const char *prop = e->field.name;
+    Type *concrete = NULL;
+    for (int i = 0; i < gc->ntp; i++) {
+        if (gc->type_params[i] == tv_name || strcmp(gc->type_params[i], tv_name) == 0) {
+            concrete = gc->bindings[i];
+            break;
+        }
+    }
+    if (!concrete) return;
+    bool is_int = type_is_integer(concrete);
+    bool is_float = type_is_float(concrete);
+    bool valid = false;
+    if (strcmp(prop, "bits") == 0) {
+        valid = is_int || is_float;
+    } else if (strcmp(prop, "min") == 0 || strcmp(prop, "max") == 0) {
+        valid = is_int || is_float;
+    } else if (strcmp(prop, "nan") == 0 || strcmp(prop, "inf") == 0 ||
+               strcmp(prop, "neg_inf") == 0 || strcmp(prop, "epsilon") == 0) {
+        valid = is_float;
+    }
+    if (!valid) {
+        gen_inst_diag(gc->frame, e->loc, "type '%s' has no property '%s'",
+            type_name(concrete), prop);
+        gc->ok = false;
+    }
+}
+
+/* A const param in expression position behaves as an i32 literal, so the
+ * bound value must fit. */
+static void check_generic_const_param(Expr *e, GenericCheck *gc) {
+    if (!e->type_var_ref.is_const_param) return;
+    for (int i = 0; i < gc->ntp; i++) {
+        if (gc->type_params[i] != e->type_var_ref.name) continue;
+        Type *b = gc->bindings[i];
+        if (b && b->kind == TYPE_CONST_INT) {
+            int64_t v = b->const_int.value;
+            if (v < INT32_MIN || v > INT32_MAX) {
+                gen_inst_diag(gc->frame, e->loc,
+                    "const parameter %s = %lld does not fit i32 in expression position "
+                    "(a const parameter is an i32 where it is read as a value; a value "
+                    "this large is usable only in a type or size position)",
+                    e->type_var_ref.name, (long long)v);
+                gc->ok = false;
+            }
+        } else if (b && b->kind != TYPE_TYPE_VAR && b->kind != TYPE_CONST_EXPR) {
+            /* Backstop: bound to a type. The call-site kind gate normally
+             * catches this; ordering holes must not slip through to codegen. */
+            gen_inst_diag(gc->frame, e->loc,
+                "const parameter %s is bound to a type (%s), not a constant",
+                e->type_var_ref.name, type_name(b));
+            gc->ok = false;
+        }
+        return;
+    }
+}
+
+/* A slice literal's size deferred at template time (it uses const generic
+ * params) is folded and checked per instance. */
+static void check_generic_array_size(Expr *e, GenericCheck *gc) {
+    if (!e->array_lit.size_expr || e->array_lit.size_expr->kind == EXPR_INT_LIT) return;
+    Type wrapper = {0};
+    wrapper.kind = TYPE_CONST_EXPR;
+    wrapper.const_expr.expr = e->array_lit.size_expr;
+    int64_t sz;
+    if (const_type_eval(&wrapper, gc->type_params, gc->bindings, gc->ntp, &sz)) {
+        if (sz < 0) {
+            gen_inst_diag(gc->frame, e->array_lit.size_expr->loc,
+                "slice literal length cannot be negative, got %lld", (long long)sz);
+            gc->ok = false;
+        } else if (sz > fc_len_max()) {
+            gen_inst_diag(gc->frame, e->array_lit.size_expr->loc,
+                "slice literal length %lld exceeds --len-repr %d length capacity %lld",
+                (long long)sz, g_len_repr, (long long)fc_len_max());
+            gc->ok = false;
+        } else if (e->array_lit.elem_count > 0 &&
+                   (int64_t)e->array_lit.elem_count != sz) {
+            gen_inst_diag(gc->frame, e->loc,
+                "slice literal has %d element%s but declared length is %lld; "
+                "the element list must be exhaustive (or use `{ }` to zero-initialize)",
+                e->array_lit.elem_count,
+                e->array_lit.elem_count == 1 ? "" : "s", (long long)sz);
+            gc->ok = false;
+        }
+    } else {
+        SrcLoc eloc = {0};
+        const char *emsg = const_eval_take_error(&eloc);
+        if (emsg) {
+            gen_inst_diag(gc->frame, eloc.filename ? eloc : e->loc, "%s", emsg);
+            gc->ok = false;
+        }
+    }
+}
+
+/* Transitive validation: when a call targets another generic function,
+ * propagate the concrete bindings into the callee's body so that an
+ * unsupported operation on the instantiated type is reported at the
+ * originating call site rather than leaking to the C compiler. (A generic
+ * that fails only for some types would otherwise type-check at its own
+ * definition but emit invalid C when reached through a wrapper.) */
+static void validate_generic_callee(Expr *e, GenericCheck *gc) {
+    Arena *arena = gc->arena;
+    Symbol *callee = e->call.resolved_callee;
+    Type *cft = e->call.func ? e->call.func->type : NULL;
+    if (!callee || !callee->is_generic || callee->type_param_count == 0 ||
+        !callee->decl || callee->decl->kind != DECL_LET || !callee->decl->let.init ||
+        callee->decl->let.init->kind != EXPR_FUNC ||
+        !cft || cft->kind != TYPE_FUNC || cft->func.param_count != e->call.arg_count ||
+        g_gen_xbody_depth >= GEN_XBODY_DEPTH_MAX)
+        return;
+
+    int cntp = callee->type_param_count;
+    Type **cbind = arena_alloc(arena, sizeof(Type*) * (size_t) cntp);
+    memset(cbind, 0, sizeof(Type*) * (size_t) cntp);
+    for (int i = 0; i < e->call.arg_count; i++) {
+        Type *araw = e->call.args[i]->type;
+        if (!araw) return;
+        /* Resolve the argument's type under the CURRENT instantiation. */
+        Type *aconc = type_substitute(arena, araw, gc->type_params, gc->bindings, gc->ntp);
+        if (type_contains_type_var(aconc) ||
+            !unify(arena, cft->func.param_types[i], aconc, callee->type_params, cbind, cntp))
+            return;
+    }
+    for (int i = 0; i < cntp; i++)
+        if (!cbind[i] || type_contains_type_var(cbind[i])) return;
+
+    /* Depth backstop: a binding nesting deeper than any finite program
+     * would means this generic instantiates itself with an ever-growing
+     * type argument: an infinite monomorphized family. Report once (the
+     * pass2 error gate then stops compilation before codegen emits the
+     * dangling/truncated C such a family produces) and don't descend. */
+    int maxd = 0;
+    for (int i = 0; i < cntp; i++) {
+        int d = gen_inst_type_depth(cbind[i]);
+        if (d > maxd) maxd = d;
+    }
+    if (maxd > GEN_INST_DEPTH_MAX) {
+        if (!g_gen_inf_reported) {
+            g_gen_inf_reported = true;
+            diag_error(inst_frame_root(gc->frame)->site,
+                "infinite generic instantiation of '%s': it is instantiated "
+                "with an unbounded family of ever-deeper type arguments "
+                "(exceeded depth %d). A generic function that calls itself "
+                "with a growing type argument (e.g. f(wrap{ v = x }), where "
+                "each call wraps the argument in another generic layer) "
+                "requires infinitely many monomorphized copies.",
+                callee->name, GEN_INST_DEPTH_MAX);
+        }
+        gc->ok = false;
+        return;
+    }
+
+    /* cdesc is the human-readable substitution context threaded into
+     * diagnostics; it lives in the arena, so it stays valid across the
+     * recursive descent. Validate each distinct instantiation once:
+     * recursive or diamond generic calls otherwise re-descend exponentially. */
+    const char *cdesc = fmt_generic_inst(callee->name, arena, cft,
+        callee->type_params, cbind, cntp);
+    /* The memo key adds the structural depth, so two instantiations that
+     * differ only in nesting stay distinct even where the printed signature
+     * does not distinguish them. Kept separate from the display descriptor. */
+    const char *ckey = arena_sprintf(arena, "%d:%s", maxd, cdesc);
+    if (!gen_seen_add(arena, callee, ckey)) return;
+
+    /* Push a chain frame: this callee instantiation, required by the call
+     * expression `e`. Stack-allocated; its lifetime is exactly this descent. */
+    InstFrame child = { cdesc, e->loc, gc->frame };
+    GenericCheck sub = { arena, callee->type_params, cbind, cntp, &child, true };
+    Expr *cfn = callee->decl->let.init;
+    g_gen_xbody_depth++;
+    for (int i = 0; i < cfn->func.body_count; i++)
+        validate_generic_expr(cfn->func.body[i], &sub);
+    g_gen_xbody_depth--;
+    if (!sub.ok) gc->ok = false;
+}
+
+static void check_generic_type_operand(Expr *e, Type *t, GenericCheck *gc) {
+    if (!check_inst_type_operand(gc->frame, gc->arena, t, gc->type_params,
+                                 gc->bindings, gc->ntp, e->loc))
+        gc->ok = false;
+}
+
+/* Walk a generic function body under concrete type bindings and validate the
+ * operations that were deferred during template type-checking: operators and
+ * properties on type variables, const params read as values, sizes that use
+ * const params, and calls into other generic functions. Children are checked
+ * first, so inner errors are reported before outer ones. */
+static void validate_generic_expr(Expr *e, void *check) {
+    GenericCheck *gc = check;
+    switch (e->kind) {
+    case EXPR_STATIC_ASSERT:
+        return;   /* judged per instance in mono_register */
+    case EXPR_ARRAY_LIT:
+        /* The size is a const expression, not a value, so it is not walked. */
+        for (int i = 0; i < e->array_lit.elem_count; i++)
+            validate_generic_expr(e->array_lit.elems[i], gc);
+        check_generic_array_size(e, gc);
+        return;
+    default:
+        break;
+    }
+    expr_for_each_child(e, validate_generic_expr, check);
+    switch (e->kind) {
+    case EXPR_BINARY:       check_generic_binary(e, gc); break;
+    case EXPR_UNARY_PREFIX: check_generic_unary(e, gc); break;
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:  check_generic_type_property(e, gc); break;
+    case EXPR_TYPE_VAR_REF: check_generic_const_param(e, gc); break;
+    case EXPR_CALL:         validate_generic_callee(e, gc); break;
+    case EXPR_ALLOC:        check_generic_type_operand(e, e->alloc_expr.alloc_type, gc); break;
+    case EXPR_DEFAULT:      check_generic_type_operand(e, e->default_expr.target, gc); break;
+    case EXPR_SIZEOF:       check_generic_type_operand(e, e->sizeof_expr.target, gc); break;
+    case EXPR_ALIGNOF:      check_generic_type_operand(e, e->alignof_expr.target, gc); break;
+    default: break;
+    }
+}
+
+/* Validate one statement of a generic body under concrete bindings (see
+ * validate_generic_expr). Returns true if it passed. */
 static bool validate_generic_body(Expr *e, Arena *arena,
     const char **type_params, Type **bindings, int ntp,
     const InstFrame *frame)
 {
-    if (!e) return true;
-    bool ok = true;
-
-    switch (e->kind) {
-    case EXPR_BINARY: {
-        /* Recurse into children first */
-        ok &= validate_generic_body(e->binary.left, arena, type_params, bindings, ntp, frame);
-        ok &= validate_generic_body(e->binary.right, arena, type_params, bindings, ntp, frame);
-
-        Type *lt_raw = e->binary.left->type;
-        Type *rt_raw = e->binary.right->type;
-        if (!lt_raw || !rt_raw) break;
-
-        /* Only check operations that were deferred (involve type vars) */
-        if (!type_contains_type_var(lt_raw) && !type_contains_type_var(rt_raw)) break;
-
-        Type *lt = type_substitute(arena, lt_raw, type_params, bindings, ntp);
-        Type *rt = type_substitute(arena, rt_raw, type_params, bindings, ntp);
-        TokenKind op = e->binary.op;
-
-        if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR ||
-            op == TOK_SLASH || op == TOK_PERCENT) {
-            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-                gen_inst_diag(frame, e->loc, "arithmetic requires numeric operands, got %s and %s",
-                    type_name(lt), type_name(rt));
-                ok = false;
-            } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-                gen_inst_diag(frame, e->loc, "type mismatch: %s vs %s",
-                    type_name(lt), type_name(rt));
-                ok = false;
-            }
-        } else if (op == TOK_EQEQ || op == TOK_BANGEQ) {
-            if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-                gen_inst_diag(frame, e->loc, "comparison type mismatch: %s vs %s",
-                    type_name(lt), type_name(rt));
-                ok = false;
-            }
-        } else if (op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
-            if (lt->kind == TYPE_ENUM && rt->kind == TYPE_ENUM && type_eq(lt, rt)) {
-                /* same-enum ordering is admissible (lockstep with the
-                 * concrete checker's enum-ordering branch) */
-            } else if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-                gen_inst_diag(frame, e->loc, "ordering comparison requires numeric or pointer types, got %s and %s",
-                    type_name(lt), type_name(rt));
-                ok = false;
-            } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-                gen_inst_diag(frame, e->loc, "comparison type mismatch: %s vs %s",
-                    type_name(lt), type_name(rt));
-                ok = false;
-            }
-        } else if (op == TOK_AMPAMP || op == TOK_PIPEPIPE) {
-            if (!type_eq(lt, type_bool()) || !type_eq(rt, type_bool())) {
-                gen_inst_diag(frame, e->loc, "logical operator requires bool operands");
-                ok = false;
-            }
-        } else if (op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET ||
-                   op == TOK_LTLT || op == TOK_GTGT) {
-            if (!type_is_integer(lt) || !type_is_integer(rt)) {
-                gen_inst_diag(frame, e->loc, "bitwise/shift operator requires integer operands");
-                ok = false;
-            } else if (op != TOK_LTLT && op != TOK_GTGT &&
-                       !type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-                gen_inst_diag(frame, e->loc, "type mismatch: %s vs %s",
-                    type_name(lt), type_name(rt));
-                ok = false;
-            }
-        }
-        break;
-    }
-
-    /* Type variable property access: 'a.nan, 'a.min, etc. */
-    case EXPR_FIELD: case EXPR_DEREF_FIELD: {
-        ok &= validate_generic_body(e->field.object, arena, type_params, bindings, ntp, frame);
-        if (e->field.object->kind == EXPR_TYPE_VAR_REF) {
-            const char *tv_name = e->field.object->type_var_ref.name;
-            const char *prop = e->field.name;
-            /* Resolve the type variable to its concrete type */
-            Type *concrete = NULL;
-            for (int i = 0; i < ntp; i++) {
-                if (type_params[i] == tv_name || strcmp(type_params[i], tv_name) == 0) {
-                    concrete = bindings[i];
-                    break;
-                }
-            }
-            if (concrete) {
-                bool is_int = type_is_integer(concrete);
-                bool is_float = type_is_float(concrete);
-                bool valid = false;
-                if (strcmp(prop, "bits") == 0) {
-                    valid = is_int || is_float;
-                } else if (strcmp(prop, "min") == 0 || strcmp(prop, "max") == 0) {
-                    valid = is_int || is_float;
-                } else if (strcmp(prop, "nan") == 0 || strcmp(prop, "inf") == 0 ||
-                           strcmp(prop, "neg_inf") == 0 || strcmp(prop, "epsilon") == 0) {
-                    valid = is_float;
-                }
-                if (!valid) {
-                    gen_inst_diag(frame, e->loc, "type '%s' has no property '%s'",
-                        type_name(concrete), prop);
-                    ok = false;
-                }
-            }
-        }
-        break;
-    }
-
-    /* Recurse into all sub-expressions */
-    case EXPR_UNARY_PREFIX: {
-        ok &= validate_generic_body(e->unary_prefix.operand, arena, type_params, bindings, ntp, frame);
-        /* Validate deferred unary ops on type variables */
-        Type *ot_raw = e->unary_prefix.operand->type;
-        if (ot_raw && type_contains_type_var(ot_raw)) {
-            Type *ot = type_substitute(arena, ot_raw, type_params, bindings, ntp);
-            if (e->unary_prefix.op == TOK_MINUS) {
-                /* Same rule as the concrete path: signed/float only, never unsigned. */
-                if (!type_is_signed(ot) && !type_is_float(ot)) {
-                    gen_inst_diag(frame, e->loc, "unary minus requires a signed integer or float operand, got %s",
-                        type_name(ot));
-                    ok = false;
-                }
-            } else if (e->unary_prefix.op == TOK_TILDE) {
-                if (!type_is_integer(ot)) {
-                    gen_inst_diag(frame, e->loc, "bitwise not requires integer operand, got %s",
-                        type_name(ot));
-                    ok = false;
-                }
-            }
-        }
-        break;
-    }
-    case EXPR_UNARY_POSTFIX:
-        ok &= validate_generic_body(e->unary_postfix.operand, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_CALL: {
-        ok &= validate_generic_body(e->call.func, arena, type_params, bindings, ntp, frame);
-        for (int i = 0; i < e->call.arg_count; i++)
-            ok &= validate_generic_body(e->call.args[i], arena, type_params, bindings, ntp, frame);
-        /* Transitive validation: if this call targets another generic function,
-         * propagate the concrete bindings into the callee's body so that an
-         * unsupported operation on the instantiated type is reported here at the
-         * originating call site — not leaked to the C compiler. (Without this,
-         * a generic that only fails for some types would type-check at its own
-         * definition but emit invalid C when reached through a wrapper.) */
-        Symbol *callee = e->call.resolved_callee;
-        Type *cft = e->call.func ? e->call.func->type : NULL;
-        if (callee && callee->is_generic && callee->type_param_count > 0 &&
-            callee->decl && callee->decl->kind == DECL_LET && callee->decl->let.init &&
-            callee->decl->let.init->kind == EXPR_FUNC &&
-            cft && cft->kind == TYPE_FUNC && cft->func.param_count == e->call.arg_count &&
-            g_gen_xbody_depth < GEN_XBODY_DEPTH_MAX) {
-            int cntp = callee->type_param_count;
-            Type **cbind = arena_alloc(arena, sizeof(Type*) * (size_t) cntp);
-            memset(cbind, 0, sizeof(Type*) * (size_t) cntp);
-            bool unified = true;
-            for (int i = 0; i < e->call.arg_count && unified; i++) {
-                Type *araw = e->call.args[i]->type;
-                if (!araw) { unified = false; break; }
-                /* Resolve the argument's type under the CURRENT instantiation. */
-                Type *aconc = type_substitute(arena, araw, type_params, bindings, ntp);
-                if (type_contains_type_var(aconc) ||
-                    !unify(arena, cft->func.param_types[i], aconc, callee->type_params, cbind, cntp))
-                    unified = false;
-            }
-            if (unified) {
-                for (int i = 0; i < cntp; i++)
-                    if (!cbind[i] || type_contains_type_var(cbind[i])) { unified = false; break; }
-            }
-            /* Depth backstop: a binding nesting deeper than any finite program
-             * would means this generic instantiates itself with an ever-growing
-             * type argument — an infinite monomorphized family. Report once (the
-             * pass2 error gate then stops compilation before codegen emits the
-             * dangling/truncated C such a family produces) and don't descend. */
-            if (unified) {
-                int maxd = 0;
-                for (int i = 0; i < cntp; i++) {
-                    int d = gen_inst_type_depth(cbind[i]);
-                    if (d > maxd) maxd = d;
-                }
-                if (maxd > GEN_INST_DEPTH_MAX) {
-                    if (!g_gen_inf_reported) {
-                        g_gen_inf_reported = true;
-                        diag_error(inst_frame_root(frame)->site,
-                            "infinite generic instantiation of '%s': it is instantiated "
-                            "with an unbounded family of ever-deeper type arguments "
-                            "(exceeded depth %d). A generic function that calls itself "
-                            "with a growing type argument (e.g. f(wrap{ v = x }), where "
-                            "each call wraps the argument in another generic layer) "
-                            "requires infinitely many monomorphized copies.",
-                            callee->name, GEN_INST_DEPTH_MAX);
-                    }
-                    ok = false;
-                } else {
-                    /* cdesc is the human-readable substitution context threaded
-                     * into diagnostics; it lives in the arena, so it stays valid
-                     * across the recursive descent. Validate each distinct
-                     * instantiation once — recursive or diamond generic calls
-                     * otherwise re-descend exponentially. */
-                    const char *cdesc = fmt_generic_inst(callee->name, arena, cft,
-                        callee->type_params, cbind, cntp);
-                    /* The memo key adds the structural depth, so two
-                     * instantiations that differ only in nesting stay distinct
-                     * even where the printed signature does not distinguish
-                     * them. Kept separate from the display descriptor. */
-                    const char *ckey = arena_sprintf(arena, "%d:%s", maxd, cdesc);
-                    if (gen_seen_add(arena, callee, ckey)) {
-                        Expr *cfn = callee->decl->let.init;
-                        /* Push a chain frame: this callee instantiation, required
-                         * by the call expression `e`. Stack-allocated — its
-                         * lifetime is exactly this descent. */
-                        InstFrame child = { cdesc, e->loc, frame };
-                        g_gen_xbody_depth++;
-                        for (int i = 0; i < cfn->func.body_count; i++)
-                            ok &= validate_generic_body(cfn->func.body[i], arena,
-                                callee->type_params, cbind, cntp, &child);
-                        g_gen_xbody_depth--;
-                    }
-                }
-            }
-        }
-        break;
-    }
-    case EXPR_INDEX:
-        ok &= validate_generic_body(e->index.object, arena, type_params, bindings, ntp, frame);
-        ok &= validate_generic_body(e->index.index, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_SLICE:
-        ok &= validate_generic_body(e->slice.object, arena, type_params, bindings, ntp, frame);
-        if (e->slice.lo) ok &= validate_generic_body(e->slice.lo, arena, type_params, bindings, ntp, frame);
-        if (e->slice.hi) ok &= validate_generic_body(e->slice.hi, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_CAST:
-        ok &= validate_generic_body(e->cast.operand, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_BITCAST:
-        ok &= validate_generic_body(e->bitcast_expr.operand, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_ENUM_OF:
-        ok &= validate_generic_body(e->enum_of_expr.operand, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_IF:
-        ok &= validate_generic_body(e->if_expr.cond, arena, type_params, bindings, ntp, frame);
-        ok &= validate_generic_body(e->if_expr.then_body, arena, type_params, bindings, ntp, frame);
-        if (e->if_expr.else_body)
-            ok &= validate_generic_body(e->if_expr.else_body, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_LOOP:
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            ok &= validate_generic_body(e->loop_expr.body[i], arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_FOR:
-        ok &= validate_generic_body(e->for_expr.iter, arena, type_params, bindings, ntp, frame);
-        if (e->for_expr.range_end)
-            ok &= validate_generic_body(e->for_expr.range_end, arena, type_params, bindings, ntp, frame);
-        for (int i = 0; i < e->for_expr.body_count; i++)
-            ok &= validate_generic_body(e->for_expr.body[i], arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_BREAK:
-        if (e->break_expr.value)
-            ok &= validate_generic_body(e->break_expr.value, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_RETURN:
-        if (e->return_expr.value)
-            ok &= validate_generic_body(e->return_expr.value, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            ok &= validate_generic_body(e->block.stmts[i], arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_FUNC:
-        for (int i = 0; i < e->func.body_count; i++)
-            ok &= validate_generic_body(e->func.body[i], arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_ALLOC:
-        if (e->alloc_expr.init_expr)
-            ok &= validate_generic_body(e->alloc_expr.init_expr, arena, type_params, bindings, ntp, frame);
-        if (e->alloc_expr.size_expr)
-            ok &= validate_generic_body(e->alloc_expr.size_expr, arena, type_params, bindings, ntp, frame);
-        ok &= check_inst_type_operand(frame, arena, e->alloc_expr.alloc_type,
-                                      type_params, bindings, ntp, e->loc);
-        break;
-    case EXPR_DEFAULT:
-        ok &= check_inst_type_operand(frame, arena, e->default_expr.target,
-                                      type_params, bindings, ntp, e->loc);
-        break;
-    case EXPR_SIZEOF:
-        ok &= check_inst_type_operand(frame, arena, e->sizeof_expr.target,
-                                      type_params, bindings, ntp, e->loc);
-        break;
-    case EXPR_ALIGNOF:
-        ok &= check_inst_type_operand(frame, arena, e->alignof_expr.target,
-                                      type_params, bindings, ntp, e->loc);
-        break;
-    case EXPR_FREE:
-        ok &= validate_generic_body(e->free_expr.operand, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_ATOMIC_LOAD:
-        ok &= validate_generic_body(e->atomic_load.ptr, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_ATOMIC_STORE:
-        ok &= validate_generic_body(e->atomic_store.ptr, arena, type_params, bindings, ntp, frame);
-        ok &= validate_generic_body(e->atomic_store.value, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_ASSERT:
-        ok &= validate_generic_body(e->assert_expr.condition, arena, type_params, bindings, ntp, frame);
-        if (e->assert_expr.message)
-            ok &= validate_generic_body(e->assert_expr.message, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_DEFER:
-        ok &= validate_generic_body(e->defer_expr.value, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_IGNORE:
-        ok &= validate_generic_body(e->ignore_expr.value, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_SOME:
-        ok &= validate_generic_body(e->some_expr.value, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_OK:
-        ok &= validate_generic_body(e->ok_expr.value, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_ERROR_NAME:
-        ok &= validate_generic_body(e->error_name_expr.code, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_ERR:
-        ok &= validate_generic_body(e->err_expr.code, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_ASSIGN:
-        ok &= validate_generic_body(e->assign.target, arena, type_params, bindings, ntp, frame);
-        ok &= validate_generic_body(e->assign.value, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_TYPE_VAR_REF:
-        /* A const param in expression position behaves as an i32 literal —
-         * check the bound value fits per instance. */
-        if (e->type_var_ref.is_const_param) {
-            for (int i = 0; i < ntp; i++) {
-                if (type_params[i] != e->type_var_ref.name) continue;
-                if (bindings[i] && bindings[i]->kind == TYPE_CONST_INT) {
-                    int64_t v = bindings[i]->const_int.value;
-                    if (v < INT32_MIN || v > INT32_MAX) {
-                        gen_inst_diag(frame, e->loc,
-                            "const parameter %s = %lld does not fit i32 in expression position "
-                            "(a const parameter is an i32 where it is read as a value; a value "
-                            "this large is usable only in a type or size position)",
-                            e->type_var_ref.name, (long long)v);
-                        ok = false;
-                    }
-                } else if (bindings[i] && bindings[i]->kind != TYPE_TYPE_VAR &&
-                           bindings[i]->kind != TYPE_CONST_EXPR) {
-                    /* Backstop: bound to a type — the call-site kind gate
-                     * normally catches this; ordering holes must not slip
-                     * through to codegen. */
-                    gen_inst_diag(frame, e->loc,
-                        "const parameter %s is bound to a type (%s), not a constant",
-                        e->type_var_ref.name, type_name(bindings[i]));
-                    ok = false;
-                }
-                break;
-            }
-        }
-        break;
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            ok &= validate_generic_body(e->struct_lit.fields[i].value, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_ARRAY_LIT: {
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            ok &= validate_generic_body(e->array_lit.elems[i], arena, type_params, bindings, ntp, frame);
-        /* A size expression deferred at template time (it uses const generic
-         * params) is folded and checked per instance. */
-        if (e->array_lit.size_expr && e->array_lit.size_expr->kind != EXPR_INT_LIT) {
-            Type wrapper = {0};
-            wrapper.kind = TYPE_CONST_EXPR;
-            wrapper.const_expr.expr = e->array_lit.size_expr;
-            int64_t sz;
-            if (const_type_eval(&wrapper, type_params, bindings, ntp, &sz)) {
-                if (sz < 0) {
-                    gen_inst_diag(frame, e->array_lit.size_expr->loc,
-                        "slice literal length cannot be negative, got %lld", (long long)sz);
-                    ok = false;
-                } else if (sz > fc_len_max()) {
-                    gen_inst_diag(frame, e->array_lit.size_expr->loc,
-                        "slice literal length %lld exceeds --len-repr %d length capacity %lld",
-                        (long long)sz, g_len_repr, (long long)fc_len_max());
-                    ok = false;
-                } else if (e->array_lit.elem_count > 0 &&
-                           (int64_t)e->array_lit.elem_count != sz) {
-                    gen_inst_diag(frame, e->loc,
-                        "slice literal has %d element%s but declared length is %lld; "
-                        "the element list must be exhaustive (or use `{ }` to zero-initialize)",
-                        e->array_lit.elem_count,
-                        e->array_lit.elem_count == 1 ? "" : "s", (long long)sz);
-                    ok = false;
-                }
-            } else {
-                SrcLoc eloc = {0};
-                const char *emsg = const_eval_take_error(&eloc);
-                if (emsg) {
-                    gen_inst_diag(frame, eloc.filename ? eloc : e->loc, "%s", emsg);
-                    ok = false;
-                }
-            }
-        }
-        break;
-    }
-    case EXPR_TUPLE_LIT:
-        for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            ok &= validate_generic_body(e->tuple_lit.elems[i], arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_SLICE_LIT:
-        ok &= validate_generic_body(e->slice_lit.ptr_expr, arena, type_params, bindings, ntp, frame);
-        ok &= validate_generic_body(e->slice_lit.len_expr, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_INTERP_STRING:
-        for (int i = 0; i < e->interp_string.segment_count; i++)
-            if (!e->interp_string.segments[i].is_literal && e->interp_string.segments[i].expr)
-                ok &= validate_generic_body(e->interp_string.segments[i].expr, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_MATCH:
-        ok &= validate_generic_body(e->match_expr.subject, arena, type_params, bindings, ntp, frame);
-        for (int i = 0; i < e->match_expr.arm_count; i++)
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                ok &= validate_generic_body(e->match_expr.arms[i].body[j], arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_LET:
-        if (e->let_expr.let_init)
-            ok &= validate_generic_body(e->let_expr.let_init, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_LET_DESTRUCT:
-        ok &= validate_generic_body(e->let_destruct.init, arena, type_params, bindings, ntp, frame);
-        break;
-    case EXPR_GUARD:
-        ok &= validate_generic_body(e->guard.body, arena, type_params, bindings, ntp, frame);
-        break;
-
-    /* Leaf nodes — no children to walk */
-    default:
-        break;
-    }
-    return ok;
+    GenericCheck gc = { arena, type_params, bindings, ntp, frame, true };
+    if (e) validate_generic_expr(e, &gc);
+    return gc.ok;
 }
 
 /* Check if an expression is an lvalue (has addressable storage that outlives the expression).
@@ -4136,133 +3831,43 @@ static bool is_lvalue_expr(Expr *e) {
     }
 }
 
-/* Check if an expression tree contains control flow that would escape a defer:
- * return and '?' propagation anywhere (they exit the whole function, even from
- * inside a nested loop), break/continue only outside a loop (inside a loop/for
- * they are scoped to that loop and harmless). Does NOT recurse into nested
- * EXPR_FUNC (lambdas have their own scope). */
-static bool ccf_walk(Expr *e, bool in_loop) {
-    if (!e) return false;
+/* Does e contain control flow that would leave a defer's scope: return and `?`
+ * propagation anywhere (they exit the whole function, even from inside a
+ * nested loop), break and continue only outside a loop (inside one they are
+ * scoped to it). Nested lambdas have their own scope and are not searched.
+ * `in_loop` points to a bool saying whether e sits inside a loop. */
+static bool ccf_walk(Expr *e, void *in_loop) {
+    bool inside = true;
     switch (e->kind) {
     case EXPR_RETURN:
         return true;
-    case EXPR_BREAK: case EXPR_CONTINUE:
-        return !in_loop;
-    case EXPR_FUNC:
-        return false;  /* lambdas have their own scope */
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            if (ccf_walk(e->block.stmts[i], in_loop)) return true;
-        return false;
-    case EXPR_IF:
-        return ccf_walk(e->if_expr.cond, in_loop) ||
-               ccf_walk(e->if_expr.then_body, in_loop) ||
-               ccf_walk(e->if_expr.else_body, in_loop);
-    case EXPR_CALL:
-        for (int i = 0; i < e->call.arg_count; i++)
-            if (ccf_walk(e->call.args[i], in_loop)) return true;
-        return ccf_walk(e->call.func, in_loop);
-    case EXPR_BINARY:
-        return ccf_walk(e->binary.left, in_loop) ||
-               ccf_walk(e->binary.right, in_loop);
-    case EXPR_UNARY_PREFIX:
-        return ccf_walk(e->unary_prefix.operand, in_loop);
+    case EXPR_BREAK:
+    case EXPR_CONTINUE:
+        if (!*(bool *)in_loop) return true;
+        break;
     case EXPR_UNARY_POSTFIX:
-        /* x? propagates by returning from the enclosing function */
-        return e->unary_postfix.op == TOK_QUESTION ||
-               ccf_walk(e->unary_postfix.operand, in_loop);
-    case EXPR_ATOMIC_LOAD:
-        return ccf_walk(e->atomic_load.ptr, in_loop);
-    case EXPR_ATOMIC_STORE:
-        return ccf_walk(e->atomic_store.ptr, in_loop) ||
-               ccf_walk(e->atomic_store.value, in_loop);
-    case EXPR_MATCH:
-        if (ccf_walk(e->match_expr.subject, in_loop)) return true;
-        for (int i = 0; i < e->match_expr.arm_count; i++)
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                if (ccf_walk(e->match_expr.arms[i].body[j], in_loop)) return true;
+        if (e->unary_postfix.op == TOK_QUESTION) return true;
+        break;
+    case EXPR_FUNC:
         return false;
     case EXPR_LOOP:
-        /* break/continue inside are scoped to this loop; return/? still escape */
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            if (ccf_walk(e->loop_expr.body[i], true)) return true;
-        return false;
+        return expr_any_child(e, ccf_walk, &inside);
     case EXPR_FOR:
-        if (ccf_walk(e->for_expr.iter, in_loop) ||
-            ccf_walk(e->for_expr.range_end, in_loop)) return true;
+        if ((e->for_expr.iter && ccf_walk(e->for_expr.iter, in_loop)) ||
+            (e->for_expr.range_end && ccf_walk(e->for_expr.range_end, in_loop)))
+            return true;
         for (int i = 0; i < e->for_expr.body_count; i++)
-            if (ccf_walk(e->for_expr.body[i], true)) return true;
+            if (ccf_walk(e->for_expr.body[i], &inside)) return true;
         return false;
-    case EXPR_ASSIGN:
-        return ccf_walk(e->assign.target, in_loop) ||
-               ccf_walk(e->assign.value, in_loop);
-    case EXPR_INDEX:
-        return ccf_walk(e->index.object, in_loop) ||
-               ccf_walk(e->index.index, in_loop);
-    case EXPR_SLICE:
-        return ccf_walk(e->slice.object, in_loop) ||
-               ccf_walk(e->slice.lo, in_loop) ||
-               ccf_walk(e->slice.hi, in_loop);
-    case EXPR_FIELD: case EXPR_DEREF_FIELD:
-        return ccf_walk(e->field.object, in_loop);
-    case EXPR_CAST:
-        return ccf_walk(e->cast.operand, in_loop);
-    case EXPR_BITCAST:
-        return ccf_walk(e->bitcast_expr.operand, in_loop);
-    case EXPR_ENUM_OF:
-        return ccf_walk(e->enum_of_expr.operand, in_loop);
-    case EXPR_SOME:
-        return ccf_walk(e->some_expr.value, in_loop);
-    case EXPR_OK:
-        return ccf_walk(e->ok_expr.value, in_loop);
-    case EXPR_ERROR_NAME:
-        return ccf_walk(e->error_name_expr.code, in_loop);
-    case EXPR_ERR:
-        return ccf_walk(e->err_expr.code, in_loop);
-    case EXPR_DEFER:
-        return ccf_walk(e->defer_expr.value, in_loop);
-    case EXPR_IGNORE:
-        return ccf_walk(e->ignore_expr.value, in_loop);
-    case EXPR_LET:
-        return ccf_walk(e->let_expr.let_init, in_loop);
-    case EXPR_LET_DESTRUCT:
-        return ccf_walk(e->let_destruct.init, in_loop);
-    case EXPR_ALLOC:
-        return ccf_walk(e->alloc_expr.size_expr, in_loop) ||
-               ccf_walk(e->alloc_expr.init_expr, in_loop);
-    case EXPR_FREE:
-        return ccf_walk(e->free_expr.operand, in_loop);
-    case EXPR_ASSERT:
-        return ccf_walk(e->assert_expr.condition, in_loop);
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            if (ccf_walk(e->struct_lit.fields[i].value, in_loop)) return true;
-        return false;
-    case EXPR_ARRAY_LIT:
-        if (ccf_walk(e->array_lit.size_expr, in_loop)) return true;
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            if (ccf_walk(e->array_lit.elems[i], in_loop)) return true;
-        return false;
-    case EXPR_SLICE_LIT:
-        return ccf_walk(e->slice_lit.ptr_expr, in_loop) ||
-               ccf_walk(e->slice_lit.len_expr, in_loop);
-    case EXPR_INTERP_STRING:
-        for (int i = 0; i < e->interp_string.segment_count; i++)
-            if (ccf_walk(e->interp_string.segments[i].expr, in_loop)) return true;
-        return false;
-    case EXPR_TUPLE_LIT:
-        for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            if (ccf_walk(e->tuple_lit.elems[i], in_loop)) return true;
-        return false;
-    case EXPR_GUARD:
-        return ccf_walk(e->guard.body, in_loop);
     default:
-        return false;
+        break;
     }
+    return expr_any_child(e, ccf_walk, in_loop);
 }
 
 static bool expr_contains_control_flow(Expr *e) {
-    return ccf_walk(e, false);
+    bool in_loop = false;
+    return e && ccf_walk(e, &in_loop);
 }
 
 /* Is this node one of the three value-precondition guards that `unguarded`
@@ -4359,135 +3964,31 @@ static bool expr_node_is_governed_overflow(Expr *e) {
     }
 }
 
-/* Does the body of a marker contain a governed operation that the marker would
-   actually toggle, for the given axis? Recurses through children but STOPS at
-   EXPR_FUNC (a lambda body is a boundary the marker does not reach) and at a
-   nested SAME-axis EXPR_GUARD (which establishes its own context); a nested
-   OTHER-axis EXPR_GUARD is transparent here, so we descend through it. Drives
-   the no-op redundancy error. `overflow_axis` selects which axis's effects count. */
-static bool subtree_has_governed_effect(Expr *e, bool overflow_axis) {
-#define guard_subtree_has_effect(x) subtree_has_governed_effect((x), overflow_axis)
-    if (!e) return false;
-    if (e->kind == EXPR_FUNC) return false;
-    if (e->kind == EXPR_GUARD)
-        return e->guard.is_overflow_axis == overflow_axis
-                   ? false                                  /* same axis: stop */
-                   : guard_subtree_has_effect(e->guard.body); /* other axis: descend */
-    if (overflow_axis ? expr_node_is_governed_overflow(e)
-                      : expr_node_is_governed_guard(e)) return true;
+/* Does the body of a marker contain a governed operation the marker would
+   actually toggle? `overflow_axis` points to a bool selecting which axis's
+   operations count. The search stops at a lambda (a boundary the marker does
+   not reach) and at a nested marker on the same axis (which sets its own
+   context); a marker on the other axis is transparent. Drives the no-op
+   redundancy error. */
+static bool governed_effect_walk(Expr *e, void *overflow_axis) {
+    bool overflow = *(bool *)overflow_axis;
     switch (e->kind) {
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            if (guard_subtree_has_effect(e->block.stmts[i])) return true;
+    case EXPR_FUNC:
         return false;
-    case EXPR_IF:
-        return guard_subtree_has_effect(e->if_expr.cond) ||
-               guard_subtree_has_effect(e->if_expr.then_body) ||
-               guard_subtree_has_effect(e->if_expr.else_body);
-    case EXPR_MATCH:
-        if (guard_subtree_has_effect(e->match_expr.subject)) return true;
-        for (int i = 0; i < e->match_expr.arm_count; i++)
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                if (guard_subtree_has_effect(e->match_expr.arms[i].body[j])) return true;
-        return false;
-    case EXPR_LOOP:
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            if (guard_subtree_has_effect(e->loop_expr.body[i])) return true;
-        return false;
-    case EXPR_FOR:
-        if (guard_subtree_has_effect(e->for_expr.iter)) return true;
-        if (e->for_expr.range_end && guard_subtree_has_effect(e->for_expr.range_end)) return true;
-        for (int i = 0; i < e->for_expr.body_count; i++)
-            if (guard_subtree_has_effect(e->for_expr.body[i])) return true;
-        return false;
-    case EXPR_BINARY:
-        return guard_subtree_has_effect(e->binary.left) ||
-               guard_subtree_has_effect(e->binary.right);
-    case EXPR_UNARY_PREFIX:
-        return guard_subtree_has_effect(e->unary_prefix.operand);
-    case EXPR_UNARY_POSTFIX:
-        return guard_subtree_has_effect(e->unary_postfix.operand);
-    case EXPR_CALL:
-        if (guard_subtree_has_effect(e->call.func)) return true;
-        for (int i = 0; i < e->call.arg_count; i++)
-            if (guard_subtree_has_effect(e->call.args[i])) return true;
-        return false;
-    case EXPR_FIELD:
-    case EXPR_DEREF_FIELD:
-        return guard_subtree_has_effect(e->field.object);
-    case EXPR_INDEX:
-        return guard_subtree_has_effect(e->index.object) ||
-               guard_subtree_has_effect(e->index.index);
-    case EXPR_SLICE:
-        return guard_subtree_has_effect(e->slice.object) ||
-               guard_subtree_has_effect(e->slice.lo) ||
-               guard_subtree_has_effect(e->slice.hi);
-    case EXPR_CAST:
-        return guard_subtree_has_effect(e->cast.operand);
-    case EXPR_BITCAST:
-        return guard_subtree_has_effect(e->bitcast_expr.operand);
-    case EXPR_ENUM_OF:
-        return guard_subtree_has_effect(e->enum_of_expr.operand);
-    case EXPR_SOME:
-        return guard_subtree_has_effect(e->some_expr.value);
-    case EXPR_OK:
-        return guard_subtree_has_effect(e->ok_expr.value);
-    case EXPR_ERROR_NAME:
-        return guard_subtree_has_effect(e->error_name_expr.code);
-    case EXPR_ERR:
-        return guard_subtree_has_effect(e->err_expr.code);
-    case EXPR_ASSERT:
-        return guard_subtree_has_effect(e->assert_expr.condition) ||
-               guard_subtree_has_effect(e->assert_expr.message);
-    case EXPR_ALLOC:
-        return guard_subtree_has_effect(e->alloc_expr.init_expr) ||
-               guard_subtree_has_effect(e->alloc_expr.size_expr);
-    case EXPR_FREE:
-        return guard_subtree_has_effect(e->free_expr.operand);
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            if (guard_subtree_has_effect(e->struct_lit.fields[i].value)) return true;
-        return false;
+    case EXPR_GUARD:
+        if (e->guard.is_overflow_axis == overflow) return false;
+        break;
     case EXPR_ARRAY_LIT:
+        /* The size is folded at compile time; only the elements run. */
         for (int i = 0; i < e->array_lit.elem_count; i++)
-            if (guard_subtree_has_effect(e->array_lit.elems[i])) return true;
+            if (governed_effect_walk(e->array_lit.elems[i], overflow_axis)) return true;
         return false;
-    case EXPR_TUPLE_LIT:
-        for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            if (guard_subtree_has_effect(e->tuple_lit.elems[i])) return true;
-        return false;
-    case EXPR_SLICE_LIT:
-        return guard_subtree_has_effect(e->slice_lit.ptr_expr) ||
-               guard_subtree_has_effect(e->slice_lit.len_expr);
-    case EXPR_INTERP_STRING:
-        for (int i = 0; i < e->interp_string.segment_count; i++)
-            if (!e->interp_string.segments[i].is_literal &&
-                guard_subtree_has_effect(e->interp_string.segments[i].expr)) return true;
-        return false;
-    case EXPR_LET:
-        return guard_subtree_has_effect(e->let_expr.let_init);
-    case EXPR_LET_DESTRUCT:
-        return guard_subtree_has_effect(e->let_destruct.init);
-    case EXPR_RETURN:
-        return guard_subtree_has_effect(e->return_expr.value);
-    case EXPR_BREAK:
-        return guard_subtree_has_effect(e->break_expr.value);
-    case EXPR_DEFER:
-        return guard_subtree_has_effect(e->defer_expr.value);
-    case EXPR_IGNORE:
-        return guard_subtree_has_effect(e->ignore_expr.value);
-    case EXPR_ASSIGN:
-        return guard_subtree_has_effect(e->assign.target) ||
-               guard_subtree_has_effect(e->assign.value);
-    case EXPR_ATOMIC_LOAD:
-        return guard_subtree_has_effect(e->atomic_load.ptr);
-    case EXPR_ATOMIC_STORE:
-        return guard_subtree_has_effect(e->atomic_store.ptr) ||
-               guard_subtree_has_effect(e->atomic_store.value);
     default:
-        return false;
+        if (overflow ? expr_node_is_governed_overflow(e) : expr_node_is_governed_guard(e))
+            return true;
+        break;
     }
-#undef guard_subtree_has_effect
+    return expr_any_child(e, governed_effect_walk, overflow_axis);
 }
 
 /* Resolve a field access through a single pointer level: `p.field` auto-derefs
@@ -6635,7 +6136,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                       : (e->guard.enable
                           ? "redundant 'guarded': guards are already enabled here"
                           : "redundant 'unguarded': guards are already suppressed here"));
-            } else if (!subtree_has_governed_effect(e->guard.body, overflow_axis)) {
+            } else if (!governed_effect_walk(e->guard.body, &overflow_axis)) {
                 if (overflow_axis)
                     diag_error(e->loc,
                         "redundant '%s': no operation that can overflow or truncate "
@@ -10544,6 +10045,14 @@ enum {
 static bool is_const_expr(Expr *e);
 static Expr *const_fold_expr(CheckCtx *ctx, Expr *e);
 
+/* Replace a module constant's initializer with its folded form. */
+static void set_folded_init(Decl *d, Expr *folded) {
+    if (!d->let.written_init) d->let.written_init = d->let.init;
+    d->let.init = folded;
+    d->let.const_fold_value = folded;
+    d->let.const_fold_state = CONST_FOLD_DONE;
+}
+
 /* Clone an Expr subtree for const-expr substitution.  Aggregate nodes are
  * freshly allocated so mutable per-node codegen state (EXPR_ARRAY_LIT's
  * codegen_backing_name) is not aliased across substitution sites. */
@@ -10972,9 +10481,7 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
             d->let.const_fold_state = CONST_FOLD_FAILED;
             return NULL;
         }
-        d->let.init = folded;
-        d->let.const_fold_value = folded;
-        d->let.const_fold_state = CONST_FOLD_DONE;
+        set_folded_init(d, folded);
         return const_clone_expr(ctx, folded);
     }
     case EXPR_UNARY_PREFIX: {
@@ -11676,9 +11183,7 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
                 Expr *folded = const_fold_expr(ctx, child->let.init);
                 int new_errs = diag_error_count() - errs_before;
                 if (folded && is_const_expr(folded)) {
-                    child->let.init = folded;
-                    child->let.const_fold_value = folded;
-                    child->let.const_fold_state = CONST_FOLD_DONE;
+                    set_folded_init(child, folded);
                 } else {
                     child->let.const_fold_state = CONST_FOLD_FAILED;
                     if (new_errs == 0) {
@@ -11814,6 +11319,97 @@ static void check_infinite_size(Program *prog) {
         if (state[i] == 0) a5_visit(udts, n, state, i);
     free(state);
     free(udts);
+}
+
+/* ---- Module cycles ----
+ * A top-level module depends on another when one of its member initializers
+ * names that module (`b.f(x)`, or a type whose companion module it is), or
+ * when it imports from it. The dependency graph must be acyclic. The check
+ * runs after type checking so each identifier is judged by what it resolved
+ * to: a binding that merely shares a module's name is not a reference. */
+
+typedef struct {
+    Decl **mods;    /* top-level module declarations */
+    int count;
+    bool *deps;     /* deps[i * count + j]: module i depends on module j */
+    int from;       /* the module whose members are being scanned */
+} ModuleGraph;
+
+/* Index of the top-level module that is or contains module `sym`, or -1. */
+static int module_graph_index(ModuleGraph *g, Symbol *sym) {
+    if (!sym || sym->kind != DECL_MODULE) return -1;
+    while (sym->parent) sym = sym->parent;
+    for (int i = 0; i < g->count; i++)
+        if (g->mods[i] == sym->decl) return i;
+    return -1;
+}
+
+static void module_graph_add(ModuleGraph *g, Symbol *target) {
+    int j = module_graph_index(g, target);
+    if (j >= 0 && j != g->from) g->deps[g->from * g->count + j] = true;
+}
+
+static void note_module_refs(Expr *e, void *graph) {
+    ModuleGraph *g = graph;
+    if (e->kind == EXPR_IDENT) {
+        module_graph_add(g, e->ident.resolved_sym);
+        module_graph_add(g, e->ident.companion_module);
+    }
+    expr_for_each_child(e, note_module_refs, graph);
+}
+
+/* Depth-first search from u, reporting the first edge back onto the current
+ * path. color: 0 unvisited, 1 on the path, 2 finished. */
+static bool module_graph_find_cycle(ModuleGraph *g, int u, int *color) {
+    color[u] = 1;
+    for (int v = 0; v < g->count; v++) {
+        if (!g->deps[u * g->count + v]) continue;
+        if (color[v] == 1) {
+            diag_error(g->mods[u]->loc, "circular reference between modules '%s' and '%s'",
+                       g->mods[u]->module.name, g->mods[v]->module.name);
+            return true;
+        }
+        if (color[v] == 0 && module_graph_find_cycle(g, v, color)) return true;
+    }
+    color[u] = 2;
+    return false;
+}
+
+static void check_module_cycles(SymbolTable *symtab) {
+    int count = 0;
+    for (int i = 0; i < symtab->count; i++)
+        if (symtab->symbols[i].kind == DECL_MODULE) count++;
+    if (count < 2) return;
+
+    ModuleGraph g = {
+        .mods = malloc(sizeof(Decl *) * (size_t)count),
+        .count = count,
+        .deps = calloc((size_t)count * (size_t)count, sizeof(bool)),
+    };
+    int n = 0;
+    for (int i = 0; i < symtab->count; i++)
+        if (symtab->symbols[i].kind == DECL_MODULE) g.mods[n++] = symtab->symbols[i].decl;
+
+    for (g.from = 0; g.from < count; g.from++) {
+        Decl *m = g.mods[g.from];
+        for (int i = 0; i < m->module.decl_count; i++) {
+            Decl *member = m->module.decls[i];
+            if (member->kind == DECL_LET) {
+                Expr *init = member->let.written_init ? member->let.written_init
+                                                      : member->let.init;
+                if (init) note_module_refs(init, &g);
+            }
+            else if (member->kind == DECL_IMPORT)
+                module_graph_add(&g, member->import.resolved_module);
+        }
+    }
+
+    int *color = calloc((size_t)count, sizeof(int));
+    for (int u = 0; u < count; u++)
+        if (color[u] == 0 && module_graph_find_cycle(&g, u, color)) break;
+    free(color);
+    free(g.deps);
+    free(g.mods);
 }
 
 void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, MonoTable *mono,
@@ -12031,6 +11627,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
     }
 
     check_infinite_size(prog);
+    check_module_cycles(symtab);
 
     /* The arena is the caller's (it owns the AST); types pass2 synthesized are
      * referenced from the AST, so the caller frees the arena, not us. */

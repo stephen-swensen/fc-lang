@@ -1,0 +1,14 @@
+// A generic call in a for-loop's range end, inside a generic function, is
+// instantiated for each instance of the enclosing function.
+let count = (x: 'a) -> 3
+
+let f = (x: 'a) ->
+    let mut s = 0
+    for i in 0..count(x) do
+        s = s + i
+    s
+
+let main = (args: str[]) ->
+    assert(f(1u8) == 3)
+    assert(f(1.5) == 3)
+    0

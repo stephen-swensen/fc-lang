@@ -1,0 +1,14 @@
+// Lambdas as tuple elements: each is lifted to its own C function, whether it
+// captures or not.
+let main = (args: str[]) ->
+    let t = { (x: i32) -> x + 1, 2 }
+    let f = t[0]
+    assert(f(41) == 42)
+    let k = 10
+    let u = { (x: i32) -> x + k, 3 }
+    let g = u[0]
+    assert(g(1) == 11)
+    let nested = { 1, { (x: i32) -> x * 3, 0 } }
+    let h = nested[1][0]
+    assert(h(5) == 15)
+    0

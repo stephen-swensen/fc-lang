@@ -1,0 +1,11 @@
+// Arithmetic in a match arm's `when` guard is governed by an enclosing
+// `checked`, so the marker is not redundant.
+let f = (o: i32?) ->
+    checked
+        match o with
+        | some(v) when v + 1 > 0 -> v
+        | _ -> 0
+
+let main = (args: str[]) ->
+    assert(f(some(5)) == 5)
+    0

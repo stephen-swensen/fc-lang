@@ -1,0 +1,21 @@
+// A binding that shares its name with another module is not a reference to
+// that module, so none of these form a module cycle.
+module a =
+    let f = (b: i32) -> b + 1
+    let g = (x: i32) ->
+        let b = x * 2
+        b
+    let h = (o: i32?) ->
+        match o with
+        | some(b) -> b
+        | none -> 0
+    let k = (x: i32) ->
+        let inc = (b: i32) -> b + 1
+        inc(x)
+
+module b =
+    let h = (x: i32) -> a.f(x) + a.g(x) + a.h(some(x)) + a.k(x)
+
+let main = (args: str[]) ->
+    assert(b.h(1) == 2 + 2 + 1 + 2)
+    0

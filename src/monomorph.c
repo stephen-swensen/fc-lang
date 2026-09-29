@@ -361,301 +361,173 @@ static Type **substitute_type_args(Arena *a, Type **type_args, int type_arg_coun
 static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
                                   InternTable *intern, SymbolTable *symtab);
 
+/* The substitution a generic function body is walked under, and the tables its
+ * instances are registered in. */
+typedef struct {
+    MonoTable *t;
+    Arena *a;
+    InternTable *intern;
+    SymbolTable *symtab;
+    const char **var_names;
+    Type **concrete;
+    int var_count;
+} DiscoverCtx;
+
 /* Substitute the type vars of an expression's *type operand* (e.g. the target of
  * sizeof/alignof/default/alloc, an array/slice-literal element type, or a variant
  * constructor's union result type) and register any generic struct/union instances
  * it transitively names. Such instances are otherwise never registered when they
- * appear only inside a generic body — pass2 sees the still-abstract template type,
+ * appear only inside a generic body: pass2 sees the still-abstract template type,
  * and the expression walk below recurses into sub-expressions but not into the
  * types they carry. */
-static void discover_in_type(Type *ty, MonoTable *t, Arena *a, InternTable *intern,
-                             SymbolTable *symtab, const char **var_names,
-                             Type **concrete, int var_count) {
+static void discover_in_type(Type *ty, DiscoverCtx *c) {
     if (!ty) return;
-    Type *ct = type_substitute(a, ty, var_names, concrete, var_count);
+    Type *ct = type_substitute(c->a, ty, c->var_names, c->concrete, c->var_count);
     if (type_contains_type_var(ct)) return;
     /* discover_nested_types rewrites struct/union/stub names in place; isolate a
      * private deep copy so it can't corrupt the live AST type or a template. */
-    ct = type_deep_copy(a, ct);
-    discover_nested_types(ct, t, a, intern, symtab);
+    ct = type_deep_copy(c->a, ct);
+    discover_nested_types(ct, c->t, c->a, c->intern, c->symtab);
 }
 
-/* Recursively walk an expression tree to discover transitive mono instances */
-static void discover_in_expr(Expr *e, MonoTable *t, Arena *a, InternTable *intern,
-                              SymbolTable *symtab,
-                              const char **var_names, Type **concrete, int var_count) {
-    if (!e) return;
+/* A call whose callee is generic and whose type arguments mention the
+ * enclosing body's type variables: register the instance this substitution
+ * makes of it. */
+static void discover_call(Expr *e, DiscoverCtx *c) {
+    if (e->call.mangled_name || e->call.type_arg_count == 0) return;
+    Type **concrete_args = substitute_type_args(c->a, e->call.type_args,
+        e->call.type_arg_count, c->var_names, c->concrete, c->var_count);
+    bool all_concrete = true;
+    for (int i = 0; i < e->call.type_arg_count; i++) {
+        if (type_contains_type_var(concrete_args[i])) {
+            all_concrete = false;
+            break;
+        }
+    }
+    if (all_concrete) {
+        /* An argument type may itself name a generic instance: inside
+         * `bx2<'a>`, the call `bx(bx(v))` binds the outer `bx` to
+         * `box<'a>`, which substitutes to `box<i32>`.  Registering the
+         * *callee* does not register that instance, and nothing else
+         * reaches it (pass2 only ever saw the abstract `box<'a>`), so
+         * the emitted C would name a struct it never defined.  Register
+         * it; the callee's own mangled name spells the instance from
+         * structure (mangle_type_name), so no renaming is needed. */
+        for (int i = 0; i < e->call.type_arg_count; i++)
+            discover_nested_types(concrete_args[i], c->t, c->a, c->intern, c->symtab);
+        Symbol *callee_sym = e->call.resolved_callee;
+        if (callee_sym) {
+            const char *base_name = (callee_sym->decl && callee_sym->decl->kind == DECL_LET
+                                     && callee_sym->decl->let.codegen_name)
+                                    ? callee_sym->decl->let.codegen_name : callee_sym->name;
+            mono_register(c->t, c->a, c->intern, base_name, NULL,
+                concrete_args, e->call.type_arg_count,
+                callee_sym->decl, DECL_LET,
+                callee_sym->type_params, callee_sym->type_param_count);
+        }
+    }
+    free(concrete_args);
+}
+
+/* A literal of a generic struct type built under this substitution: register
+ * the instance it constructs. */
+static void discover_struct_lit(Expr *e, DiscoverCtx *c) {
+    if (!e->type || e->type->kind != TYPE_STRUCT || !type_contains_type_var(e->type))
+        return;
+    Symbol *struct_sym = e->struct_lit.resolved_sym;
+    if (!struct_sym || !struct_sym->is_generic) return;
+    const char **vars = NULL;
+    int vc = 0, vcap = 0;
+    type_collect_vars(e->type, &vars, &vc, &vcap);
+    Type **concrete_args = arena_alloc(c->a, sizeof(Type*) * (size_t)vc);
+    for (int k = 0; k < vc; k++) {
+        concrete_args[k] = NULL;
+        for (int j = 0; j < c->var_count; j++) {
+            if (c->var_names[j] == vars[k]) {
+                concrete_args[k] = c->concrete[j];
+                break;
+            }
+        }
+        if (!concrete_args[k]) concrete_args[k] = type_type_var(c->a, vars[k]);
+    }
+    bool all_concrete = true;
+    for (int k = 0; k < vc; k++) {
+        if (type_contains_type_var(concrete_args[k])) {
+            all_concrete = false;
+            break;
+        }
+    }
+    if (all_concrete) {
+        /* Use canonical C type name (already includes module/ns prefix) */
+        const char *mangled = mono_register(c->t, c->a, c->intern,
+            struct_sym->type->struc.name, NULL,
+            concrete_args, vc, struct_sym->decl,
+            DECL_STRUCT, struct_sym->type_params, struct_sym->type_param_count);
+        MonoInstance *mi = mono_find(c->t, mangled);
+        if (mi && !mi->concrete_type) {
+            int ntp = struct_sym->type_param_count < vc ? struct_sym->type_param_count : vc;
+            Type *ct = type_substitute(c->a, struct_sym->type,
+                struct_sym->type_params, concrete_args, ntp);
+            /* Deep copy: type_substitute shares unchanged field
+             * subtrees with the template, which the in-place name
+             * canonicalization below would otherwise corrupt. */
+            ct = type_deep_copy(c->a, ct);
+            ct->struc.name = mangled;
+            mono_resolve_type_names(c->t, c->a, c->intern, ct);
+            mi->concrete_type = ct;
+        }
+    }
+    free(vars);
+}
+
+/* A tuple literal whose element types mention type variables: register the
+ * concrete tuple this substitution produces. Concrete tuples were already
+ * registered in pass2. */
+static void discover_tuple_lit(Expr *e, DiscoverCtx *c) {
+    if (!e->type || e->type->kind != TYPE_STRUCT || !e->type->struc.is_tuple ||
+        !type_contains_type_var(e->type))
+        return;
+    Type *ct = type_substitute(c->a, e->type, c->var_names, c->concrete, c->var_count);
+    if (type_contains_type_var(ct)) return;
+    ct = type_deep_copy(c->a, ct);  /* isolate before in-place name canonicalization */
+    mono_resolve_type_names(c->t, c->a, c->intern, ct);  /* sets ct->struc.name canonically */
+    Type *noargs[1] = {0};
+    const char *mangled = mono_register(c->t, c->a, c->intern, ct->struc.name, NULL,
+        noargs, 0, NULL, DECL_STRUCT, NULL, 0);
+    MonoInstance *mi = mono_find(c->t, mangled);
+    if (mi && !mi->concrete_type)
+        mi->concrete_type = ct;
+}
+
+/* Walk a generic function body under one substitution and register every
+ * instance it makes: generic calls, generic struct and tuple literals, and
+ * generic types named by type operands. Children are registered first. */
+static void discover_in_expr(Expr *e, void *ctx) {
+    DiscoverCtx *c = ctx;
+    expr_for_each_child(e, discover_in_expr, ctx);
     switch (e->kind) {
-    case EXPR_CALL:
-        discover_in_expr(e->call.func, t, a, intern, symtab, var_names, concrete, var_count);
-        for (int i = 0; i < e->call.arg_count; i++)
-            discover_in_expr(e->call.args[i], t, a, intern, symtab, var_names, concrete, var_count);
-        /* Resolve deferred generic call */
-        if (!e->call.mangled_name && e->call.type_arg_count > 0) {
-            Type **concrete_args = substitute_type_args(a, e->call.type_args,
-                e->call.type_arg_count, var_names, concrete, var_count);
-            /* Check all args are concrete */
-            bool all_concrete = true;
-            for (int i = 0; i < e->call.type_arg_count; i++) {
-                if (type_contains_type_var(concrete_args[i])) {
-                    all_concrete = false;
-                    break;
-                }
-            }
-            if (all_concrete) {
-                /* An argument type may itself name a generic instance: inside
-                 * `bx2<'a>`, the call `bx(bx(v))` binds the outer `bx` to
-                 * `box<'a>`, which substitutes to `box<i32>`.  Registering the
-                 * *callee* does not register that instance, and nothing else
-                 * reaches it — pass2 only ever saw the abstract `box<'a>` — so
-                 * the emitted C would name a struct it never defined.  Register
-                 * it; the callee's own mangled name spells the instance from
-                 * structure (mangle_type_name), so no renaming is needed. */
-                for (int i = 0; i < e->call.type_arg_count; i++)
-                    discover_nested_types(concrete_args[i], t, a, intern, symtab);
-                /* Use resolved_callee from pass2 — always set for all call patterns
-                 * (single-level and multi-level qualified calls) */
-                Symbol *callee_sym = e->call.resolved_callee;
-                if (callee_sym) {
-                    const char *base_name = (callee_sym->decl && callee_sym->decl->kind == DECL_LET
-                                             && callee_sym->decl->let.codegen_name)
-                                            ? callee_sym->decl->let.codegen_name : callee_sym->name;
-                    mono_register(t, a, intern, base_name, NULL,
-                        concrete_args, e->call.type_arg_count,
-                        callee_sym->decl, DECL_LET,
-                        callee_sym->type_params, callee_sym->type_param_count);
-                }
-            }
-            free(concrete_args);
-        }
-        return;
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            discover_in_expr(e->struct_lit.fields[i].value, t, a, intern, symtab, var_names, concrete, var_count);
-        /* Register generic struct instances created under substitution */
-        if (e->type && e->type->kind == TYPE_STRUCT && type_contains_type_var(e->type)) {
-            /* Use resolved_sym from pass2 — always set for struct literals */
-            Symbol *struct_sym = e->struct_lit.resolved_sym;
-            if (struct_sym && struct_sym->is_generic) {
-                const char **vars = NULL;
-                int vc = 0, vcap = 0;
-                type_collect_vars(e->type, &vars, &vc, &vcap);
-                Type **concrete_args = arena_alloc(a, sizeof(Type*) * (size_t)vc);
-                for (int k = 0; k < vc; k++) {
-                    concrete_args[k] = NULL;
-                    for (int j = 0; j < var_count; j++) {
-                        if (var_names[j] == vars[k]) {
-                            concrete_args[k] = concrete[j];
-                            break;
-                        }
-                    }
-                    if (!concrete_args[k]) concrete_args[k] = type_type_var(a, vars[k]);
-                }
-                bool all_concrete = true;
-                for (int k = 0; k < vc; k++) {
-                    if (type_contains_type_var(concrete_args[k])) {
-                        all_concrete = false;
-                        break;
-                    }
-                }
-                if (all_concrete) {
-                    /* Use canonical C type name (already includes module/ns prefix) */
-                    const char *mangled = mono_register(t, a, intern,
-                        struct_sym->type->struc.name, NULL,
-                        concrete_args, vc, struct_sym->decl,
-                        DECL_STRUCT, struct_sym->type_params, struct_sym->type_param_count);
-                    MonoInstance *mi = mono_find(t, mangled);
-                    if (mi && !mi->concrete_type) {
-                        int ntp = struct_sym->type_param_count < vc ? struct_sym->type_param_count : vc;
-                        Type *ct = type_substitute(a, struct_sym->type,
-                            struct_sym->type_params, concrete_args, ntp);
-                        /* Deep copy: type_substitute shares unchanged field
-                         * subtrees with the template, which the in-place name
-                         * canonicalization below would otherwise corrupt. */
-                        ct = type_deep_copy(a, ct);
-                        ct->struc.name = mangled;
-                        mono_resolve_type_names(t, a, intern, ct);
-                        mi->concrete_type = ct;
-                    }
-                }
-                free(vars);
-            }
-        }
-        return;
-    case EXPR_ARRAY_LIT:
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            discover_in_expr(e->array_lit.elems[i], t, a, intern, symtab, var_names, concrete, var_count);
-        /* The element type may be a generic instance (box<'a>[N] { ... }) used only
-         * inside a generic body — register it even when no element constructs it. */
-        discover_in_type(e->array_lit.elem_type, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_TUPLE_LIT:
-        for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            discover_in_expr(e->tuple_lit.elems[i], t, a, intern, symtab, var_names, concrete, var_count);
-        /* Register the concrete tuple instance produced under this substitution.
-         * Concrete tuples were already registered in pass2; only generic ones
-         * (type vars in the element types) need handling here. */
-        if (e->type && e->type->kind == TYPE_STRUCT && e->type->struc.is_tuple &&
-            type_contains_type_var(e->type)) {
-            Type *ct = type_substitute(a, e->type, var_names, concrete, var_count);
-            if (!type_contains_type_var(ct)) {
-                ct = type_deep_copy(a, ct);  /* isolate before in-place name canonicalization */
-                mono_resolve_type_names(t, a, intern, ct);  /* sets ct->struc.name canonically */
-                Type *noargs[1] = {0};
-                const char *mangled = mono_register(t, a, intern, ct->struc.name, NULL,
-                    noargs, 0, NULL, DECL_STRUCT, NULL, 0);
-                MonoInstance *mi = mono_find(t, mangled);
-                if (mi && !mi->concrete_type)
-                    mi->concrete_type = ct;
-            }
-        }
-        return;
-    case EXPR_BINARY:
-        discover_in_expr(e->binary.left, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->binary.right, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_UNARY_PREFIX:
-        discover_in_expr(e->unary_prefix.operand, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_UNARY_POSTFIX:
-        discover_in_expr(e->unary_postfix.operand, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_FIELD: case EXPR_DEREF_FIELD:
-        discover_in_expr(e->field.object, t, a, intern, symtab, var_names, concrete, var_count);
+    case EXPR_CALL:       discover_call(e, c); break;
+    case EXPR_STRUCT_LIT: discover_struct_lit(e, c); break;
+    case EXPR_TUPLE_LIT:  discover_tuple_lit(e, c); break;
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:
         /* Generic-union variant construction (maybe<'a>.just(x) / maybe<'a>.nothing):
          * the result type is the union instance, otherwise unregistered when the
          * construction appears only inside a generic body. */
-        if (e->field.is_variant_constructor)
-            discover_in_type(e->type, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_INDEX:
-        discover_in_expr(e->index.object, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->index.index, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_IF:
-        discover_in_expr(e->if_expr.cond, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->if_expr.then_body, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->if_expr.else_body, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_BLOCK:
-        for (int i = 0; i < e->block.count; i++)
-            discover_in_expr(e->block.stmts[i], t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_FUNC:
-        for (int i = 0; i < e->func.body_count; i++)
-            discover_in_expr(e->func.body[i], t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_LET:
-        discover_in_expr(e->let_expr.let_init, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_ASSIGN:
-        discover_in_expr(e->assign.target, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->assign.value, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_RETURN:
-        discover_in_expr(e->return_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_BREAK:
-        discover_in_expr(e->break_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_LOOP:
-        for (int i = 0; i < e->loop_expr.body_count; i++)
-            discover_in_expr(e->loop_expr.body[i], t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_FOR:
-        discover_in_expr(e->for_expr.iter, t, a, intern, symtab, var_names, concrete, var_count);
-        for (int i = 0; i < e->for_expr.body_count; i++)
-            discover_in_expr(e->for_expr.body[i], t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_MATCH:
-        discover_in_expr(e->match_expr.subject, t, a, intern, symtab, var_names, concrete, var_count);
-        for (int i = 0; i < e->match_expr.arm_count; i++)
-            for (int j = 0; j < e->match_expr.arms[i].body_count; j++)
-                discover_in_expr(e->match_expr.arms[i].body[j], t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_CAST:
-        discover_in_expr(e->cast.operand, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_type(e->cast.target, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_BITCAST:
-        discover_in_expr(e->bitcast_expr.operand, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_type(e->bitcast_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_ENUM_OF:
-        discover_in_expr(e->enum_of_expr.operand, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_SOME:
-        discover_in_expr(e->some_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_OK:
-        discover_in_expr(e->ok_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_ERR:
-        /* The target type may name a generic instance (err(point<i32>, c)) */
-        discover_in_expr(e->err_expr.code, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_type(e->err_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_ERROR_NAME:
-        discover_in_expr(e->error_name_expr.code, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_SLICE:
-        discover_in_expr(e->slice.object, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->slice.lo, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->slice.hi, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_ALLOC:
-        discover_in_expr(e->alloc_expr.size_expr, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->alloc_expr.init_expr, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_type(e->alloc_expr.alloc_type, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_FREE:
-        discover_in_expr(e->free_expr.operand, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_ATOMIC_LOAD:
-        discover_in_expr(e->atomic_load.ptr, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_ATOMIC_STORE:
-        discover_in_expr(e->atomic_store.ptr, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->atomic_store.value, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_ASSERT:
-        discover_in_expr(e->assert_expr.condition, t, a, intern, symtab, var_names, concrete, var_count);
-        if (e->assert_expr.message)
-            discover_in_expr(e->assert_expr.message, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_DEFER:
-        discover_in_expr(e->defer_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_IGNORE:
-        discover_in_expr(e->ignore_expr.value, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_INTERP_STRING:
-        for (int i = 0; i < e->interp_string.segment_count; i++) {
-            if (!e->interp_string.segments[i].is_literal)
-                discover_in_expr(e->interp_string.segments[i].expr, t, a, intern, symtab, var_names, concrete, var_count);
-        }
-        return;
-    case EXPR_SLICE_LIT:
-        discover_in_expr(e->slice_lit.ptr_expr, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_expr(e->slice_lit.len_expr, t, a, intern, symtab, var_names, concrete, var_count);
-        discover_in_type(e->slice_lit.elem_type, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_LET_DESTRUCT:
-        discover_in_expr(e->let_destruct.init, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_SIZEOF:
-        discover_in_type(e->sizeof_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_ALIGNOF:
-        discover_in_type(e->alignof_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_DEFAULT:
-        discover_in_type(e->default_expr.target, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    case EXPR_GUARD:
-        discover_in_expr(e->guard.body, t, a, intern, symtab, var_names, concrete, var_count);
-        return;
-    default: return;
+        if (e->field.is_variant_constructor) discover_in_type(e->type, c);
+        break;
+    /* The element type may be a generic instance (box<'a>[N] { ... }) used only
+     * inside a generic body; register it even when no element constructs it. */
+    case EXPR_ARRAY_LIT:  discover_in_type(e->array_lit.elem_type, c); break;
+    case EXPR_SLICE_LIT:  discover_in_type(e->slice_lit.elem_type, c); break;
+    case EXPR_CAST:       discover_in_type(e->cast.target, c); break;
+    case EXPR_BITCAST:    discover_in_type(e->bitcast_expr.target, c); break;
+    case EXPR_ERR:        discover_in_type(e->err_expr.target, c); break;
+    case EXPR_ALLOC:      discover_in_type(e->alloc_expr.alloc_type, c); break;
+    case EXPR_SIZEOF:     discover_in_type(e->sizeof_expr.target, c); break;
+    case EXPR_ALIGNOF:    discover_in_type(e->alignof_expr.target, c); break;
+    case EXPR_DEFAULT:    discover_in_type(e->default_expr.target, c); break;
+    default: break;
     }
 }
 
@@ -1064,10 +936,9 @@ void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, Symbo
             Type **tp_args = t->entries[i].type_args;
             int tp_count = t->entries[i].type_param_count;
             Expr *fn = tmpl->let.init;
-            for (int j = 0; j < fn->func.body_count; j++) {
-                discover_in_expr(fn->func.body[j], t, a, intern, symtab,
-                    tp_names, tp_args, tp_count);
-            }
+            DiscoverCtx c = { t, a, intern, symtab, tp_names, tp_args, tp_count };
+            for (int j = 0; j < fn->func.body_count; j++)
+                discover_in_expr(fn->func.body[j], &c);
         }
         discovered = batch_end;
     }

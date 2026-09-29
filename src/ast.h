@@ -530,6 +530,26 @@ struct MatchArm {
     SrcLoc loc;
 };
 
+/* ---- Traversal ---- */
+
+/* Call fn(child, ctx) for each direct subexpression of e, in source order,
+ * skipping absent (NULL) children. Match arm guards, interpolation segments
+ * and a slice literal's size are children too; types are not. Every kind is
+ * listed explicitly, so adding an ExprKind is a -Wswitch warning in ast.c
+ * instead of a subtree that some walker silently skips. A walker handles the
+ * kinds it treats specially and passes every other node here. */
+typedef void (*ExprVisitFn)(Expr *child, void *ctx);
+void expr_for_each_child(Expr *e, ExprVisitFn fn, void *ctx);
+
+/* The same children, for a search: true as soon as pred(child, ctx) is true
+ * for one of them, false if it holds for none. */
+typedef bool (*ExprPredFn)(Expr *child, void *ctx);
+bool expr_any_child(Expr *e, ExprPredFn pred, void *ctx);
+
+/* The same for the direct subpatterns of p. */
+typedef void (*PatternVisitFn)(Pattern *child, void *ctx);
+void pattern_for_each_child(Pattern *p, PatternVisitFn fn, void *ctx);
+
 /* ---- Declaration nodes ---- */
 
 /* Extern error protocols — the `from <protocol>` tail on an extern function
@@ -603,6 +623,9 @@ struct Decl {
              * the const-expr gate in pass2; zero-init (UNVISITED) is correct. */
             int const_fold_state;       /* 0=unvisited, 1=visiting, 2=done, 3=failed */
             Expr *const_fold_value;     /* folded literal tree (may be == init) */
+            /* The initializer as written, kept when folding replaces `init`.
+             * Checks about what the source refers to (module cycles) read it. */
+            Expr *written_init;
             /* static_assert statements over const params in this (generic)
              * function's body, collected by pass2 for the per-instantiation
              * check in mono_register. */

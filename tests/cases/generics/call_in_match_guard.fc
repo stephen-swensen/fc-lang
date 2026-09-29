@@ -1,0 +1,13 @@
+// A generic call in a match arm's `when` guard, inside a generic function, is
+// instantiated for each instance of the enclosing function.
+let pos = (x: 'a) -> true
+
+let f = (x: 'a, o: i32?) ->
+    match o with
+    | some(v) when pos(x) -> v
+    | _ -> 0
+
+let main = (args: str[]) ->
+    assert(f(1u8, some(4)) == 4)
+    assert(f(2.5, some(6)) == 6)
+    0

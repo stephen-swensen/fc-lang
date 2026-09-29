@@ -1,0 +1,11 @@
+module a =
+    let f = (x: i32) ->
+        let s = "%d{b.g(x)}"
+        s.len
+
+module b =
+    let g = (x: i32) -> x + 1
+    let h = (x: i32) -> a.f(x)
+
+let main = (args: str[]) ->
+    0

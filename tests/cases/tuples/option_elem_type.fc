@@ -1,0 +1,16 @@
+// Types that appear only inside a tuple literal or a destructuring let still
+// get their C typedefs.
+let pair = (x: u16) -> { x, 2 }
+let wrap = (x: i8) -> some(x)
+
+let main = (args: str[]) ->
+    let t = { some(3u16)!, 2 }
+    assert(t[0] == 3u16)
+    let { a, b } = pair(some(4u16)!)
+    assert(a == 4u16)
+    assert(b == 2)
+    let u = { wrap(5i8), 1 }
+    match u[0] with
+    | some(v) -> assert(v == 5i8)
+    | none -> assert(false)
+    0

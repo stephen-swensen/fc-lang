@@ -1,0 +1,10 @@
+// A module constant's initializer is folded to a literal, but the references
+// it was written with still count toward module cycles.
+module a =
+    let x = b.k + 1
+
+module b =
+    let k = 3
+    let f = () -> a.x
+
+let main = (args: str[]) -> b.f()

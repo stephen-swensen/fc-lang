@@ -1,0 +1,8 @@
+// A lambda inside an interpolation segment is lifted like any other lambda.
+let main = (args: str[]) ->
+    let s = "v=%d{((x: i32) -> x * 2)(21)}"
+    assert(s == "v=42")
+    let k = 3
+    let t = "w=%d{((x: i32) -> x + k)(4)}"
+    assert(t == "w=7")
+    0

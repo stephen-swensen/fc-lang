@@ -1,0 +1,13 @@
+// An operation on type variables inside a match arm's `when` guard is checked
+// for each instantiation, like one anywhere else in the body.
+struct pt =
+    x: i32
+
+let pick = (a: 'a, b: 'a, o: i32?) ->
+    match o with
+    | some(v) when a < b -> v
+    | _ -> 0
+
+let main = (args: str[]) ->
+    let r = pick(pt { x = 1 }, pt { x = 2 }, some(3))
+    0

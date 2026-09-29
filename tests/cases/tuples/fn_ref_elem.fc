@@ -1,0 +1,7 @@
+// &f inside a tuple literal gets the C trampoline it needs.
+let g = (x: i32) -> x + 1
+
+let main = (args: str[]) ->
+    let t = { &g, 1 }
+    assert(t[1] == 1)
+    0

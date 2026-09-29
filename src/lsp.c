@@ -829,14 +829,12 @@ static void consider_type_annotation(FindCtx *c, Type *t, int line, int col) {
     }
 }
 
-static void find_in_expr(Expr *e, FindCtx *c);
-
-static void find_in_exprs(Expr **arr, int n, FindCtx *c) {
-    for (int i = 0; i < n; i++) find_in_expr(arr[i], c);
-}
-
-static void find_in_expr(Expr *e, FindCtx *c) {
+/* Offer each token of e that hover and go-to-definition can land on (names,
+ * field names, written type annotations, builtin keywords) to consider(),
+ * then do the same for e's children. `find_ctx` is a FindCtx. */
+static void find_in_expr(Expr *e, void *find_ctx) {
     if (!e) return;
+    FindCtx *c = find_ctx;
     switch (e->kind) {
         case EXPR_IDENT: {
             consider(c, e->loc.line, e->loc.col, (int)strlen(e->ident.name),
@@ -873,7 +871,7 @@ static void find_in_expr(Expr *e, FindCtx *c) {
         }
         case EXPR_FIELD:
         case EXPR_DEREF_FIELD:
-            find_in_expr(e->field.object, c);
+            find_in_expr(e->field.object, c);   /* the object precedes the name */
             /* Member-completion capture: the parser stamps EXPR_FIELD.loc with the
              * operator token (`.`/`->`), so match the completion operator position
              * to grab this node regardless of the field name's completeness (the
@@ -943,61 +941,14 @@ static void find_in_expr(Expr *e, FindCtx *c) {
                     c->type_ref_sym = def;
                 }
             }
-            break;
-        case EXPR_BINARY:
-            find_in_expr(e->binary.left, c);
-            find_in_expr(e->binary.right, c);
-            break;
-        case EXPR_UNARY_PREFIX:  find_in_expr(e->unary_prefix.operand, c); break;
-        case EXPR_UNARY_POSTFIX: find_in_expr(e->unary_postfix.operand, c); break;
-        case EXPR_CALL:
-            find_in_expr(e->call.func, c);
-            find_in_exprs(e->call.args, e->call.arg_count, c);
-            break;
-        case EXPR_INDEX:
-            find_in_expr(e->index.object, c);
-            find_in_expr(e->index.index, c);
-            break;
-        case EXPR_SLICE:
-            find_in_expr(e->slice.object, c);
-            find_in_expr(e->slice.lo, c);
-            find_in_expr(e->slice.hi, c);
-            break;
+            return;
         case EXPR_CAST:
             consider_type_annotation(c, e->cast.target, e->loc.line, e->loc.col);
-            find_in_expr(e->cast.operand, c);
-            break;
-        case EXPR_BITCAST:
-            consider_builtin(c, e);   /* the bitcast keyword */
-            find_in_expr(e->bitcast_expr.operand, c);
             break;
         case EXPR_ENUM_OF:
             consider_builtin(c, e);   /* the enum_of keyword */
             consider_type_annotation(c, e->enum_of_expr.target, e->loc.line, e->loc.col);
-            find_in_expr(e->enum_of_expr.operand, c);
             break;
-        case EXPR_IF:
-            find_in_expr(e->if_expr.cond, c);
-            find_in_expr(e->if_expr.then_body, c);
-            find_in_expr(e->if_expr.else_body, c);
-            break;
-        case EXPR_MATCH:
-            find_in_expr(e->match_expr.subject, c);
-            for (int i = 0; i < e->match_expr.arm_count; i++) {
-                find_in_expr(e->match_expr.arms[i].guard, c);
-                find_in_exprs(e->match_expr.arms[i].body,
-                              e->match_expr.arms[i].body_count, c);
-            }
-            break;
-        case EXPR_LOOP: find_in_exprs(e->loop_expr.body, e->loop_expr.body_count, c); break;
-        case EXPR_FOR:
-            find_in_expr(e->for_expr.iter, c);
-            find_in_expr(e->for_expr.range_end, c);
-            find_in_exprs(e->for_expr.body, e->for_expr.body_count, c);
-            break;
-        case EXPR_BREAK:  find_in_expr(e->break_expr.value, c); break;
-        case EXPR_RETURN: find_in_expr(e->return_expr.value, c); break;
-        case EXPR_BLOCK:  find_in_exprs(e->block.stmts, e->block.count, c); break;
         case EXPR_FUNC:
             for (int i = 0; i < e->func.param_count; i++) {
                 Param *p = &e->func.params[i];
@@ -1010,7 +961,6 @@ static void find_in_expr(Expr *e, FindCtx *c) {
                                              p->loc.col + (int)strlen(p->name));
                 }
             }
-            find_in_exprs(e->func.body, e->func.body_count, c);
             break;
         case EXPR_STRUCT_LIT:
             /* The type name (at the node's loc) goes to the struct declaration. */
@@ -1026,104 +976,57 @@ static void find_in_expr(Expr *e, FindCtx *c) {
                      e->struct_lit.resolved_sym->kind == DECL_UNION))
                     c->type_ref_sym = e->struct_lit.resolved_sym;
             }
-            for (int i = 0; i < e->struct_lit.field_count; i++)
-                find_in_expr(e->struct_lit.fields[i].value, c);
             break;
-        case EXPR_TUPLE_LIT: find_in_exprs(e->tuple_lit.elems, e->tuple_lit.elem_count, c); break;
         case EXPR_ARRAY_LIT:
             /* The literal starts with its written element type (`dir[8] {`). */
             consider_type_annotation(c, e->array_lit.elem_type, e->loc.line, e->loc.col);
-            find_in_expr(e->array_lit.size_expr, c);
-            find_in_exprs(e->array_lit.elems, e->array_lit.elem_count, c);
             break;
         case EXPR_SLICE_LIT:
             consider_type_annotation(c, e->slice_lit.elem_type, e->loc.line, e->loc.col);
-            find_in_expr(e->slice_lit.ptr_expr, c);
-            find_in_expr(e->slice_lit.len_expr, c);
             break;
         case EXPR_ALLOC:
             consider_builtin(c, e);   /* the alloc/alloca keyword */
             if (e->alloc_expr.alloc_type)   /* alloc(T)/alloc(T,N): written type */
                 consider_type_annotation(c, e->alloc_expr.alloc_type,
                                          e->loc.line, e->loc.col);
-            find_in_expr(e->alloc_expr.size_expr, c);
-            find_in_expr(e->alloc_expr.init_expr, c);
-            break;
-        case EXPR_FREE:
-            consider_builtin(c, e);
-            find_in_expr(e->free_expr.operand, c);
             break;
         case EXPR_SIZEOF:
         case EXPR_ALIGNOF:
-        case EXPR_DEFAULT:
-            /* sizeof/alignof/default (and `none`, which desugars to EXPR_DEFAULT)
-             * take only a type argument — nothing further to descend into. */
+        case EXPR_DEFAULT: {
             consider_builtin(c, e);
-            {
-                /* The written type argument. `none` shares EXPR_DEFAULT but
-                 * spells no type — read the keyword to tell them apart. */
-                Type *tt = e->kind == EXPR_SIZEOF  ? e->sizeof_expr.target
-                         : e->kind == EXPR_ALIGNOF ? e->alignof_expr.target
-                         :                           e->default_expr.target;
-                char kw[16];
-                read_ident_at(c, e->loc, kw, sizeof kw);
-                if (e->kind != EXPR_DEFAULT || strcmp(kw, "default") == 0)
-                    consider_type_annotation(c, tt, e->loc.line, e->loc.col);
-            }
+            /* The written type argument. `none` shares EXPR_DEFAULT but
+             * spells no type — read the keyword to tell them apart. */
+            Type *tt = e->kind == EXPR_SIZEOF  ? e->sizeof_expr.target
+                     : e->kind == EXPR_ALIGNOF ? e->alignof_expr.target
+                     :                           e->default_expr.target;
+            char kw[16];
+            read_ident_at(c, e->loc, kw, sizeof kw);
+            if (e->kind != EXPR_DEFAULT || strcmp(kw, "default") == 0)
+                consider_type_annotation(c, tt, e->loc.line, e->loc.col);
             break;
-        case EXPR_INTERP_STRING:
-            for (int i = 0; i < e->interp_string.segment_count; i++)
-                if (!e->interp_string.segments[i].is_literal)
-                    find_in_expr(e->interp_string.segments[i].expr, c);
-            break;
-        case EXPR_ASSIGN:
-            find_in_expr(e->assign.target, c);
-            find_in_expr(e->assign.value, c);
-            break;
+        }
+        case EXPR_BITCAST:
+        case EXPR_FREE:
         case EXPR_SOME:
-            consider_builtin(c, e);
-            find_in_expr(e->some_expr.value, c);
-            break;
         case EXPR_OK:
-            consider_builtin(c, e);
-            find_in_expr(e->ok_expr.value, c);
-            break;
         case EXPR_ERR:
-            consider_builtin(c, e);
-            find_in_expr(e->err_expr.code, c);
-            break;
         case EXPR_ERROR_NAME:
-            consider_builtin(c, e);
-            find_in_expr(e->error_name_expr.code, c);
+        case EXPR_ASSERT:
+        case EXPR_ATOMIC_LOAD:
+        case EXPR_ATOMIC_STORE:
+            consider_builtin(c, e);   /* the keyword */
             break;
         case EXPR_LET: {
             int col = let_name_col(c, e->loc.line, e->loc.col, e->let_expr.let_is_mut);
             consider(c, e->loc.line, col, (int)strlen(e->let_expr.let_name),
                      e->let_expr.let_type, e->let_expr.let_name, NULL,
                      NO_LOC, e->let_expr.let_name_loc, false);
-            find_in_expr(e->let_expr.let_init, c);
             break;
         }
-        case EXPR_LET_DESTRUCT: find_in_expr(e->let_destruct.init, c); break;
-        case EXPR_ASSERT:
-            consider_builtin(c, e);
-            find_in_expr(e->assert_expr.condition, c);
-            find_in_expr(e->assert_expr.message, c);
+        default:
             break;
-        case EXPR_DEFER: find_in_expr(e->defer_expr.value, c); break;
-        case EXPR_IGNORE: find_in_expr(e->ignore_expr.value, c); break;
-        case EXPR_ATOMIC_LOAD:
-            consider_builtin(c, e);
-            find_in_expr(e->atomic_load.ptr, c);
-            break;
-        case EXPR_ATOMIC_STORE:
-            consider_builtin(c, e);
-            find_in_expr(e->atomic_store.ptr, c);
-            find_in_expr(e->atomic_store.value, c);
-            break;
-        case EXPR_GUARD: find_in_expr(e->guard.body, c); break;
-        default: break;   /* literals, type-var refs, etc. */
     }
+    expr_for_each_child(e, find_in_expr, c);
 }
 
 static void find_in_decls(Decl **decls, int n, FindCtx *c);
@@ -2445,71 +2348,13 @@ static void lens_emit(LensCtx *lc, int let_line, int let_col, bool is_mut,
     json_array_push(lc->a, lc->arr, lens);
 }
 
-static void lens_expr(Expr *e, LensCtx *lc);
-static void lens_exprs(Expr **arr, int n, LensCtx *lc) {
-    for (int i = 0; i < n; i++) lens_expr(arr[i], lc);
-}
-
-static void lens_expr(Expr *e, LensCtx *lc) {
+static void lens_expr(Expr *e, void *lens_ctx) {
     if (!e) return;
-    switch (e->kind) {
-        case EXPR_LET:
-            lens_emit(lc, e->loc.line, e->loc.col, e->let_expr.let_is_mut,
-                      e->let_expr.let_type,
-                      e->let_expr.let_init && e->let_expr.let_init->kind == EXPR_FUNC);
-            lens_expr(e->let_expr.let_init, lc);
-            break;
-        case EXPR_BINARY: lens_expr(e->binary.left, lc); lens_expr(e->binary.right, lc); break;
-        case EXPR_UNARY_PREFIX:  lens_expr(e->unary_prefix.operand, lc); break;
-        case EXPR_UNARY_POSTFIX: lens_expr(e->unary_postfix.operand, lc); break;
-        case EXPR_CALL:
-            lens_expr(e->call.func, lc);
-            lens_exprs(e->call.args, e->call.arg_count, lc);
-            break;
-        case EXPR_FIELD: case EXPR_DEREF_FIELD: lens_expr(e->field.object, lc); break;
-        case EXPR_INDEX: lens_expr(e->index.object, lc); lens_expr(e->index.index, lc); break;
-        case EXPR_SLICE:
-            lens_expr(e->slice.object, lc); lens_expr(e->slice.lo, lc); lens_expr(e->slice.hi, lc);
-            break;
-        case EXPR_CAST: lens_expr(e->cast.operand, lc); break;
-        case EXPR_BITCAST: lens_expr(e->bitcast_expr.operand, lc); break;
-        case EXPR_ENUM_OF: lens_expr(e->enum_of_expr.operand, lc); break;
-        case EXPR_IF:
-            lens_expr(e->if_expr.cond, lc);
-            lens_expr(e->if_expr.then_body, lc);
-            lens_expr(e->if_expr.else_body, lc);
-            break;
-        case EXPR_MATCH:
-            lens_expr(e->match_expr.subject, lc);
-            for (int i = 0; i < e->match_expr.arm_count; i++) {
-                lens_expr(e->match_expr.arms[i].guard, lc);
-                lens_exprs(e->match_expr.arms[i].body, e->match_expr.arms[i].body_count, lc);
-            }
-            break;
-        case EXPR_LOOP: lens_exprs(e->loop_expr.body, e->loop_expr.body_count, lc); break;
-        case EXPR_FOR:
-            lens_expr(e->for_expr.iter, lc);
-            lens_expr(e->for_expr.range_end, lc);
-            lens_exprs(e->for_expr.body, e->for_expr.body_count, lc);
-            break;
-        case EXPR_BREAK:  lens_expr(e->break_expr.value, lc); break;
-        case EXPR_RETURN: lens_expr(e->return_expr.value, lc); break;
-        case EXPR_BLOCK:  lens_exprs(e->block.stmts, e->block.count, lc); break;
-        case EXPR_FUNC:   lens_exprs(e->func.body, e->func.body_count, lc); break;
-        case EXPR_ASSIGN: lens_expr(e->assign.target, lc); lens_expr(e->assign.value, lc); break;
-        case EXPR_SOME:   lens_expr(e->some_expr.value, lc); break;
-        case EXPR_OK:     lens_expr(e->ok_expr.value, lc); break;
-        case EXPR_ERR:    lens_expr(e->err_expr.code, lc); break;
-        case EXPR_ERROR_NAME: lens_expr(e->error_name_expr.code, lc); break;
-        case EXPR_DEFER:  lens_expr(e->defer_expr.value, lc); break;
-        case EXPR_IGNORE: lens_expr(e->ignore_expr.value, lc); break;
-        case EXPR_GUARD:  lens_expr(e->guard.body, lc); break;
-        case EXPR_ASSERT:
-            lens_expr(e->assert_expr.condition, lc);
-            lens_expr(e->assert_expr.message, lc);
-            break;
-        default: break;
-    }
+    if (e->kind == EXPR_LET)
+        lens_emit(lens_ctx, e->loc.line, e->loc.col, e->let_expr.let_is_mut,
+                  e->let_expr.let_type,
+                  e->let_expr.let_init && e->let_expr.let_init->kind == EXPR_FUNC);
+    expr_for_each_child(e, lens_expr, lens_ctx);
 }
 
 static void lens_decls(Decl **decls, int n, LensCtx *lc) {
@@ -2661,60 +2506,56 @@ static Type *peel_to_aggregate(Type *t) {
     return t;
 }
 
-/* Harvest interned identifier names from the open file (dedup by pointer). */
-static void harvest_expr(Expr *e, const char ***names, int *n, int *cap);
-static void harvest_exprs(Expr **arr, int k, const char ***names, int *n, int *cap) {
-    for (int i = 0; i < k; i++) harvest_expr(arr[i], names, n, cap);
-}
-static void harvest_add(const char *name, const char ***names, int *n, int *cap) {
+/* The identifiers a function mentions or binds, deduplicated by interned
+ * pointer. Completion offers them as the function's locals. */
+typedef struct {
+    const char **names;
+    int count;
+    int cap;
+} NameList;
+
+static void harvest_add(NameList *l, const char *name) {
     if (!name) return;
-    for (int i = 0; i < *n; i++) if ((*names)[i] == name) return;  /* interned */
-    DA_APPEND(*names, *n, *cap, name);
+    for (int i = 0; i < l->count; i++) if (l->names[i] == name) return;
+    DA_APPEND(l->names, l->count, l->cap, name);
 }
-static void harvest_expr(Expr *e, const char ***names, int *n, int *cap) {
+
+static void harvest_pattern(Pattern *p, void *list) {
+    if (p->kind == PAT_BINDING) harvest_add(list, p->binding.name);
+    pattern_for_each_child(p, harvest_pattern, list);
+}
+
+static void harvest_expr(Expr *e, void *list) {
     if (!e) return;
+    NameList *l = list;
     switch (e->kind) {
-        case EXPR_IDENT: harvest_add(e->ident.name, names, n, cap); break;
-        case EXPR_LET:
-            harvest_add(e->let_expr.let_name, names, n, cap);
-            harvest_expr(e->let_expr.let_init, names, n, cap);
-            break;
-        case EXPR_BINARY: harvest_expr(e->binary.left, names, n, cap); harvest_expr(e->binary.right, names, n, cap); break;
-        case EXPR_UNARY_PREFIX: harvest_expr(e->unary_prefix.operand, names, n, cap); break;
-        case EXPR_UNARY_POSTFIX: harvest_expr(e->unary_postfix.operand, names, n, cap); break;
-        case EXPR_CALL: harvest_expr(e->call.func, names, n, cap); harvest_exprs(e->call.args, e->call.arg_count, names, n, cap); break;
-        case EXPR_FIELD: case EXPR_DEREF_FIELD: harvest_expr(e->field.object, names, n, cap); break;
-        case EXPR_INDEX: harvest_expr(e->index.object, names, n, cap); harvest_expr(e->index.index, names, n, cap); break;
-        case EXPR_SLICE: harvest_expr(e->slice.object, names, n, cap); harvest_expr(e->slice.lo, names, n, cap); harvest_expr(e->slice.hi, names, n, cap); break;
-        case EXPR_CAST: harvest_expr(e->cast.operand, names, n, cap); break;
-        case EXPR_BITCAST: harvest_expr(e->bitcast_expr.operand, names, n, cap); break;
-        case EXPR_ENUM_OF: harvest_expr(e->enum_of_expr.operand, names, n, cap); break;
-        case EXPR_IF: harvest_expr(e->if_expr.cond, names, n, cap); harvest_expr(e->if_expr.then_body, names, n, cap); harvest_expr(e->if_expr.else_body, names, n, cap); break;
-        case EXPR_MATCH:
-            harvest_expr(e->match_expr.subject, names, n, cap);
-            for (int i = 0; i < e->match_expr.arm_count; i++)
-                harvest_exprs(e->match_expr.arms[i].body, e->match_expr.arms[i].body_count, names, n, cap);
-            break;
-        case EXPR_LOOP: harvest_exprs(e->loop_expr.body, e->loop_expr.body_count, names, n, cap); break;
-        case EXPR_FOR: harvest_expr(e->for_expr.iter, names, n, cap); harvest_exprs(e->for_expr.body, e->for_expr.body_count, names, n, cap); break;
-        case EXPR_BREAK: harvest_expr(e->break_expr.value, names, n, cap); break;
-        case EXPR_RETURN: harvest_expr(e->return_expr.value, names, n, cap); break;
-        case EXPR_BLOCK: harvest_exprs(e->block.stmts, e->block.count, names, n, cap); break;
-        case EXPR_FUNC:
-            for (int i = 0; i < e->func.param_count; i++)
-                harvest_add(e->func.params[i].name, names, n, cap);
-            harvest_exprs(e->func.body, e->func.body_count, names, n, cap);
-            break;
-        case EXPR_ASSIGN: harvest_expr(e->assign.target, names, n, cap); harvest_expr(e->assign.value, names, n, cap); break;
-        case EXPR_SOME: harvest_expr(e->some_expr.value, names, n, cap); break;
-        case EXPR_OK: harvest_expr(e->ok_expr.value, names, n, cap); break;
-        case EXPR_ERR: harvest_expr(e->err_expr.code, names, n, cap); break;
-        case EXPR_ERROR_NAME: harvest_expr(e->error_name_expr.code, names, n, cap); break;
-        case EXPR_DEFER: harvest_expr(e->defer_expr.value, names, n, cap); break;
-        case EXPR_IGNORE: harvest_expr(e->ignore_expr.value, names, n, cap); break;
-        case EXPR_GUARD: harvest_expr(e->guard.body, names, n, cap); break;
-        default: break;
+    case EXPR_IDENT:
+        harvest_add(l, e->ident.name);
+        break;
+    case EXPR_LET:
+        harvest_add(l, e->let_expr.let_name);
+        break;
+    case EXPR_LET_DESTRUCT:
+        if (e->let_destruct.pattern) harvest_pattern(e->let_destruct.pattern, l);
+        break;
+    case EXPR_FUNC:
+        for (int i = 0; i < e->func.param_count; i++)
+            harvest_add(l, e->func.params[i].name);
+        break;
+    case EXPR_FOR:
+        harvest_add(l, e->for_expr.var);
+        harvest_add(l, e->for_expr.index_var);
+        if (e->for_expr.var_pattern) harvest_pattern(e->for_expr.var_pattern, l);
+        break;
+    case EXPR_MATCH:
+        for (int i = 0; i < e->match_expr.arm_count; i++)
+            if (e->match_expr.arms[i].pattern)
+                harvest_pattern(e->match_expr.arms[i].pattern, l);
+        break;
+    default:
+        break;
     }
+    expr_for_each_child(e, harvest_expr, list);
 }
 
 /* Member completion after '.' / '::': resolve the node just left of the dot. */
@@ -3004,12 +2845,12 @@ static void complete_scope(Arena *a, JsonValue *items, NameSet *seen,
                        ms->members, file, target_line);
     } else if (enc->kind == DECL_LET) {
         /* The enclosing function: harvest its bindings (and referenced names). */
-        const char **names = NULL; int nn = 0, cap = 0;
-        harvest_expr(enc->let.init, &names, &nn, &cap);
-        for (int i = 0; i < nn; i++)
-            if (nameset_add(seen, names[i]))
-                add_item(a, items, names[i], CIK_VARIABLE, NULL);
-        free(names);
+        NameList locals = {0};
+        harvest_expr(enc->let.init, &locals);
+        for (int i = 0; i < locals.count; i++)
+            if (nameset_add(seen, locals.names[i]))
+                add_item(a, items, locals.names[i], CIK_VARIABLE, NULL);
+        free(locals.names);
     }
 }
 

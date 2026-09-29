@@ -1,0 +1,12 @@
+struct point =
+    x: i32
+
+module point =
+    let make = (x: i32) -> point { x = a.twice(x) }
+
+module a =
+    let twice = (x: i32) -> x * 2
+    let origin = () -> point.make(0)
+
+let main = (args: str[]) ->
+    0
