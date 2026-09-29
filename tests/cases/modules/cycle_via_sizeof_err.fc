@@ -1,0 +1,9 @@
+module a =
+    let size = () -> (i32) sizeof(b.point)
+
+module b =
+    struct point =
+        x: i32
+    let f = () -> a.size()
+
+let main = (args: str[]) -> b.f()

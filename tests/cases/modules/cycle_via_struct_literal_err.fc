@@ -1,0 +1,9 @@
+module a =
+    let origin = () -> b.point { x = 0 }
+
+module b =
+    struct point =
+        x: i32
+    let f = () -> a.origin().x
+
+let main = (args: str[]) -> b.f()

@@ -53,11 +53,15 @@ CLAUDE.md.
   checkpoint leaves the suite green.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
-- Open question: the cycle check still counts only references made in a
-  top-level module's own member initializers and imports, as before. A
-  reference from inside a nested module, or through a type annotation, does
-  not make its enclosing top-level module depend on the target. Decide
-  whether that should change.
+- **Module cycles: complete rule (decided 2026-09-28).** Every reference
+  written anywhere inside a top-level module counts: identifiers, types in
+  annotations, fields, payloads, type arguments, casts and literals, and
+  imports, including from nested modules. The error names the location of
+  each reference in the cycle. The only existing code this rejected was
+  wolf-fc (`enemies` <-> `projectiles`, and `enemies` -> `death_cam`). wolf-fc
+  was restructured to match: `projectiles` is nested in `enemies`, the dog
+  bite moved to `enemies.ai`, and the death cam starts from
+  `enemies.ai.start_death_cam`. Its 287 regression tests pass.
 
 ## Phase 1: Tests for the confirmed bugs (about 1/2 day)
 

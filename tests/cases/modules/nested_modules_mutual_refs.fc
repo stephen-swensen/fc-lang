@@ -1,0 +1,18 @@
+// Nested modules belong to their top-level module, so they may refer to
+// each other and to their parent in both directions.
+module game =
+    let base = 10
+
+    module ai =
+        let fire = (x: i32) -> shots.spawn(x) + base
+
+    module shots =
+        let spawn = (x: i32) -> x * 2
+        let hit = (x: i32) -> ai.fire(x) + game.base
+
+module ui =
+    let show = (x: i32) -> game.shots.hit(x)
+
+let main = (args: str[]) ->
+    assert(ui.show(1) == 22)
+    0

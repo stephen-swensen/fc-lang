@@ -1,0 +1,10 @@
+module a =
+    module helpers =
+        import g from b
+        let f = (x: i32) -> g(x)
+
+module b =
+    let g = (x: i32) -> x
+    let h = (x: i32) -> a.helpers.f(x)
+
+let main = (args: str[]) -> b.h(0)

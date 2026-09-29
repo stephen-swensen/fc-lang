@@ -1,0 +1,12 @@
+struct box =
+    v: 'a
+
+module a =
+    let unbox = (x: box<b.point>) -> x.v.x
+
+module b =
+    struct point =
+        x: i32
+    let f = () -> a.unbox(box { v = point { x = 1 } })
+
+let main = (args: str[]) -> b.f()

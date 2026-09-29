@@ -1,0 +1,13 @@
+// Types in two modules that point at each other form a cycle between the
+// modules; mutually referring types belong in one module.
+module a =
+    struct node =
+        next: b.node*
+        v: i32
+
+module b =
+    struct node =
+        prev: a.node*
+        w: i32
+
+let main = (args: str[]) -> 0

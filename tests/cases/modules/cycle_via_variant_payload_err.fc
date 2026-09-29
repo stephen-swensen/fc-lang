@@ -1,0 +1,14 @@
+module a =
+    union shape =
+        | dot(b.point)
+        | empty
+
+module b =
+    struct point =
+        x: i32
+    let f = () ->
+        match a.shape.dot(point { x = 1 }) with
+        | dot(p) -> p.x
+        | empty -> 0
+
+let main = (args: str[]) -> b.f()

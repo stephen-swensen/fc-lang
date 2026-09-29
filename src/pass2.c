@@ -11322,54 +11322,230 @@ static void check_infinite_size(Program *prog) {
 }
 
 /* ---- Module cycles ----
- * A top-level module depends on another when one of its member initializers
- * names that module (`b.f(x)`, or a type whose companion module it is), or
- * when it imports from it. The dependency graph must be acyclic. The check
- * runs after type checking so each identifier is judged by what it resolved
- * to: a binding that merely shares a module's name is not a reference. */
+ * Top-level module A depends on top-level module B when anything written
+ * inside A (at any depth, nested modules included) refers to something
+ * declared inside B: an identifier that resolves there, a type named in an
+ * annotation, field, payload, cast or literal, or an import. The dependency
+ * graph must be acyclic. The check runs after type checking so each name is
+ * judged by what it resolved to, never by its spelling: a binding that merely
+ * shares a module's name is not a reference. Inferred types are not
+ * scanned: a value reaches a module only through a written reference to
+ * whatever produced it, so that dependency is already in the graph. */
 
 typedef struct {
-    Decl **mods;    /* top-level module declarations */
+    Decl *decl;
+    int module;     /* index of the top-level module containing decl */
+} DeclOwner;
+
+typedef struct {
+    SymbolTable *symtab;
+    Decl **mods;        /* top-level module declarations */
     int count;
-    bool *deps;     /* deps[i * count + j]: module i depends on module j */
-    int from;       /* the module whose members are being scanned */
+    DeclOwner *owners;  /* every declaration inside a top-level module, sorted by address */
+    int owner_count;
+    int owner_cap;
+    bool *deps;         /* deps[i * count + j]: module i depends on module j */
+    SrcLoc *where;      /* where[i * count + j]: the first reference that made it so */
+    int from;           /* the module whose declarations are being scanned */
+    SrcLoc at;          /* location of the reference being scanned */
 } ModuleGraph;
 
-/* Index of the top-level module that is or contains module `sym`, or -1. */
-static int module_graph_index(ModuleGraph *g, Symbol *sym) {
-    if (!sym || sym->kind != DECL_MODULE) return -1;
-    while (sym->parent) sym = sym->parent;
-    for (int i = 0; i < g->count; i++)
-        if (g->mods[i] == sym->decl) return i;
-    return -1;
+static int decl_owner_cmp(const void *a, const void *b) {
+    uintptr_t x = (uintptr_t)((const DeclOwner *)a)->decl;
+    uintptr_t y = (uintptr_t)((const DeclOwner *)b)->decl;
+    return (x > y) - (x < y);
+}
+
+static void module_graph_own(ModuleGraph *g, Decl *d, int module) {
+    DeclOwner o = { d, module };
+    DA_APPEND(g->owners, g->owner_count, g->owner_cap, o);
+    if (d->kind == DECL_MODULE)
+        for (int i = 0; i < d->module.decl_count; i++)
+            module_graph_own(g, d->module.decls[i], module);
 }
 
 static void module_graph_add(ModuleGraph *g, Symbol *target) {
-    int j = module_graph_index(g, target);
-    if (j >= 0 && j != g->from) g->deps[g->from * g->count + j] = true;
+    if (!target || !target->decl) return;
+    DeclOwner key = { target->decl, 0 };
+    DeclOwner *o = bsearch(&key, g->owners, (size_t)g->owner_count, sizeof key, decl_owner_cmp);
+    if (!o || o->module == g->from) return;
+    int edge = g->from * g->count + o->module;
+    if (!g->deps[edge]) {
+        g->deps[edge] = true;
+        g->where[edge] = g->at;
+    }
 }
 
-static void note_module_refs(Expr *e, void *graph) {
+static void note_expr_refs(Expr *e, void *graph);
+
+static void note_type_refs(ModuleGraph *g, Type *t) {
+    if (!t) return;
+    switch (t->kind) {
+    case TYPE_POINTER:  note_type_refs(g, t->pointer.pointee); break;
+    case TYPE_SLICE:    note_type_refs(g, t->slice.elem); break;
+    case TYPE_OPTION:   note_type_refs(g, t->option.inner); break;
+    case TYPE_RESULT:   note_type_refs(g, t->result.inner); break;
+    case TYPE_FIXED_ARRAY:
+        note_type_refs(g, t->fixed_array.elem);
+        note_type_refs(g, t->fixed_array.size_ref);
+        break;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            note_type_refs(g, t->func.param_types[i]);
+        note_type_refs(g, t->func.return_type);
+        break;
+    case TYPE_STRUCT:
+        module_graph_add(g, t->struc.resolved_sym);
+        for (int i = 0; i < t->struc.type_arg_count; i++)
+            note_type_refs(g, t->struc.type_args[i]);
+        if (t->struc.is_tuple)   /* a tuple's element types are written in place */
+            for (int i = 0; i < t->struc.field_count; i++)
+                note_type_refs(g, t->struc.fields[i].type);
+        break;
+    case TYPE_UNION:
+        module_graph_add(g, t->unio.resolved_sym);
+        for (int i = 0; i < t->unio.type_arg_count; i++)
+            note_type_refs(g, t->unio.type_args[i]);
+        break;
+    case TYPE_ENUM:
+        module_graph_add(g, t->enu.resolved_sym);
+        break;
+    case TYPE_STUB:
+        /* A stub left in a declaration's field types carries its mangled
+         * name, which the global table resolves unambiguously. */
+        module_graph_add(g, symtab_lookup(g->symtab, t->stub.name));
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            note_type_refs(g, t->stub.type_args[i]);
+        break;
+    case TYPE_CONST_EXPR:
+        note_expr_refs(t->const_expr.expr, g);
+        break;
+    default:
+        break;
+    }
+}
+
+static void note_type_args(ModuleGraph *g, Type **args, int count) {
+    for (int i = 0; i < count; i++) note_type_refs(g, args[i]);
+}
+
+static void note_expr_refs(Expr *e, void *graph) {
     ModuleGraph *g = graph;
-    if (e->kind == EXPR_IDENT) {
+    g->at = e->loc;
+    switch (e->kind) {
+    case EXPR_IDENT:
         module_graph_add(g, e->ident.resolved_sym);
         module_graph_add(g, e->ident.companion_module);
+        break;
+    case EXPR_STRUCT_LIT:
+        module_graph_add(g, e->struct_lit.resolved_sym);
+        break;
+    case EXPR_CALL:
+        note_type_args(g, e->call.type_args, e->call.type_arg_count);
+        break;
+    case EXPR_FIELD:
+    case EXPR_DEREF_FIELD:
+        note_type_args(g, e->field.type_args, e->field.type_arg_count);
+        break;
+    case EXPR_FUNC:
+        for (int i = 0; i < e->func.param_count; i++) {
+            g->at = e->func.params[i].loc;
+            note_type_refs(g, e->func.params[i].type);
+        }
+        break;
+    case EXPR_CAST:         note_type_refs(g, e->cast.target); break;
+    case EXPR_BITCAST:      note_type_refs(g, e->bitcast_expr.target); break;
+    case EXPR_ENUM_OF:      note_type_refs(g, e->enum_of_expr.target); break;
+    case EXPR_ERR:          note_type_refs(g, e->err_expr.target); break;
+    case EXPR_SIZEOF:       note_type_refs(g, e->sizeof_expr.target); break;
+    case EXPR_ALIGNOF:      note_type_refs(g, e->alignof_expr.target); break;
+    case EXPR_DEFAULT:      note_type_refs(g, e->default_expr.target); break;
+    case EXPR_ALLOC:        note_type_refs(g, e->alloc_expr.alloc_type); break;
+    case EXPR_ARRAY_LIT:    note_type_refs(g, e->array_lit.elem_type); break;
+    case EXPR_SLICE_LIT:    note_type_refs(g, e->slice_lit.elem_type); break;
+    default: break;
     }
-    expr_for_each_child(e, note_module_refs, graph);
+    expr_for_each_child(e, note_expr_refs, graph);
+}
+
+static void note_static_assert_refs(ModuleGraph *g, StaticAssert *sa, int count) {
+    for (int i = 0; i < count; i++)
+        if (sa[i].cond) note_expr_refs(sa[i].cond, g);
+}
+
+static void note_decl_refs(ModuleGraph *g, Decl *d) {
+    g->at = d->loc;
+    switch (d->kind) {
+    case DECL_LET: {
+        Expr *init = d->let.written_init ? d->let.written_init : d->let.init;
+        if (init) note_expr_refs(init, g);
+        break;
+    }
+    case DECL_STRUCT:
+        for (int i = 0; i < d->struc.field_count; i++) {
+            if (d->struc.fields[i].loc.line) g->at = d->struc.fields[i].loc;
+            note_type_refs(g, d->struc.fields[i].type);
+        }
+        note_static_assert_refs(g, d->struc.static_asserts, d->struc.static_assert_count);
+        break;
+    case DECL_UNION:
+        for (int i = 0; i < d->unio.variant_count; i++) {
+            if (d->unio.variants[i].loc.line) g->at = d->unio.variants[i].loc;
+            note_type_refs(g, d->unio.variants[i].payload);
+        }
+        note_static_assert_refs(g, d->unio.static_asserts, d->unio.static_assert_count);
+        break;
+    case DECL_EXTERN:
+        note_type_refs(g, d->ext.type);
+        break;
+    case DECL_IMPORT:
+        module_graph_add(g, d->import.resolved_sym);
+        module_graph_add(g, d->import.resolved_companion);
+        module_graph_add(g, d->import.resolved_module);
+        break;
+    case DECL_MODULE:
+        for (int i = 0; i < d->module.decl_count; i++)
+            note_decl_refs(g, d->module.decls[i]);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Report the cycle closed by the edge u -> path[at], naming where each
+ * module refers to the next. */
+static void report_module_cycle(ModuleGraph *g, const int *path, int depth, int at, int u) {
+    Decl *first = g->mods[path[at]];
+    char *msg = str_appendf(NULL, "circular reference between modules '%s' and '%s':",
+                            g->mods[u]->module.name, first->module.name);
+    for (int i = at; i < depth; i++) {
+        int a = path[i];
+        int b = i + 1 < depth ? path[i + 1] : path[at];
+        SrcLoc w = g->where[a * g->count + b];
+        msg = str_appendf(msg, "%s '%s' refers to '%s' at %s:%d:%d",
+                          i == at ? "" : (i + 1 == depth ? ", and" : ","),
+                          g->mods[a]->module.name, g->mods[b]->module.name,
+                          w.filename ? w.filename : "?", w.line, w.col);
+    }
+    diag_error(g->mods[u]->loc, "%s", msg);
+    free(msg);
 }
 
 /* Depth-first search from u, reporting the first edge back onto the current
- * path. color: 0 unvisited, 1 on the path, 2 finished. */
-static bool module_graph_find_cycle(ModuleGraph *g, int u, int *color) {
+ * path. color: 0 unvisited, 1 on the path, 2 finished. path[0..depth) is the
+ * current path, ending at u. */
+static bool module_graph_find_cycle(ModuleGraph *g, int u, int *color, int *path, int depth) {
     color[u] = 1;
+    path[depth++] = u;
     for (int v = 0; v < g->count; v++) {
         if (!g->deps[u * g->count + v]) continue;
         if (color[v] == 1) {
-            diag_error(g->mods[u]->loc, "circular reference between modules '%s' and '%s'",
-                       g->mods[u]->module.name, g->mods[v]->module.name);
+            int at = depth - 1;
+            while (path[at] != v) at--;
+            report_module_cycle(g, path, depth, at, u);
             return true;
         }
-        if (color[v] == 0 && module_graph_find_cycle(g, v, color)) return true;
+        if (color[v] == 0 && module_graph_find_cycle(g, v, color, path, depth)) return true;
     }
     color[u] = 2;
     return false;
@@ -11382,32 +11558,30 @@ static void check_module_cycles(SymbolTable *symtab) {
     if (count < 2) return;
 
     ModuleGraph g = {
+        .symtab = symtab,
         .mods = malloc(sizeof(Decl *) * (size_t)count),
         .count = count,
         .deps = calloc((size_t)count * (size_t)count, sizeof(bool)),
+        .where = calloc((size_t)count * (size_t)count, sizeof(SrcLoc)),
     };
     int n = 0;
     for (int i = 0; i < symtab->count; i++)
         if (symtab->symbols[i].kind == DECL_MODULE) g.mods[n++] = symtab->symbols[i].decl;
+    for (int i = 0; i < count; i++)
+        module_graph_own(&g, g.mods[i], i);
+    qsort(g.owners, (size_t)g.owner_count, sizeof *g.owners, decl_owner_cmp);
 
-    for (g.from = 0; g.from < count; g.from++) {
-        Decl *m = g.mods[g.from];
-        for (int i = 0; i < m->module.decl_count; i++) {
-            Decl *member = m->module.decls[i];
-            if (member->kind == DECL_LET) {
-                Expr *init = member->let.written_init ? member->let.written_init
-                                                      : member->let.init;
-                if (init) note_module_refs(init, &g);
-            }
-            else if (member->kind == DECL_IMPORT)
-                module_graph_add(&g, member->import.resolved_module);
-        }
-    }
+    for (g.from = 0; g.from < count; g.from++)
+        note_decl_refs(&g, g.mods[g.from]);
 
     int *color = calloc((size_t)count, sizeof(int));
+    int *path = malloc(sizeof(int) * (size_t)count);
     for (int u = 0; u < count; u++)
-        if (color[u] == 0 && module_graph_find_cycle(&g, u, color)) break;
+        if (color[u] == 0 && module_graph_find_cycle(&g, u, color, path, 0)) break;
+    free(path);
     free(color);
+    free(g.owners);
+    free(g.where);
     free(g.deps);
     free(g.mods);
 }

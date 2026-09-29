@@ -1,0 +1,10 @@
+// A type written in a parameter annotation is a reference to its module.
+module a =
+    let norm = (p: b.point) -> p.x
+
+module b =
+    struct point =
+        x: i32
+    let f = () -> a.norm(point { x = 1 })
+
+let main = (args: str[]) -> b.f()
