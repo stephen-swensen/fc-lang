@@ -49,8 +49,18 @@ CLAUDE.md.
   `expr_for_each_child`, `expr_any_child` and `pattern_for_each_child`. Every
   whole-tree walker listed in phase 2 now uses them. B1-B10 are fixed and
   tested, and the module-cycle check has moved to the end of pass2.
-- Tests for B11-B21 are written together with their fixes in phase 3, so each
-  checkpoint leaves the suite green.
+- **Phase 3: done (2026-09-28).** B11-B20 are fixed and tested, and member
+  completion after `->` is gone (it never produced results in practice) along
+  with the `>` trigger character. B21 stays with `pending_decls` in phase 4.
+  Two more things came out of it:
+  - The token name table missed `'...'` as well as `'const'`. It is now a
+    switch, so `-Wswitch` catches a token kind with no name.
+  - **B27, open (language question):** arithmetic on a type variable is typed
+    as the type variable, but the same expression with concrete types widens.
+    With `'a = u8`, a generic `x + 300` gives 49 (u8 wraparound) where
+    `x + 300` on a concrete `u8` gives the i32 305. A generic
+    `a + 3000000000i64` with `'a = i32` truncates. Comparisons are unaffected:
+    they yield bool, and mixed signedness is rejected in both paths.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
 - **Module cycles: complete rule (decided 2026-09-28).** Every reference

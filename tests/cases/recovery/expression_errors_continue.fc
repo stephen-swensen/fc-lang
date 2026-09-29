@@ -1,0 +1,12 @@
+// Each of these expression errors is reported and parsing carries on, so the
+// stray keyword in the last statement is reported too.
+let main = (args: str[]) ->
+    let a = none
+    let b = err
+    let t = { 1 }
+    let y = (let x = 1)
+    let n = 3
+    let s = "%d{n n}"
+    let c = (cstr[0]) "hi"
+    let late = struct
+    0

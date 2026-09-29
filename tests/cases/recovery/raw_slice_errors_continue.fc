@@ -1,0 +1,9 @@
+// Malformed raw-parts slice literals are reported and parsing carries on.
+let main = (args: str[]) ->
+    let p = "abc".ptr
+    let a = u8[] { ptr = p, size = 3 }
+    let b = u8[] { ptr = p }
+    let c = str { ptr = p, size = 3 }
+    let d = str { ptr = p }
+    let late = struct
+    0

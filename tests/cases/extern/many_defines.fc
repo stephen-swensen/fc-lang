@@ -1,0 +1,286 @@
+// More extern-module defines than any small fixed limit: every one is
+// emitted, so each constant it names is visible to the C compiler.
+module m0 from "stdint.h" define "FC_TEST_DEFINE_0" "0" =
+    extern FC_TEST_DEFINE_0 as value: i32
+
+module m1 from "stdint.h" define "FC_TEST_DEFINE_1" "1" =
+    extern FC_TEST_DEFINE_1 as value: i32
+
+module m2 from "stdint.h" define "FC_TEST_DEFINE_2" "2" =
+    extern FC_TEST_DEFINE_2 as value: i32
+
+module m3 from "stdint.h" define "FC_TEST_DEFINE_3" "3" =
+    extern FC_TEST_DEFINE_3 as value: i32
+
+module m4 from "stdint.h" define "FC_TEST_DEFINE_4" "4" =
+    extern FC_TEST_DEFINE_4 as value: i32
+
+module m5 from "stdint.h" define "FC_TEST_DEFINE_5" "5" =
+    extern FC_TEST_DEFINE_5 as value: i32
+
+module m6 from "stdint.h" define "FC_TEST_DEFINE_6" "6" =
+    extern FC_TEST_DEFINE_6 as value: i32
+
+module m7 from "stdint.h" define "FC_TEST_DEFINE_7" "7" =
+    extern FC_TEST_DEFINE_7 as value: i32
+
+module m8 from "stdint.h" define "FC_TEST_DEFINE_8" "8" =
+    extern FC_TEST_DEFINE_8 as value: i32
+
+module m9 from "stdint.h" define "FC_TEST_DEFINE_9" "9" =
+    extern FC_TEST_DEFINE_9 as value: i32
+
+module m10 from "stdint.h" define "FC_TEST_DEFINE_10" "10" =
+    extern FC_TEST_DEFINE_10 as value: i32
+
+module m11 from "stdint.h" define "FC_TEST_DEFINE_11" "11" =
+    extern FC_TEST_DEFINE_11 as value: i32
+
+module m12 from "stdint.h" define "FC_TEST_DEFINE_12" "12" =
+    extern FC_TEST_DEFINE_12 as value: i32
+
+module m13 from "stdint.h" define "FC_TEST_DEFINE_13" "13" =
+    extern FC_TEST_DEFINE_13 as value: i32
+
+module m14 from "stdint.h" define "FC_TEST_DEFINE_14" "14" =
+    extern FC_TEST_DEFINE_14 as value: i32
+
+module m15 from "stdint.h" define "FC_TEST_DEFINE_15" "15" =
+    extern FC_TEST_DEFINE_15 as value: i32
+
+module m16 from "stdint.h" define "FC_TEST_DEFINE_16" "16" =
+    extern FC_TEST_DEFINE_16 as value: i32
+
+module m17 from "stdint.h" define "FC_TEST_DEFINE_17" "17" =
+    extern FC_TEST_DEFINE_17 as value: i32
+
+module m18 from "stdint.h" define "FC_TEST_DEFINE_18" "18" =
+    extern FC_TEST_DEFINE_18 as value: i32
+
+module m19 from "stdint.h" define "FC_TEST_DEFINE_19" "19" =
+    extern FC_TEST_DEFINE_19 as value: i32
+
+module m20 from "stdint.h" define "FC_TEST_DEFINE_20" "20" =
+    extern FC_TEST_DEFINE_20 as value: i32
+
+module m21 from "stdint.h" define "FC_TEST_DEFINE_21" "21" =
+    extern FC_TEST_DEFINE_21 as value: i32
+
+module m22 from "stdint.h" define "FC_TEST_DEFINE_22" "22" =
+    extern FC_TEST_DEFINE_22 as value: i32
+
+module m23 from "stdint.h" define "FC_TEST_DEFINE_23" "23" =
+    extern FC_TEST_DEFINE_23 as value: i32
+
+module m24 from "stdint.h" define "FC_TEST_DEFINE_24" "24" =
+    extern FC_TEST_DEFINE_24 as value: i32
+
+module m25 from "stdint.h" define "FC_TEST_DEFINE_25" "25" =
+    extern FC_TEST_DEFINE_25 as value: i32
+
+module m26 from "stdint.h" define "FC_TEST_DEFINE_26" "26" =
+    extern FC_TEST_DEFINE_26 as value: i32
+
+module m27 from "stdint.h" define "FC_TEST_DEFINE_27" "27" =
+    extern FC_TEST_DEFINE_27 as value: i32
+
+module m28 from "stdint.h" define "FC_TEST_DEFINE_28" "28" =
+    extern FC_TEST_DEFINE_28 as value: i32
+
+module m29 from "stdint.h" define "FC_TEST_DEFINE_29" "29" =
+    extern FC_TEST_DEFINE_29 as value: i32
+
+module m30 from "stdint.h" define "FC_TEST_DEFINE_30" "30" =
+    extern FC_TEST_DEFINE_30 as value: i32
+
+module m31 from "stdint.h" define "FC_TEST_DEFINE_31" "31" =
+    extern FC_TEST_DEFINE_31 as value: i32
+
+module m32 from "stdint.h" define "FC_TEST_DEFINE_32" "32" =
+    extern FC_TEST_DEFINE_32 as value: i32
+
+module m33 from "stdint.h" define "FC_TEST_DEFINE_33" "33" =
+    extern FC_TEST_DEFINE_33 as value: i32
+
+module m34 from "stdint.h" define "FC_TEST_DEFINE_34" "34" =
+    extern FC_TEST_DEFINE_34 as value: i32
+
+module m35 from "stdint.h" define "FC_TEST_DEFINE_35" "35" =
+    extern FC_TEST_DEFINE_35 as value: i32
+
+module m36 from "stdint.h" define "FC_TEST_DEFINE_36" "36" =
+    extern FC_TEST_DEFINE_36 as value: i32
+
+module m37 from "stdint.h" define "FC_TEST_DEFINE_37" "37" =
+    extern FC_TEST_DEFINE_37 as value: i32
+
+module m38 from "stdint.h" define "FC_TEST_DEFINE_38" "38" =
+    extern FC_TEST_DEFINE_38 as value: i32
+
+module m39 from "stdint.h" define "FC_TEST_DEFINE_39" "39" =
+    extern FC_TEST_DEFINE_39 as value: i32
+
+module m40 from "stdint.h" define "FC_TEST_DEFINE_40" "40" =
+    extern FC_TEST_DEFINE_40 as value: i32
+
+module m41 from "stdint.h" define "FC_TEST_DEFINE_41" "41" =
+    extern FC_TEST_DEFINE_41 as value: i32
+
+module m42 from "stdint.h" define "FC_TEST_DEFINE_42" "42" =
+    extern FC_TEST_DEFINE_42 as value: i32
+
+module m43 from "stdint.h" define "FC_TEST_DEFINE_43" "43" =
+    extern FC_TEST_DEFINE_43 as value: i32
+
+module m44 from "stdint.h" define "FC_TEST_DEFINE_44" "44" =
+    extern FC_TEST_DEFINE_44 as value: i32
+
+module m45 from "stdint.h" define "FC_TEST_DEFINE_45" "45" =
+    extern FC_TEST_DEFINE_45 as value: i32
+
+module m46 from "stdint.h" define "FC_TEST_DEFINE_46" "46" =
+    extern FC_TEST_DEFINE_46 as value: i32
+
+module m47 from "stdint.h" define "FC_TEST_DEFINE_47" "47" =
+    extern FC_TEST_DEFINE_47 as value: i32
+
+module m48 from "stdint.h" define "FC_TEST_DEFINE_48" "48" =
+    extern FC_TEST_DEFINE_48 as value: i32
+
+module m49 from "stdint.h" define "FC_TEST_DEFINE_49" "49" =
+    extern FC_TEST_DEFINE_49 as value: i32
+
+module m50 from "stdint.h" define "FC_TEST_DEFINE_50" "50" =
+    extern FC_TEST_DEFINE_50 as value: i32
+
+module m51 from "stdint.h" define "FC_TEST_DEFINE_51" "51" =
+    extern FC_TEST_DEFINE_51 as value: i32
+
+module m52 from "stdint.h" define "FC_TEST_DEFINE_52" "52" =
+    extern FC_TEST_DEFINE_52 as value: i32
+
+module m53 from "stdint.h" define "FC_TEST_DEFINE_53" "53" =
+    extern FC_TEST_DEFINE_53 as value: i32
+
+module m54 from "stdint.h" define "FC_TEST_DEFINE_54" "54" =
+    extern FC_TEST_DEFINE_54 as value: i32
+
+module m55 from "stdint.h" define "FC_TEST_DEFINE_55" "55" =
+    extern FC_TEST_DEFINE_55 as value: i32
+
+module m56 from "stdint.h" define "FC_TEST_DEFINE_56" "56" =
+    extern FC_TEST_DEFINE_56 as value: i32
+
+module m57 from "stdint.h" define "FC_TEST_DEFINE_57" "57" =
+    extern FC_TEST_DEFINE_57 as value: i32
+
+module m58 from "stdint.h" define "FC_TEST_DEFINE_58" "58" =
+    extern FC_TEST_DEFINE_58 as value: i32
+
+module m59 from "stdint.h" define "FC_TEST_DEFINE_59" "59" =
+    extern FC_TEST_DEFINE_59 as value: i32
+
+module m60 from "stdint.h" define "FC_TEST_DEFINE_60" "60" =
+    extern FC_TEST_DEFINE_60 as value: i32
+
+module m61 from "stdint.h" define "FC_TEST_DEFINE_61" "61" =
+    extern FC_TEST_DEFINE_61 as value: i32
+
+module m62 from "stdint.h" define "FC_TEST_DEFINE_62" "62" =
+    extern FC_TEST_DEFINE_62 as value: i32
+
+module m63 from "stdint.h" define "FC_TEST_DEFINE_63" "63" =
+    extern FC_TEST_DEFINE_63 as value: i32
+
+module m64 from "stdint.h" define "FC_TEST_DEFINE_64" "64" =
+    extern FC_TEST_DEFINE_64 as value: i32
+
+module m65 from "stdint.h" define "FC_TEST_DEFINE_65" "65" =
+    extern FC_TEST_DEFINE_65 as value: i32
+
+module m66 from "stdint.h" define "FC_TEST_DEFINE_66" "66" =
+    extern FC_TEST_DEFINE_66 as value: i32
+
+module m67 from "stdint.h" define "FC_TEST_DEFINE_67" "67" =
+    extern FC_TEST_DEFINE_67 as value: i32
+
+module m68 from "stdint.h" define "FC_TEST_DEFINE_68" "68" =
+    extern FC_TEST_DEFINE_68 as value: i32
+
+module m69 from "stdint.h" define "FC_TEST_DEFINE_69" "69" =
+    extern FC_TEST_DEFINE_69 as value: i32
+
+let main = (args: str[]) ->
+    let mut sum = 0
+    sum = sum + m0.value
+    sum = sum + m1.value
+    sum = sum + m2.value
+    sum = sum + m3.value
+    sum = sum + m4.value
+    sum = sum + m5.value
+    sum = sum + m6.value
+    sum = sum + m7.value
+    sum = sum + m8.value
+    sum = sum + m9.value
+    sum = sum + m10.value
+    sum = sum + m11.value
+    sum = sum + m12.value
+    sum = sum + m13.value
+    sum = sum + m14.value
+    sum = sum + m15.value
+    sum = sum + m16.value
+    sum = sum + m17.value
+    sum = sum + m18.value
+    sum = sum + m19.value
+    sum = sum + m20.value
+    sum = sum + m21.value
+    sum = sum + m22.value
+    sum = sum + m23.value
+    sum = sum + m24.value
+    sum = sum + m25.value
+    sum = sum + m26.value
+    sum = sum + m27.value
+    sum = sum + m28.value
+    sum = sum + m29.value
+    sum = sum + m30.value
+    sum = sum + m31.value
+    sum = sum + m32.value
+    sum = sum + m33.value
+    sum = sum + m34.value
+    sum = sum + m35.value
+    sum = sum + m36.value
+    sum = sum + m37.value
+    sum = sum + m38.value
+    sum = sum + m39.value
+    sum = sum + m40.value
+    sum = sum + m41.value
+    sum = sum + m42.value
+    sum = sum + m43.value
+    sum = sum + m44.value
+    sum = sum + m45.value
+    sum = sum + m46.value
+    sum = sum + m47.value
+    sum = sum + m48.value
+    sum = sum + m49.value
+    sum = sum + m50.value
+    sum = sum + m51.value
+    sum = sum + m52.value
+    sum = sum + m53.value
+    sum = sum + m54.value
+    sum = sum + m55.value
+    sum = sum + m56.value
+    sum = sum + m57.value
+    sum = sum + m58.value
+    sum = sum + m59.value
+    sum = sum + m60.value
+    sum = sum + m61.value
+    sum = sum + m62.value
+    sum = sum + m63.value
+    sum = sum + m64.value
+    sum = sum + m65.value
+    sum = sum + m66.value
+    sum = sum + m67.value
+    sum = sum + m68.value
+    sum = sum + m69.value
+    assert(sum == 2415)
+    0

@@ -1,0 +1,29 @@
+// File-level initializers may construct union and enum variants and name
+// declared error codes.
+union shape =
+    | circle(i32)
+    | empty
+
+enum color =
+    | red
+    | green
+
+error io_err =
+    | not_found
+    | denied
+
+let c = shape.circle(2)
+let e = shape.empty
+let k = color.green
+let code = io_err.denied
+
+let main = (args: str[]) ->
+    let r = match c with
+        | circle(n) -> n
+        | empty -> 0
+    assert(r == 2)
+    assert(k == color.green)
+    assert(code == io_err.denied)
+    match e with
+    | empty -> 0
+    | circle(_) -> 1

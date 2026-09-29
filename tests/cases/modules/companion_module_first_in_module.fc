@@ -1,0 +1,35 @@
+// Inside a module, a companion module may come before its type, as at top
+// level: declaration order never matters.
+module geo =
+    module point =
+        let origin_x = 0
+        let make = (x: i32) -> point { x = x }
+    struct point =
+        x: i32
+
+    module shape =
+        let unit = () -> shape.dot(point.make(1))
+    union shape =
+        | dot(point)
+        | empty
+
+    module dir =
+        let flip = (d: dir) -> if d == dir.left then dir.right else dir.left
+    enum dir =
+        | left
+        | right
+
+    let use_inside = () -> point.make(point.origin_x + 2).x
+
+let main = (args: str[]) ->
+    let p = geo.point { x = geo.point.origin_x }
+    assert(p.x == 0)
+    assert(geo.point.make(5).x == 5)
+    let s = geo.shape.unit()
+    let n = match s with
+        | dot(q) -> q.x
+        | empty -> 0
+    assert(n == 1)
+    assert(geo.dir.flip(geo.dir.left) == geo.dir.right)
+    assert(geo.use_inside() == 2)
+    0

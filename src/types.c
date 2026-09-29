@@ -185,7 +185,7 @@ Type *type_deep_copy(Arena *a, Type *t) {
         int n = t->struc.field_count;
         c->struc.fields = arena_alloc(a, sizeof(StructField) * (size_t)(n > 0 ? n : 1));
         for (int i = 0; i < n; i++) {
-            c->struc.fields[i].name = t->struc.fields[i].name;
+            c->struc.fields[i] = t->struc.fields[i];
             c->struc.fields[i].type = type_deep_copy(a, t->struc.fields[i].type);
         }
         return c;
@@ -196,7 +196,7 @@ Type *type_deep_copy(Arena *a, Type *t) {
         int n = t->unio.variant_count;
         c->unio.variants = arena_alloc(a, sizeof(UnionVariant) * (size_t)(n > 0 ? n : 1));
         for (int i = 0; i < n; i++) {
-            c->unio.variants[i].name = t->unio.variants[i].name;
+            c->unio.variants[i] = t->unio.variants[i];
             c->unio.variants[i].payload = type_deep_copy(a, t->unio.variants[i].payload);
         }
         return c;
@@ -1471,7 +1471,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         bool changed = false;
         StructField *fields = arena_alloc(a, sizeof(StructField) * (size_t)t->struc.field_count);
         for (int i = 0; i < t->struc.field_count; i++) {
-            fields[i].name = t->struc.fields[i].name;
+            fields[i] = t->struc.fields[i];
             fields[i].type = type_substitute(a, t->struc.fields[i].type, var_names, concrete, count);
             if (fields[i].type != t->struc.fields[i].type) changed = true;
         }
@@ -1507,7 +1507,7 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         bool changed = false;
         UnionVariant *vars = arena_alloc(a, sizeof(UnionVariant) * (size_t)t->unio.variant_count);
         for (int i = 0; i < t->unio.variant_count; i++) {
-            vars[i].name = t->unio.variants[i].name;
+            vars[i] = t->unio.variants[i];
             vars[i].payload = type_substitute(a, t->unio.variants[i].payload, var_names, concrete, count);
             if (vars[i].payload != t->unio.variants[i].payload) changed = true;
         }

@@ -1,0 +1,14 @@
+// Reading a module's union constant is a variable reference.
+union shape =
+    | circle(i32)
+    | empty
+
+module m =
+    let unit = shape.circle(1)
+
+let g = m.unit
+
+let main = (args: str[]) ->
+    match g with
+    | circle(r) -> r
+    | empty -> 0

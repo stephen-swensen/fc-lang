@@ -214,8 +214,8 @@ static void expect_typearg_gt(Parser *p) {
 
 /* Error-recovery contract: on a token mismatch, report once and return the CURRENT
    token WITHOUT consuming it, so an enclosing recovery loop can synchronize on it.
-   The parser therefore never aborts on an "expected X" error (the lexer's longjmp
-   backstop remains for genuinely unrecoverable states). Forward progress is
+   The parser never aborts: every syntax error is reported with diag_error and
+   parsing continues (only the lexer's layout errors are fatal). Forward progress is
    guaranteed by the leaf-bump rule (parse_prefix / parse_pattern_atom) plus the
    recover_progress() watchdog in every item loop. Callers read only the returned
    token's text (->start/->length); they must not assume it was consumed. */
@@ -592,9 +592,10 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
             bool size_oor = false;
             int64_t size = parse_int_value(size_tok->start, size_tok->length, &size_oor);
             if (size_oor || size <= 0) {
-                SrcLoc loc = loc_from_token(size_tok);
-                diag_fatal(loc, "fixed array size must be a positive integer, got %lld",
+                diag_error(loc_from_token(size_tok),
+                           "fixed array size must be a positive integer, got %lld",
                            (long long)size);
+                size = 1;
             }
             advance_p(p); /* consume INT_LIT */
             expect(p, TOK_RBRACKET);
@@ -1484,7 +1485,8 @@ static Expr *parse_let_binding(Parser *p, bool require_in) {
         return blk;
     }
     if (require_in) {
-        diag_fatal(loc, "expected 'in' after let-binding in expression position");
+        diag_error(loc, "expected 'in' after let-binding in expression position");
+        return alloc_expr_error(p, loc);
     }
     return letnode;
 }
@@ -1631,6 +1633,55 @@ static bool at_slice_literal(Parser *p) {
     return peek_at(p, off)->kind == TOK_LBRACE;
 }
 
+/* The fields of a raw-parts slice literal, after its '{': `ptr = e, len = e`
+ * in either order, through the closing '}'. */
+static Expr *parse_raw_slice_fields(Parser *p, Type *elem_type, SrcLoc loc) {
+    Expr *ptr_val = NULL, *len_val = NULL;
+    while (!check(p, TOK_RBRACE) && !at_end_p(p)) {
+        int guard = p->pos;
+        Token *name = expect(p, TOK_IDENT);
+        expect(p, TOK_EQ);
+        Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
+        if (name->kind == TOK_IDENT) {
+            const char *fn = tok_intern(p, name);
+            if (strcmp(fn, "ptr") == 0) ptr_val = val;
+            else if (strcmp(fn, "len") == 0) len_val = val;
+            else diag_error(loc_from_token(name),
+                            "slice literal field must be 'ptr' or 'len', got '%s'", fn);
+        }
+        if (check(p, TOK_COMMA)) advance_p(p);
+        recover_progress(p, guard);
+    }
+    expect(p, TOK_RBRACE);
+    if (!ptr_val || !len_val) {
+        diag_error(loc, "slice literal requires both 'ptr' and 'len' fields");
+        return alloc_expr_error(p, loc);
+    }
+    Expr *e = alloc_expr(p, EXPR_SLICE_LIT, loc);
+    e->slice_lit.elem_type = elem_type;
+    e->slice_lit.ptr_expr = ptr_val;
+    e->slice_lit.len_expr = len_val;
+    return e;
+}
+
+/* The elements of a slice literal, after its '{': `e, e, ...` with an
+ * optional trailing comma, through the closing '}'. */
+static Expr **parse_slice_elems(Parser *p, int *count) {
+    Expr **elems = NULL;
+    int n = 0, cap = 0;
+    while (!check(p, TOK_RBRACE)) {
+        Expr *elem = parse_bracketed_expr(p, PREC_NONE + 1);
+        DA_APPEND(elems, n, cap, elem);
+        if (!check(p, TOK_COMMA)) break;
+        advance_p(p);
+    }
+    expect(p, TOK_RBRACE);
+    Expr **copy = arena_copy_exprs(p, elems, n);
+    free(elems);
+    *count = n;
+    return copy;
+}
+
 /* Parse the body of an array or slice literal given an already-parsed element
  * type. The parser must be positioned just before the '[':
  *   T[]  { ptr = expr, len = expr }   → EXPR_SLICE_LIT
@@ -1643,51 +1694,21 @@ static Expr *parse_array_lit_body(Parser *p, Type *elem_type, SrcLoc loc) {
     if (check(p, TOK_RBRACKET)) {
         advance_p(p); /* consume ] */
         expect(p, TOK_LBRACE);
-        Expr *ptr_val = NULL, *len_val = NULL;
-        while (!check(p, TOK_RBRACE)) {
-            const char *fn = tok_intern(p, expect(p, TOK_IDENT));
-            expect(p, TOK_EQ);
-            Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
-            if (strcmp(fn, "ptr") == 0) ptr_val = val;
-            else if (strcmp(fn, "len") == 0) len_val = val;
-            else {
-                SrcLoc floc = loc_from_token(current(p));
-                diag_fatal(floc, "slice literal field must be 'ptr' or 'len', got '%s'", fn);
-            }
-            if (check(p, TOK_COMMA)) advance_p(p);
-        }
-        expect(p, TOK_RBRACE);
-        if (!ptr_val || !len_val)
-            diag_fatal(loc, "slice literal requires both 'ptr' and 'len' fields");
-        Expr *e = alloc_expr(p, EXPR_SLICE_LIT, loc);
-        e->slice_lit.elem_type = elem_type;
-        e->slice_lit.ptr_expr = ptr_val;
-        e->slice_lit.len_expr = len_val;
-        return e;
+        return parse_raw_slice_fields(p, elem_type, loc);
     }
 
     Expr *size_expr = parse_bracketed_expr(p, PREC_NONE + 1);
     expect(p, TOK_RBRACKET);
     expect(p, TOK_LBRACE);
 
-    Expr **elems = NULL;
-    int elem_count = 0, elem_cap = 0;
-    if (!check(p, TOK_RBRACE)) {
-        do {
-            Expr *elem = parse_bracketed_expr(p, PREC_NONE + 1);
-            DA_APPEND(elems, elem_count, elem_cap, elem);
-            if (!check(p, TOK_COMMA)) break;
-            advance_p(p);
-        } while (!check(p, TOK_RBRACE));
-    }
-    expect(p, TOK_RBRACE);
+    int elem_count;
+    Expr **elems = parse_slice_elems(p, &elem_count);
 
     Expr *e = alloc_expr(p, EXPR_ARRAY_LIT, loc);
     e->array_lit.elem_type = elem_type;
     e->array_lit.size_expr = size_expr;
-    e->array_lit.elems = arena_copy_exprs(p, elems, elem_count);
+    e->array_lit.elems = elems;
     e->array_lit.elem_count = elem_count;
-    free(elems);
     return e;
 }
 
@@ -1860,8 +1881,14 @@ static Expr *parse_prefix(Parser *p) {
                 break;
             }
 
-            diag_fatal(loc, "expected interpolation continuation or end, got %s",
+            diag_error(loc, "expected interpolation continuation or end, got %s",
                 token_kind_name(current(p)->kind));
+            /* Resync past the rest of the string. */
+            while (!check(p, TOK_INTERP_END) && !check(p, TOK_NEWLINE) && !at_end_p(p))
+                advance_p(p);
+            if (check(p, TOK_INTERP_END)) advance_p(p);
+            free(segs);
+            return alloc_expr_error(p, loc);
         }
 
         /* Copy segments into arena */
@@ -1927,26 +1954,9 @@ static Expr *parse_prefix(Parser *p) {
                 if (strcmp(name, "str") == 0) {
                     advance_p(p);  /* consume ident */
                     advance_p(p);  /* consume { */
-                    Expr *ptr_val = NULL, *len_val = NULL;
-                    while (!check(p, TOK_RBRACE)) {
-                        const char *fn = tok_intern(p, expect(p, TOK_IDENT));
-                        expect(p, TOK_EQ);
-                        Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
-                        if (strcmp(fn, "ptr") == 0) ptr_val = val;
-                        else if (strcmp(fn, "len") == 0) len_val = val;
-                        else diag_fatal(loc, "slice literal field must be 'ptr' or 'len', got '%s'", fn);
-                        if (check(p, TOK_COMMA)) advance_p(p);
-                    }
-                    expect(p, TOK_RBRACE);
-                    if (!ptr_val || !len_val)
-                        diag_fatal(loc, "slice literal requires both 'ptr' and 'len' fields");
                     Type *et = arena_alloc(p->arena, sizeof(Type));
                     et->kind = TYPE_UINT8;
-                    Expr *e = alloc_expr(p, EXPR_SLICE_LIT, loc);
-                    e->slice_lit.elem_type = et;
-                    e->slice_lit.ptr_expr = ptr_val;
-                    e->slice_lit.len_expr = len_val;
-                    return e;
+                    return parse_raw_slice_fields(p, et, loc);
                 }
                 advance_p(p);  /* consume ident */
                 advance_p(p);  /* consume { */
@@ -2091,9 +2101,10 @@ static Expr *parse_prefix(Parser *p) {
                 bool oor = false;
                 int64_t n = parse_int_value(nt->start, nt->length, &oor);
                 if (oor || n < 1) {
-                    SrcLoc nloc = loc_from_token(nt);
-                    diag_fatal(nloc, "(cstr[N]) buffer size must be a positive integer, got %lld",
+                    diag_error(loc_from_token(nt),
+                               "(cstr[N]) buffer size must be a positive integer, got %lld",
                                (long long)n);
+                    n = 1;
                 }
                 advance_p(p); /* N */
                 advance_p(p); /* ] */
@@ -2190,8 +2201,11 @@ static Expr *parse_prefix(Parser *p) {
             } while (!check(p, TOK_RBRACE));
         }
         expect(p, TOK_RBRACE);
-        if (elem_count < 2)
-            diag_fatal(loc, "tuple literal requires at least 2 elements, got %d", elem_count);
+        if (elem_count < 2) {
+            diag_error(loc, "tuple literal requires at least 2 elements, got %d", elem_count);
+            free(elems);
+            return alloc_expr_error(p, loc);
+        }
         Expr *e = alloc_expr(p, EXPR_TUPLE_LIT, loc);
         e->tuple_lit.elems = arena_copy_exprs(p, elems, elem_count);
         e->tuple_lit.elem_count = elem_count;
@@ -2226,8 +2240,9 @@ static Expr *parse_prefix(Parser *p) {
          * targeted message, mirroring the `void`/`void()` handling above. */
         advance_p(p);
         if (!check(p, TOK_LPAREN)) {
-            diag_fatal(loc, "'none' needs a type argument; write none(T) "
+            diag_error(loc, "'none' needs a type argument; write none(T) "
                 "(or test an option with .is_none / a 'none' match arm)");
+            return alloc_expr_error(p, loc);
         }
         advance_p(p); /* ( */
         Type *ty = parse_type(p);
@@ -2263,8 +2278,9 @@ static Expr *parse_prefix(Parser *p) {
          * alone. A bare `err` is rejected like a bare `none`. */
         advance_p(p);
         if (!check(p, TOK_LPAREN)) {
-            diag_fatal(loc, "'err' needs a type and a code; write err(T, code) "
+            diag_error(loc, "'err' needs a type and a code; write err(T, code) "
                 "(or test a result with .is_err / an 'err' match arm)");
+            return alloc_expr_error(p, loc);
         }
         advance_p(p); /* ( */
         Type *ty = parse_type(p);
@@ -2640,27 +2656,21 @@ static Expr *parse_prefix(Parser *p) {
                 advance_p(p);
                 Expr *size = parse_bracketed_expr(p, PREC_NONE + 1);
                 expect(p, TOK_RBRACKET);
-                if (!check(p, TOK_LBRACE)) {
-                    SrcLoc eloc = loc_from_token(current(p));
-                    diag_fatal(eloc, "expected '{' after alloc(T[N] — use alloc(T[N] { })");
-                }
-                advance_p(p);
+                int elem_count = 0;
                 Expr **elems = NULL;
-                int elem_count = 0, elem_cap = 0;
-                if (!check(p, TOK_RBRACE)) {
-                    do {
-                        Expr *el = parse_bracketed_expr(p, PREC_NONE + 1);
-                        DA_APPEND(elems, elem_count, elem_cap, el);
-                    } while (check(p, TOK_COMMA) && advance_p(p));
+                if (check(p, TOK_LBRACE)) {
+                    advance_p(p);
+                    elems = parse_slice_elems(p, &elem_count);
+                } else {
+                    /* Read on as if the empty `{ }` were there. */
+                    diag_error(loc_from_token(current(p)),
+                               "expected '{' after alloc(T[N] — use alloc(T[N] { })");
                 }
-                expect(p, TOK_RBRACE);
                 expect(p, TOK_RPAREN);
                 /* Runtime-sized alloc: alloc(T[n] { }) where n is not a literal */
                 if (size->kind != EXPR_INT_LIT) {
-                    if (elem_count > 0) {
-                        diag_fatal(loc, "alloc with runtime size cannot have explicit elements");
-                    }
-                    free(elems);
+                    if (elem_count > 0)
+                        diag_error(loc, "alloc with runtime size cannot have explicit elements");
                     Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
                     e->alloc_expr.alloc_type = ty;
                     e->alloc_expr.size_expr = size;
@@ -2668,15 +2678,10 @@ static Expr *parse_prefix(Parser *p) {
                     e->alloc_expr.is_stack = is_stack;
                     return e;
                 }
-                Expr **arena_elems = arena_alloc(p->arena,
-                    sizeof(Expr*) * (size_t)(elem_count > 0 ? elem_count : 1));
-                if (elem_count > 0)
-                    memcpy(arena_elems, elems, sizeof(Expr*) * (size_t)elem_count);
-                free(elems);
                 Expr *arr = alloc_expr(p, EXPR_ARRAY_LIT, loc);
                 arr->array_lit.elem_type = ty;
                 arr->array_lit.size_expr = size;
-                arr->array_lit.elems = arena_elems;
+                arr->array_lit.elems = elems;
                 arr->array_lit.elem_count = elem_count;
                 Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
                 e->alloc_expr.alloc_type = NULL;
@@ -2702,7 +2707,8 @@ static Expr *parse_prefix(Parser *p) {
                 /* Generic type args didn't pan out — backtrack */
                 restore_pos(p, save);
             } else {
-                diag_fatal(loc, "expected ')', '[', or ',' after type in alloc");
+                diag_error(loc, "expected ')', '[', or ',' after type in alloc");
+                return alloc_expr_error(p, loc);
             }
         }
 
@@ -4508,7 +4514,7 @@ static Decl *parse_extern_decl(Parser *p) {
         if (extern_c_name_in_reserved_root(loc, c_name)) {
             /* reported; keep parsing the body */
         } else if (fc_name == c_name && strstr(c_name, "__") != NULL) {
-            diag_fatal(loc, "extern C name '%s' contains '__', which is reserved in "
+            diag_error(loc, "extern C name '%s' contains '__', which is reserved in "
                 "FC names; give it an alias: `extern %s %s as <name> = ...`",
                 c_name, is_c_union ? "union" : "struct", c_name);
         }
@@ -4570,14 +4576,14 @@ static Decl *parse_extern_decl(Parser *p) {
      * with an alias: the bare name is a keyword in FC and would be unreferenceable.
      * Require `extern <name> as <ident>: ...` in that case. */
     if (!alias && name_tok->kind != TOK_IDENT) {
-        diag_fatal(loc, "extern declaration uses reserved name '%s', which would be "
+        diag_error(loc, "extern declaration uses reserved name '%s', which would be "
             "unreferenceable; give it an alias: `extern %s as <name>: ...`", name, name);
     }
     /* A C name containing '__' (implementation-reserved namespace, e.g.
      * __errno_location) is emitted verbatim, but the FC-visible name must stay
      * clean of the mangling separator — require an alias. */
     if (!in_reserved_root && !alias && strstr(name, "__") != NULL) {
-        diag_fatal(loc, "extern C name '%s' contains '__', which is reserved in FC "
+        diag_error(loc, "extern C name '%s' contains '__', which is reserved in FC "
             "names; give it an alias: `extern %s as <name>: ...`", name, name);
     }
     expect(p, TOK_COLON);

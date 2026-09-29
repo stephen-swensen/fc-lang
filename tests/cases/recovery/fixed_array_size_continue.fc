@@ -1,0 +1,7 @@
+// A non-positive fixed-array size is reported and parsing carries on.
+struct s =
+    data: i32[0]
+
+let main = (args: str[]) ->
+    let late = struct
+    0

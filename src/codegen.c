@@ -5583,7 +5583,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_c_escaped(fn, fn_len, out);
             fprintf(out, ":%d: fixed-array field '%s' overflow: "
                          "len=%%lld capacity=%lld\\n\", "
-                         "(long long)_fas%d.len); abort(); } ",
+                         "(long long)_fas%d.len); FC_ABORT(); } ",
                     line, target->field.name,
                     (long long)fixarr_size(fat), tid);
             /* memcpy the data */
@@ -6861,8 +6861,7 @@ typedef struct {
     MonoInstance *mi;    /* non-NULL: monomorphized struct/union/tuple instance */
 } SuDef;
 
-static void sudef_deps(SuDef *s, const char **deps, int *dep_count, int max) {
-    *dep_count = 0;
+static void sudef_deps(SuDef *s, const char ***deps, int *dep_count, int *dep_cap) {
     StructField *fields = NULL; int field_count = 0;
     UnionVariant *variants = NULL; int variant_count = 0;
     if (s->decl) {
@@ -6877,13 +6876,13 @@ static void sudef_deps(SuDef *s, const char **deps, int *dep_count, int max) {
         if (ct->kind == TYPE_STRUCT) { fields = ct->struc.fields; field_count = ct->struc.field_count; }
         else if (ct->kind == TYPE_UNION) { variants = ct->unio.variants; variant_count = ct->unio.variant_count; }
     }
-    for (int f = 0; f < field_count && *dep_count < max; f++) {
+    for (int f = 0; f < field_count; f++) {
         const char *dep = find_by_value_dep_name(fields[f].type);
-        if (dep) deps[(*dep_count)++] = dep;
+        if (dep) DA_APPEND(*deps, *dep_count, *dep_cap, dep);
     }
-    for (int v = 0; v < variant_count && *dep_count < max; v++) {
+    for (int v = 0; v < variant_count; v++) {
         const char *dep = find_by_value_dep_name(variants[v].payload);
-        if (dep) deps[(*dep_count)++] = dep;
+        if (dep) DA_APPEND(*deps, *dep_count, *dep_cap, dep);
     }
 }
 
@@ -6891,9 +6890,9 @@ static void topo_visit_sudef(SuDef *items, int n, int idx, int *state,
                              int *order, int *order_count) {
     if (state[idx] != DECL_TOPO_UNVISITED) return;
     state[idx] = DECL_TOPO_VISITING;
-    const char *deps[64];
-    int dep_count = 0;
-    sudef_deps(&items[idx], deps, &dep_count, 64);
+    const char **deps = NULL;
+    int dep_count = 0, dep_cap = 0;
+    sudef_deps(&items[idx], &deps, &dep_count, &dep_cap);
     for (int di = 0; di < dep_count; di++) {
         for (int j = 0; j < n; j++) {
             if (j != idx && items[j].name == deps[di]) {
@@ -6902,18 +6901,18 @@ static void topo_visit_sudef(SuDef *items, int n, int idx, int *state,
             }
         }
     }
+    free(deps);
     order[(*order_count)++] = idx;
     state[idx] = DECL_TOPO_DONE;
 }
 
 /* Recursively collect unique from_lib strings from module declarations */
-static void collect_from_libs(Decl *d, const char **seen, int *count, int cap) {
+static void collect_from_libs(Decl *d, const char ***seen, int *count, int *cap) {
     if (d->kind != DECL_MODULE) return;
     if (d->module.from_lib) {
         for (int i = 0; i < *count; i++)
-            if (strcmp(seen[i], d->module.from_lib) == 0) return;
-        if (*count < cap)
-            seen[(*count)++] = d->module.from_lib;
+            if (strcmp((*seen)[i], d->module.from_lib) == 0) return;
+        DA_APPEND(*seen, *count, *cap, d->module.from_lib);
     }
     for (int i = 0; i < d->module.decl_count; i++)
         collect_from_libs(d->module.decls[i], seen, count, cap);
@@ -6926,24 +6925,22 @@ typedef struct {
     const char *value;
 } CDefine;
 
-static void collect_defines(Decl *d, CDefine *defs, int *count, int cap) {
+static void collect_defines(Decl *d, CDefine **defs, int *count, int *cap) {
     if (d->kind != DECL_MODULE) return;
     if (d->module.define_macro) {
         for (int i = 0; i < *count; i++) {
-            if (strcmp(defs[i].macro, d->module.define_macro) == 0) {
-                if (strcmp(defs[i].value, d->module.define_value) != 0) {
+            CDefine *prev = &(*defs)[i];
+            if (strcmp(prev->macro, d->module.define_macro) == 0) {
+                if (strcmp(prev->value, d->module.define_value) != 0) {
                     diag_error(d->loc,
                         "conflicting define for '%s': '%s' vs '%s'",
-                        d->module.define_macro, defs[i].value, d->module.define_value);
+                        d->module.define_macro, prev->value, d->module.define_value);
                 }
                 return;
             }
         }
-        if (*count < cap) {
-            defs[*count].macro = d->module.define_macro;
-            defs[*count].value = d->module.define_value;
-            (*count)++;
-        }
+        CDefine def = { d->module.define_macro, d->module.define_value };
+        DA_APPEND(*defs, *count, *cap, def);
     }
     for (int i = 0; i < d->module.decl_count; i++)
         collect_defines(d->module.decls[i], defs, count, cap);
@@ -7315,13 +7312,13 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     symmap_reset();
 
     /* Collect from_libs and defines from extern module declarations */
-    const char *from_libs[64];
-    int from_lib_count = 0;
-    CDefine defines[64];
-    int define_count = 0;
+    const char **from_libs = NULL;
+    int from_lib_count = 0, from_lib_cap = 0;
+    CDefine *defines = NULL;
+    int define_count = 0, define_cap = 0;
     for (int i = 0; i < prog->decl_count; i++) {
-        collect_from_libs(prog->decls[i], from_libs, &from_lib_count, 64);
-        collect_defines(prog->decls[i], defines, &define_count, 64);
+        collect_from_libs(prog->decls[i], &from_libs, &from_lib_count, &from_lib_cap);
+        collect_defines(prog->decls[i], &defines, &define_count, &define_cap);
     }
 
     /* Flatten module decls into a single array (needed for feature detection) */
@@ -7397,6 +7394,8 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
         fprintf(out, "#include <%s>\n", from_libs[i]);
     }
     fprintf(out, "\n");
+    free(from_libs);
+    free(defines);
 
     /* --backtraces: keep FC frames visible to the execinfo stack walk.
      * fc_dump_backtrace maps a return address to the FC function whose &fn is the

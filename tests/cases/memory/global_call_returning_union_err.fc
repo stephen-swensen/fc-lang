@@ -1,0 +1,15 @@
+// A call is not allowed in a file-level initializer even when it returns a
+// union; only constructing a variant directly is.
+union shape =
+    | circle(i32)
+    | empty
+
+module m =
+    let make = (r: i32) -> shape.circle(r)
+
+let g = m.make(3)
+
+let main = (args: str[]) ->
+    match g with
+    | circle(r) -> r
+    | empty -> 0

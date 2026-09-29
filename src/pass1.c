@@ -1071,6 +1071,15 @@ static void validate_extern_protocol(Decl *d, const char *src_name) {
     }
 }
 
+/* A type in a module may share its name with a companion module declared
+ * before it; any other earlier member of that name is a redefinition. */
+static bool type_name_taken(SymbolTable *members, const char *name) {
+    for (int i = 0; i < members->count; i++)
+        if (members->symbols[i].name == name && members->symbols[i].kind != DECL_MODULE)
+            return true;
+    return false;
+}
+
 static void register_module_members(Decl *d, const char *mangle_prefix,
                                     const char *display_prefix,
                                     SymbolTable *members, InternTable *intern,
@@ -1140,12 +1149,12 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             const char *src_name = child->struc.name;
             const char *mangled = make_mangled(intern, mangle_prefix, src_name);
             child->struc.name = mangled;
-            if (symtab_lookup(members, src_name)) {
+            if (type_name_taken(members, src_name)) {
                 diag_error(child->loc, "redefinition of '%s' in module '%s'",
                     src_name, mod_name);
             } else {
                 symtab_add(members, src_name, DECL_STRUCT, child);
-                Symbol *msym = symtab_lookup(members, src_name);
+                Symbol *msym = &members->symbols[members->count - 1];
                 msym->is_private = child->is_private;
                 Type *st = arena_alloc(intern->arena, sizeof(Type));
                 st->kind = TYPE_STRUCT;
@@ -1174,12 +1183,12 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             const char *src_name = child->unio.name;
             const char *mangled = make_mangled(intern, mangle_prefix, src_name);
             child->unio.name = mangled;
-            if (symtab_lookup(members, src_name)) {
+            if (type_name_taken(members, src_name)) {
                 diag_error(child->loc, "redefinition of '%s' in module '%s'",
                     src_name, mod_name);
             } else {
                 symtab_add(members, src_name, DECL_UNION, child);
-                Symbol *msym = symtab_lookup(members, src_name);
+                Symbol *msym = &members->symbols[members->count - 1];
                 msym->is_private = child->is_private;
                 Type *ut = arena_alloc(intern->arena, sizeof(Type));
                 ut->kind = TYPE_UNION;
@@ -1205,12 +1214,12 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             const char *src_name = child->enu.name;
             const char *mangled = make_mangled(intern, mangle_prefix, src_name);
             child->enu.name = mangled;
-            if (symtab_lookup(members, src_name)) {
+            if (type_name_taken(members, src_name)) {
                 diag_error(child->loc, "redefinition of '%s' in module '%s'",
                     src_name, mod_name);
             } else {
                 symtab_add(members, src_name, DECL_ENUM, child);
-                Symbol *msym = symtab_lookup(members, src_name);
+                Symbol *msym = &members->symbols[members->count - 1];
                 msym->is_private = child->is_private;
                 Type *et = arena_alloc(intern->arena, sizeof(Type));
                 et->kind = TYPE_ENUM;

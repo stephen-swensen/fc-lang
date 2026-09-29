@@ -1,1 +1,1 @@
-arithmetic requires numeric operands, got color and color
+in add(color, color) at 5:31: enum 'color' is not numeric; cast out first: (i32) x

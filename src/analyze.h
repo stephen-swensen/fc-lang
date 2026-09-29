@@ -11,7 +11,7 @@
  *
  * Unlike the CLI path in main.c, analyze():
  *   - captures diagnostics as structured records instead of printing to stderr,
- *   - never calls exit(): a lexer/parser diag_fatal is caught via longjmp and
+ *   - never calls exit(): a lexer diag_fatal is caught via longjmp and
  *     recorded, with `aborted` set,
  *   - stops after pass2 (no mono discovery / codegen — queries only need the
  *     typed AST + symbols),

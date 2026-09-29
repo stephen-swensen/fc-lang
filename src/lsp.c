@@ -264,6 +264,19 @@ static char *path_to_uri(const char *path) {
     return out;
 }
 
+/* The URI the client knows a file by: an open document's own URI, else one
+ * built from the canonical path. A unit's file may be spelled through an
+ * lsp.rsp route (`../shared/lib.fc`), and the client must see one URI per
+ * file, not a second document for the route. Returns malloc'd memory. */
+static char *uri_for_path(LspDocStore *s, const char *path) {
+    LspDoc *open = store_find_by_path(s, path);
+    if (open) return dup_cstr(open->uri);
+    char *real = canon_path(path);
+    char *uri = path_to_uri(real);
+    free(real);
+    return uri;
+}
+
 /* ======================================================================== */
 /* Line index + position mapping                                            */
 /*                                                                          */
@@ -639,7 +652,7 @@ typedef struct {
                                        kind + repr for the header when there is no Symbol.
                                        Cleared by every consider() win. */
 
-    /* Member-completion hook: the operator (`.`/`->`) position of an in-progress
+    /* Member-completion hook: the operator (`.`) position of an in-progress
      * member access. During the walk, the EXPR_FIELD/EXPR_DEREF_FIELD node whose
      * loc matches is captured in op_field — its `field.object` carries the object
      * expression's type for ANY object shape (`dict[i]`, `f()`, nested), which a
@@ -873,7 +886,7 @@ static void find_in_expr(Expr *e, void *find_ctx) {
         case EXPR_DEREF_FIELD:
             find_in_expr(e->field.object, c);   /* the object precedes the name */
             /* Member-completion capture: the parser stamps EXPR_FIELD.loc with the
-             * operator token (`.`/`->`), so match the completion operator position
+             * operator token (`.`), so match the completion operator position
              * to grab this node regardless of the field name's completeness (the
              * in-progress name may be empty or absent). */
             if (c->op_line && e->loc.line == c->op_line && e->loc.col == c->op_col)
@@ -1690,21 +1703,14 @@ static void publish_project_diagnostics(LspServer *S) {
             if (strcmp(agg[j].file, file) == 0) DA_APPEND(fd, fn, fcap, agg[j]);
 
         LspDoc *od = store_find_by_path(&S->store, file);
-        char *uri;
+        char *uri = uri_for_path(&S->store, file);
         const char *text;
         int tlen;
         char *owned = NULL;
-        if (od) {                                  /* open: use its exact URI + live text */
-            uri = dup_cstr(od->uri);
+        if (od) {                                  /* open: its live text */
             text = od->text;
             tlen = od->text_len;
-        } else {                                   /* not open: synthesize URI, read disk */
-            /* From the canonical path: the filename may be an lsp.rsp's relative
-             * route, and `file:///proj/../shared/lib.fc` is a different document
-             * to the client than the one it would open. */
-            char *fr = canon_path(file);
-            uri = path_to_uri(fr);
-            free(fr);
+        } else {                                   /* not open: read from disk */
             owned = read_whole_file(file, &tlen);
             text = owned;
         }
@@ -2256,15 +2262,10 @@ static void handle_definition(LspServer *S, JsonValue *id, JsonValue *params) {
         dc0 = dcol - 1;
     }
 
-    /* Build a file:// uri for the definition path. Sized to the path: a clipped
-     * URI still looks like a URI, so the editor would silently open the wrong
-     * file (or nothing) rather than report a problem. */
-    const char *def_uri = strcmp(def_path, doc->path) == 0
-        ? doc->uri
-        : arena_sprintf(a, "file://%s", def_path);
-
+    char *def_uri = uri_for_path(&S->store, def_path);
     JsonValue *loc = json_object(a);
     json_object_set(a, loc, "uri", json_str(a, def_uri));
+    free(def_uri);
     json_object_set(a, loc, "range", mk_range(a, dl0, dc0,
                     dl0, dc0 + (hit.name ? (int)strlen(hit.name) : 1)));
     lsp_reply(a, id, loc);
@@ -2580,31 +2581,28 @@ static bool complete_type_properties(Arena *a, JsonValue *arr, Type *tn) {
     return true;
 }
 
-/* Member completion after '.', '::' (dot) or '->' (arrow). `dot_byte` is the
- * position of the operator's first char; the object expression ends at
- * dot_byte-1. Offers, by object kind: a numeric type name's properties; module
- * members; a slice's len/ptr; an option's is_some/is_none; a struct's fields; a
- * union's variants. A '.' on a pointer auto-derefs one level to the pointee
- * struct's members (the retired '->' did this explicitly). `arrow` is still
- * honored only to suppress type-name/module completion, which '->' never had. */
+/* Member completion after '.' or '::'. `dot_byte` is the position of the
+ * operator's first char; the object expression ends at dot_byte-1. Offers, by
+ * object kind: a numeric type name's properties; module members; a slice's
+ * len/ptr; an option's is_some/is_none; a struct's fields; a union's
+ * variants. A '.' on a pointer auto-derefs one level to the pointee struct's
+ * members. */
 static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
-                             int dot_byte, bool arrow, JsonValue *arr) {
+                             int dot_byte, JsonValue *arr) {
     Arena *a = &S->msg_arena;
     int anchor = dot_byte - 1;
     if (anchor < 0) return false;
 
     /* Numeric type-name properties (i32.max, f64.nan). The object before a '.'
      * is a reserved type keyword — never a binding — so read it from source
-     * without resolving a node. Arrow can't precede a type name. */
-    if (!arrow) {
-        const char *txt = doc->text;
-        int s = anchor;
-        while (s >= 0 && (isalnum((unsigned char)txt[s]) || txt[s] == '_')) s--;
-        s++;
-        if (anchor >= s)
-            if (complete_type_properties(a, arr, type_from_name(txt + s, anchor - s + 1)))
-                return true;
-    }
+     * without resolving a node. */
+    const char *txt = doc->text;
+    int s = anchor;
+    while (s >= 0 && (isalnum((unsigned char)txt[s]) || txt[s] == '_')) s--;
+    s++;
+    if (anchor >= s)
+        if (complete_type_properties(a, arr, type_from_name(txt + s, anchor - s + 1)))
+            return true;
 
     /* One AST walk resolves two things: the anchor node (the object's last char,
      * for simple `a.b` / `::` paths) and — via the op-position hook — the field
@@ -2637,15 +2635,13 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
      * with a companion module keeps its variants below: resolved_sym is the
      * union, not the module, so `mod` stays NULL here.) */
     Symbol *mod = NULL;
-    if (!arrow) {
-        if (c.sym && c.sym->kind == DECL_MODULE) mod = c.sym;
-        else if (obj && obj->kind == EXPR_IDENT && obj->ident.resolved_sym &&
-                 obj->ident.resolved_sym->kind == DECL_MODULE)
-            mod = obj->ident.resolved_sym;
-        else if (obj && obj->kind == EXPR_FIELD && obj->field.resolved_member &&
-                 obj->field.resolved_member->kind == DECL_MODULE)
-            mod = obj->field.resolved_member;
-    }
+    if (c.sym && c.sym->kind == DECL_MODULE) mod = c.sym;
+    else if (obj && obj->kind == EXPR_IDENT && obj->ident.resolved_sym &&
+             obj->ident.resolved_sym->kind == DECL_MODULE)
+        mod = obj->ident.resolved_sym;
+    else if (obj && obj->kind == EXPR_FIELD && obj->field.resolved_member &&
+             obj->field.resolved_member->kind == DECL_MODULE)
+        mod = obj->field.resolved_member;
     if (mod && mod->members) {
         emit_module_members(a, arr, mod);
         return true;
@@ -2658,23 +2654,21 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
      * compile error). Mirror that here instead of falling through to the
      * value dispatch below, which would offer the fields. */
     Symbol *tsym = NULL;
-    if (!arrow) {
-        if (obj && obj->kind == EXPR_IDENT && obj->ident.resolved_sym &&
-            (obj->ident.resolved_sym->kind == DECL_STRUCT ||
-             obj->ident.resolved_sym->kind == DECL_UNION ||
-             obj->ident.resolved_sym->kind == DECL_ENUM))
-            tsym = obj->ident.resolved_sym;
-        else if (obj && obj->kind == EXPR_FIELD && obj->field.resolved_member &&
-                 !obj->field.is_variant_constructor && !obj->field.is_type_property &&
-                 (obj->field.resolved_member->kind == DECL_STRUCT ||
-                  obj->field.resolved_member->kind == DECL_UNION ||
-                  obj->field.resolved_member->kind == DECL_ENUM))
-            tsym = obj->field.resolved_member;
-        else if (!obj && c.sym &&
-                 (c.sym->kind == DECL_STRUCT || c.sym->kind == DECL_UNION ||
-                  c.sym->kind == DECL_ENUM))
-            tsym = c.sym;
-    }
+    if (obj && obj->kind == EXPR_IDENT && obj->ident.resolved_sym &&
+        (obj->ident.resolved_sym->kind == DECL_STRUCT ||
+         obj->ident.resolved_sym->kind == DECL_UNION ||
+         obj->ident.resolved_sym->kind == DECL_ENUM))
+        tsym = obj->ident.resolved_sym;
+    else if (obj && obj->kind == EXPR_FIELD && obj->field.resolved_member &&
+             !obj->field.is_variant_constructor && !obj->field.is_type_property &&
+             (obj->field.resolved_member->kind == DECL_STRUCT ||
+              obj->field.resolved_member->kind == DECL_UNION ||
+              obj->field.resolved_member->kind == DECL_ENUM))
+        tsym = obj->field.resolved_member;
+    else if (!obj && c.sym &&
+             (c.sym->kind == DECL_STRUCT || c.sym->kind == DECL_UNION ||
+              c.sym->kind == DECL_ENUM))
+        tsym = c.sym;
     if (tsym) {
         Symbol *comp = (obj && obj->kind == EXPR_IDENT)
                      ? obj->ident.companion_module : NULL;
@@ -2702,8 +2696,7 @@ static bool complete_members(LspServer *S, LspDoc *doc, const LineIndex *idx,
      * else the anchored node (simple idents the field capture didn't reach). */
     Type *t = (obj && obj->type) ? obj->type : c.type;
     /* '.' auto-derefs a single pointer level to the pointee struct (matching
-     * pass2's `.`-on-pointer rewrite; the old `->` accessor is retired). A
-     * numeric type name or module was handled above and is never pointer-typed
+     * pass2's `.`-on-pointer rewrite). A numeric type name or module was handled above and is never pointer-typed
      * here, so dereferencing unconditionally is safe for '.'. */
     if (t && t->kind == TYPE_POINTER)
         t = t->pointer.pointee;
@@ -3299,8 +3292,8 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     /* CompletionContext.triggerKind: 1=Invoked (Ctrl+Space or 24x7 word typing),
      * 2=TriggerCharacter, 3=re-trigger. An auto-pop by a trigger character should
      * only ever surface member completion — if the cursor isn't actually at a
-     * member access (a lambda/match/type `->`, a comparison `>`, a lone `:`, a
-     * float-literal `.`), stay quiet instead of dumping the global list. Absent
+     * member access (a lone `:`, a float-literal `.`), stay quiet instead of
+     * dumping the global list. Absent
      * context (non-VSCode clients) defaults to Invoked, preserving fall-through. */
     long trig_kind = 1;
     JsonValue *cctx = json_get(params, "context");
@@ -3322,34 +3315,30 @@ static void handle_completion(LspServer *S, JsonValue *id, JsonValue *params) {
     }
 
     /* Member context: scan back over an in-progress member name to the operator
-     * just before the object — '.', '::', or '->'. dot_byte is the operator's
-     * first byte, so the object ends at dot_byte-1 in every case. */
+     * just before the object, '.' or '::'. dot_byte is the operator's first
+     * byte, so the object ends at dot_byte-1 either way. */
     int b = cur - 1;
     while (b >= 0 && (isalnum((unsigned char)doc->text[b]) || doc->text[b] == '_')) b--;
-    bool member = false, arrow = false;
     int dot_byte = -1;
-    if (b >= 0 && doc->text[b] == '.') { member = true; dot_byte = b; }
-    else if (b >= 1 && doc->text[b] == ':' && doc->text[b - 1] == ':') {
-        member = true; dot_byte = b - 1;
-    }
-    else if (b >= 1 && doc->text[b] == '>' && doc->text[b - 1] == '-') {
-        member = true; arrow = true; dot_byte = b - 1;
-    }
+    if (b >= 0 && doc->text[b] == '.') dot_byte = b;
+    else if (b >= 1 && doc->text[b] == ':' && doc->text[b - 1] == ':') dot_byte = b - 1;
 
-    if (member) {
-        /* Member access offers ONLY the object's members — never the global list.
-         * Typing past a `.`/`::`/`->` shows members or nothing: a lambda/match/
-         * function-type `->` (no object to dereference) yields an empty reply,
-         * which dismisses the suggest widget instead of dumping every global.
-         * This is independent of triggerKind on purpose: once VSCode has a suggest
-         * session open (from word-typing) it re-queries as Invoked even as you
-         * type through `->`, so a triggerKind gate alone would leak the globals. */
-        complete_members(S, doc, &idx, dot_byte, arrow, items);
+    /* Member access offers only the object's members, never the global list. */
+    if (dot_byte >= 0) {
+        complete_members(S, doc, &idx, dot_byte, items);
+        lsp_reply(a, id, items);
+        return;
+    }
+    /* Right after `->` (a lambda body, function type or match arm) there is
+     * nothing to offer. Checked regardless of triggerKind: once VSCode has a
+     * suggest session open from word typing, it re-queries as Invoked while
+     * you type through `->`, and the global list would show up there. */
+    if (b >= 1 && doc->text[b] == '>' && doc->text[b - 1] == '-') {
         lsp_reply(a, id, items);
         return;
     }
     /* Not a member context. A trigger character that lands here (a lone `:` that
-     * isn't `::`, a comparison `>`) has nothing to offer, so an auto-pop stays
+     * isn't `::`) has nothing to offer, so an auto-pop stays
      * quiet; an explicit invoke / word-typing falls through to scope completion. */
     if (auto_trigger) { lsp_reply(a, id, items); return; }
 
@@ -3415,11 +3404,6 @@ static void handle_initialize(LspServer *S, JsonValue *id) {
     JsonValue *trig = json_array(a);
     json_array_push(a, trig, json_str(a, "."));   /* value/module/type-name members */
     json_array_push(a, trig, json_str(a, ":"));   /* `::` namespace/module path */
-    json_array_push(a, trig, json_str(a, ">"));   /* completes `->`; the second char
-                                                   * fires it (handle_completion checks
-                                                   * the preceding `-`). A `>` not
-                                                   * forming `->` falls through to the
-                                                   * ordinary in-scope completion. */
     json_object_set(a, comp, "triggerCharacters", trig);
     json_object_set(a, caps, "completionProvider", comp);
 

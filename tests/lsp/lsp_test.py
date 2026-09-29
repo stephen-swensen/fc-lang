@@ -138,8 +138,8 @@ check("initialize advertises capabilities",
 # `>` must be a trigger char so finishing `->` auto-pops member completion (not
 # just Ctrl+Space); `.` and `:` cover value/module/type-name members and `::`.
 _trig = caps.get("completionProvider", {}).get("triggerCharacters", [])
-check("completion trigger characters include . : and > (for '->')",
-      set(_trig) >= {".", ":", ">"}, str(_trig))
+check("completion trigger characters are . and : ('->' is not member access)",
+      set(_trig) == {".", ":"}, str(_trig))
 
 check("clean document has no diagnostics",
       len(diags) >= 1 and diags[0] == [], str(diags[0] if diags else None))
@@ -719,6 +719,36 @@ check("hover on field 'x' targets it (type i32) despite spaces",
       "x: i32" in fhov, fhov)
 check("hover on field 'x' includes its trailing doc comment",
       "the abscissa" in fhov, fhov)
+
+# A field of a generic struct instance resolves to the field in the template.
+GFIELDS = (
+    "struct box =\n"                        # line 0
+    "    v: 'a  // the boxed value\n"        # line 1: field 'v'
+    "let main = (args: str[]) ->\n"          # line 2
+    "    let b = box { v = 5 }\n"            # line 3
+    "    return b.v\n"                       # line 4: 'v' at char 13
+)
+gfuri = "file://" + os.path.join(fd, "generic.fc")
+gm = [
+    req(1, "initialize", {"capabilities": {}}),
+    note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": gfuri, "languageId": "fc",
+         "version": 1, "text": GFIELDS}}),
+    req(2, "textDocument/definition",
+        {"textDocument": {"uri": gfuri}, "position": {"line": 4, "character": 13}}),
+    req(3, "textDocument/hover",
+        {"textDocument": {"uri": gfuri}, "position": {"line": 4, "character": 13}}),
+    req(9, "shutdown", None),
+    note("exit", None),
+]
+gresp, _, _, _, _ = run_session(gm)
+gr = gresp.get(2, {}).get("result")
+check("go-to-def on a generic struct's field 'b.v' -> field declaration (line 1)",
+      isinstance(gr, dict) and gr.get("range", {}).get("start", {}).get("line") == 1,
+      str(gr))
+ghov = (gresp.get(3, {}).get("result") or {}).get("contents", {}).get("value", "")
+check("hover on a generic struct's field includes its doc comment",
+      "the boxed value" in ghov, ghov)
 
 # --- doc-comment hover: a run of `//` lines above a definition is shown on hover
 # (top-level symbol and block-local binding).
@@ -1550,19 +1580,22 @@ TRIG = (
     "        x: i32\n"                   # 2
     "    let f = (p: pt*) ->\n"          # 3  ') ->' is a lambda body, not a deref
     "        let b = p.x\n"              # 4  real pointer dereference via '.'
-    "        0\n")                       # 5
+    "        let c = p->x\n"             # 5  the retired C spelling: no members
+    "        0\n")                       # 6
 def trigreq(i, ln, ch, kind, tc=">"):
     p = {"textDocument": {"uri": URI}, "position": {"line": ln, "character": ch},
          "context": {"triggerKind": kind, "triggerCharacter": tc}}
     return req(i, "textDocument/completion", p)
 lam_col = TRIG.split("\n")[3].index("->") + 2      # just past the lambda '->'
 der_col = TRIG.split("\n")[4].index("p.") + 2      # just past 'p.'
+arr_col = TRIG.split("\n")[5].index("p->") + 3    # just past 'p->'
 trg = [
     req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
     open_doc(1, TRIG),
     trigreq(2, 3, lam_col, 2),        # lambda '->', TriggerCharacter -> empty
     trigreq(3, 3, lam_col, 1),        # lambda '->', Invoked (persisted session) -> empty
     trigreq(4, 4, der_col, 2, "."),   # real deref '.', TriggerCharacter -> pt fields
+    trigreq(5, 5, arr_col, 1),        # 'p->', Invoked -> empty: '->' is not member access
     req(9, "shutdown", None), note("exit", None),
 ]
 trgresp, _, _, _, _ = run_session(trg)
@@ -1576,6 +1609,8 @@ check("completion: Invoked '->' at a lambda body also stays empty (no global lea
       trg_labels(3) == [], str(trg_labels(3)[:8]))
 check("completion: a genuine pointer '.' completes pointee fields under a trigger char",
       set(trg_labels(4)) == {"x"}, str(trg_labels(4)))
+check("completion: 'p->' offers nothing ('->' is never member access in FC)",
+      trg_labels(5) == [], str(trg_labels(5)[:8]))
 
 # --- completion: member access on a composite object (index / call / nested) --
 # The object before a '.' need not be a bare identifier. `dict[i].` ends in
@@ -2359,6 +2394,39 @@ check("cross-unit: a non-open member's diagnostics use its canonical URI",
       libpubs and all(".." not in u for u, _ in libpubs), str([u for u, _ in libpubs]))
 check("cross-unit: a non-open member's error is published at all",
       any(m for _, m in libpubs), str(libpubs))
+
+# --- go-to-definition into another file names it by its canonical URI ---------
+# The target sits in a directory whose name has a space and is reached through
+# an lsp.rsp route containing `..`. The client must get the same, properly
+# percent-encoded URI it would build for that file itself.
+import urllib.parse
+droot = tempfile.mkdtemp(prefix="fc lsp space ")
+os.makedirs(os.path.join(droot, "app"))
+os.makedirs(os.path.join(droot, "shared"))
+with open(os.path.join(droot, "shared", "lib.fc"), "w") as f:
+    f.write("module lib =\n    let twice = (x: i32) -> x * 2\n")
+with open(os.path.join(droot, "app", "lsp.rsp"), "w") as f:
+    f.write("main.fc\n../shared/lib.fc\n")
+DMAIN = (
+    "let main = (args: str[]) ->\n"      # line 0
+    "    lib.twice(21)\n"                # line 1: 'twice' at char 8
+)
+dmain_path = os.path.join(droot, "app", "main.fc")
+with open(dmain_path, "w") as f: f.write(DMAIN)
+dmain_uri = "file://" + urllib.parse.quote(dmain_path)
+dm = [
+    req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": dmain_uri, "languageId": "fc",
+         "version": 1, "text": DMAIN}}),
+    req(2, "textDocument/definition",
+        {"textDocument": {"uri": dmain_uri}, "position": {"line": 1, "character": 8}}),
+    req(9, "shutdown", None), note("exit", None),
+]
+dresp, _, _, _, _ = run_session(dm)
+dres = dresp.get(2, {}).get("result") or {}
+lib_uri = "file://" + urllib.parse.quote(os.path.realpath(os.path.join(droot, "shared", "lib.fc")))
+check("go-to-def into another file returns its canonical, percent-encoded URI",
+      dres.get("uri") == lib_uri, f"{dres.get('uri')!r} vs {lib_uri!r}")
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

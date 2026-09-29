@@ -204,7 +204,7 @@ async function activate(context) {
       {
         async provideCompletionItems(document, position, _token, context) {
           // Forward the trigger context so the server can keep a trigger-char
-          // auto-pop (e.g. after `->`) quiet when it isn't a real member access,
+          // auto-pop quiet when it isn't a real member access (a lone `:`),
           // while still answering an explicit Ctrl+Space.
           const params = docPos(document, position);
           if (context) {
@@ -228,11 +228,9 @@ async function activate(context) {
       // Trigger characters. This manual provider gates auto-completion itself —
       // the server's completionProvider.triggerCharacters capability is NOT
       // consulted (we don't route completion through vscode-languageclient), so
-      // these must be kept in sync with it. '>' completes `->` (member access on
-      // a pointer); the server checks the preceding '-'.
+      // these must be kept in sync with it.
       ".",
-      ":",
-      ">"
+      ":"
     ),
 
     vscode.languages.registerCodeLensProvider(selector, {

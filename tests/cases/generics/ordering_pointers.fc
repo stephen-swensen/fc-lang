@@ -1,0 +1,14 @@
+// Ordering comparisons on a type variable accept pointers, as they do on
+// concrete operands; only arithmetic stays numeric-only in a generic body.
+let less = (a: 'a, b: 'a) -> a < b
+let clamp_hi = (x: 'a, hi: 'a) -> if x > hi then hi else x
+
+let main = (args: str[]) ->
+    let xs = i32[3] { 1, 2, 3 }
+    let p = &xs[0]
+    let q = &xs[2]
+    assert(less(p, q))
+    assert(!less(q, p))
+    assert(clamp_hi(q, p) == p)
+    assert(less(1.5, 2.5))
+    0

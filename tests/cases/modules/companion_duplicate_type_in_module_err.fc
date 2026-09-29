@@ -1,0 +1,9 @@
+module geo =
+    module point =
+        let origin_x = 0
+    struct point =
+        x: i32
+    struct point =
+        y: i32
+
+let main = (args: str[]) -> 0

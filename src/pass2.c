@@ -3501,8 +3501,71 @@ typedef struct {
 
 static void validate_generic_expr(Expr *e, void *check);
 
+/* The operand rule for a binary operator, shared by the type checker and the
+ * per-instance check of generic bodies. Pointer arithmetic (`p + n`, `p - q`)
+ * is the type checker's own addition: arithmetic in a generic body is
+ * numeric-only. Returns NULL when lt and rt qualify, else the diagnostic
+ * (malloc'd). Qualifying numeric operands may still need widening to their
+ * common type. */
+static char *binary_operand_error(TokenKind op, Type *lt, Type *rt) {
+    bool arith = op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR ||
+                 op == TOK_SLASH || op == TOK_PERCENT;
+    bool bitwise = op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET;
+    bool shift = op == TOK_LTLT || op == TOK_GTGT;
+    bool ordering = op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ;
+    bool mismatch = !type_eq(lt, rt) && !type_common_numeric(lt, rt);
+
+    /* Enums are not numeric; say how to get the number out. */
+    if ((arith || bitwise || shift) && (lt->kind == TYPE_ENUM || rt->kind == TYPE_ENUM)) {
+        Type *et = lt->kind == TYPE_ENUM ? lt : rt;
+        return str_sprintf("enum '%s' is not numeric; cast out first: (%s) x",
+                           type_name(et), type_name(type_enum_underlying(et)));
+    }
+    if (arith) {
+        if (!type_is_numeric(lt) || !type_is_numeric(rt))
+            return str_sprintf("arithmetic requires numeric operands, got %s and %s",
+                               type_name(lt), type_name(rt));
+        return mismatch ? str_sprintf("type mismatch: %s vs %s", type_name(lt), type_name(rt))
+                        : NULL;
+    }
+    if (op == TOK_EQEQ || op == TOK_BANGEQ)
+        return mismatch ? str_sprintf("comparison type mismatch: %s vs %s",
+                                      type_name(lt), type_name(rt))
+                        : NULL;
+    if (ordering) {
+        /* Two pointers of the same type, two values of the same enum (its
+         * declared values are ordered), or two numbers. */
+        if (lt->kind == TYPE_POINTER && rt->kind == TYPE_POINTER)
+            return type_eq(lt, rt) ? NULL
+                : str_sprintf("comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
+        if (lt->kind == TYPE_ENUM || rt->kind == TYPE_ENUM)
+            return type_eq(lt, rt) ? NULL
+                : str_sprintf("ordering comparison requires both operands to be the same "
+                              "enum type, got %s and %s", type_name(lt), type_name(rt));
+        if (!type_is_numeric(lt) || !type_is_numeric(rt))
+            return str_sprintf("ordering comparison requires numeric or pointer types, "
+                               "got %s and %s", type_name(lt), type_name(rt));
+        return mismatch ? str_sprintf("comparison type mismatch: %s vs %s",
+                                      type_name(lt), type_name(rt))
+                        : NULL;
+    }
+    if (op == TOK_AMPAMP || op == TOK_PIPEPIPE)
+        return type_eq(lt, type_bool()) && type_eq(rt, type_bool()) ? NULL
+            : str_sprintf("logical operator requires bool operands");
+    if (bitwise) {
+        if (!type_is_integer(lt) || !type_is_integer(rt))
+            return str_sprintf("bitwise operator requires integer operands");
+        return mismatch ? str_sprintf("type mismatch: %s vs %s", type_name(lt), type_name(rt))
+                        : NULL;
+    }
+    if (shift)
+        return type_is_integer(lt) && type_is_integer(rt) ? NULL
+            : str_sprintf("shift requires integer operands");
+    return str_sprintf("unsupported binary operator");
+}
+
 /* A binary operation deferred at template time because an operand's type
- * involves type variables: apply the operator's rules to the concrete types. */
+ * involves type variables: apply the operator's rule to the concrete types. */
 static void check_generic_binary(Expr *e, GenericCheck *gc) {
     Type *lt_raw = e->binary.left->type;
     Type *rt_raw = e->binary.right->type;
@@ -3511,55 +3574,11 @@ static void check_generic_binary(Expr *e, GenericCheck *gc) {
 
     Type *lt = type_substitute(gc->arena, lt_raw, gc->type_params, gc->bindings, gc->ntp);
     Type *rt = type_substitute(gc->arena, rt_raw, gc->type_params, gc->bindings, gc->ntp);
-    TokenKind op = e->binary.op;
-    const InstFrame *frame = gc->frame;
-
-    if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR ||
-        op == TOK_SLASH || op == TOK_PERCENT) {
-        if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-            gen_inst_diag(frame, e->loc, "arithmetic requires numeric operands, got %s and %s",
-                type_name(lt), type_name(rt));
-            gc->ok = false;
-        } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-            gen_inst_diag(frame, e->loc, "type mismatch: %s vs %s",
-                type_name(lt), type_name(rt));
-            gc->ok = false;
-        }
-    } else if (op == TOK_EQEQ || op == TOK_BANGEQ) {
-        if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-            gen_inst_diag(frame, e->loc, "comparison type mismatch: %s vs %s",
-                type_name(lt), type_name(rt));
-            gc->ok = false;
-        }
-    } else if (op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
-        if (lt->kind == TYPE_ENUM && rt->kind == TYPE_ENUM && type_eq(lt, rt)) {
-            /* same-enum ordering is admissible (lockstep with the
-             * concrete checker's enum-ordering branch) */
-        } else if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-            gen_inst_diag(frame, e->loc, "ordering comparison requires numeric or pointer types, got %s and %s",
-                type_name(lt), type_name(rt));
-            gc->ok = false;
-        } else if (!type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-            gen_inst_diag(frame, e->loc, "comparison type mismatch: %s vs %s",
-                type_name(lt), type_name(rt));
-            gc->ok = false;
-        }
-    } else if (op == TOK_AMPAMP || op == TOK_PIPEPIPE) {
-        if (!type_eq(lt, type_bool()) || !type_eq(rt, type_bool())) {
-            gen_inst_diag(frame, e->loc, "logical operator requires bool operands");
-            gc->ok = false;
-        }
-    } else if (op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET ||
-               op == TOK_LTLT || op == TOK_GTGT) {
-        if (!type_is_integer(lt) || !type_is_integer(rt)) {
-            gen_inst_diag(frame, e->loc, "bitwise/shift operator requires integer operands");
-            gc->ok = false;
-        } else if (op != TOK_LTLT && op != TOK_GTGT &&
-                   !type_eq(lt, rt) && !type_common_numeric(lt, rt)) {
-            gen_inst_diag(frame, e->loc, "type mismatch: %s vs %s",
-                type_name(lt), type_name(rt));
-            gc->ok = false;
-        }
+    char *err = binary_operand_error(e->binary.op, lt, rt);
+    if (err) {
+        gen_inst_diag(gc->frame, e->loc, "%s", err);
+        free(err);
+        gc->ok = false;
     }
 }
 
@@ -4702,21 +4721,6 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             return e->type;
         }
 
-        /* Enums are not numeric: arithmetic/bitwise/shift on an enum operand
-         * is rejected up front with a cast-out hint (the numeric gates below
-         * would reject it anyway, with a less helpful message). */
-        if ((lt->kind == TYPE_ENUM || rt->kind == TYPE_ENUM) &&
-            (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR ||
-             op == TOK_SLASH || op == TOK_PERCENT || op == TOK_AMP ||
-             op == TOK_PIPE || op == TOK_CARET || op == TOK_LTLT ||
-             op == TOK_GTGT)) {
-            Type *et = lt->kind == TYPE_ENUM ? lt : rt;
-            diag_error(e->loc, "enum '%s' is not numeric; cast out first: (%s) x",
-                type_name(et), type_name(type_enum_underlying(et)));
-            e->type = type_error();
-            return e->type;
-        }
-
         if (op == TOK_PLUS || op == TOK_MINUS) {
             /* Pointer arithmetic: ptr ± int → same pointer type (offset by N elements). */
             if (lt->kind == TYPE_POINTER && type_is_integer(rt)) {
@@ -4742,156 +4746,28 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 e->type = type_isize();
                 return e->type;
             }
-            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-                diag_error(e->loc, "arithmetic requires numeric operands, got %s and %s",
-                    type_name(lt), type_name(rt));
-                e->type = type_error();
-                return e->type;
-            }
-            if (!type_eq(lt, rt)) {
-                Type *common = type_common_numeric(lt, rt);
-                if (!common) {
-                    diag_error(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
-                    e->type = type_error();
-                    return e->type;
-                }
-                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
-                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
-                lt = rt = common;
-            }
-            e->type = lt;
-            return e->type;
         }
 
-        if (op == TOK_STAR || op == TOK_SLASH || op == TOK_PERCENT) {
-            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-                diag_error(e->loc, "arithmetic requires numeric operands, got %s and %s",
-                    type_name(lt), type_name(rt));
-                e->type = type_error();
-                return e->type;
-            }
-            if (!type_eq(lt, rt)) {
-                Type *common = type_common_numeric(lt, rt);
-                if (!common) {
-                    diag_error(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
-                    e->type = type_error();
-                    return e->type;
-                }
-                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
-                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
-                lt = rt = common;
-            }
-            e->type = lt;
-            return e->type;
-        }
-
-        /* Structural equality: == and != work on all types */
-        if (op == TOK_EQEQ || op == TOK_BANGEQ) {
-            if (type_eq(lt, rt)) {
-                e->type = type_bool();
-                return e->type;
-            }
-            /* Try numeric widening for mismatched numeric types */
-            Type *common = type_common_numeric(lt, rt);
-            if (common) {
-                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
-                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
-                e->type = type_bool();
-                return e->type;
-            }
-            diag_error(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
+        char *err = binary_operand_error(op, lt, rt);
+        if (err) {
+            diag_error(e->loc, "%s", err);
+            free(err);
             e->type = type_error();
             return e->type;
         }
-
-        /* Ordering: < > <= >= require numeric or pointer types */
-        if (op == TOK_LT || op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ) {
-            /* Pointer ordering: both must be same pointer type */
-            if (lt->kind == TYPE_POINTER && rt->kind == TYPE_POINTER) {
-                if (!type_eq(lt, rt)) {
-                    diag_error(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
-                    e->type = type_error();
-                    return e->type;
-                }
-                e->type = type_bool();
-                return e->type;
-            }
-            /* Enum ordering: both operands must be the same enum type (the
-             * declared values are public and ordered; cross-enum or enum-vs-
-             * int comparisons require casting out). */
-            if (lt->kind == TYPE_ENUM || rt->kind == TYPE_ENUM) {
-                if (!type_eq(lt, rt)) {
-                    diag_error(e->loc, "ordering comparison requires both operands "
-                        "to be the same enum type, got %s and %s",
-                        type_name(lt), type_name(rt));
-                    e->type = type_error();
-                    return e->type;
-                }
-                e->type = type_bool();
-                return e->type;
-            }
-            if (!type_is_numeric(lt) || !type_is_numeric(rt)) {
-                diag_error(e->loc, "ordering comparison requires numeric or pointer types, got %s and %s", type_name(lt), type_name(rt));
-                e->type = type_error();
-                return e->type;
-            }
-            if (!type_eq(lt, rt)) {
-                Type *common = type_common_numeric(lt, rt);
-                if (!common) {
-                    diag_error(e->loc, "comparison type mismatch: %s vs %s", type_name(lt), type_name(rt));
-                    e->type = type_error();
-                    return e->type;
-                }
-                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
-                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
-            }
-            e->type = type_bool();
-            return e->type;
+        /* Numeric operands of different types widen to their common type. A
+         * shift keeps its operands as they are: the result has the left
+         * operand's type. */
+        if (!type_eq(lt, rt) && op != TOK_LTLT && op != TOK_GTGT) {
+            Type *common = type_common_numeric(lt, rt);
+            if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
+            if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
+            lt = rt = common;
         }
-
-        if (op == TOK_AMPAMP || op == TOK_PIPEPIPE) {
-            if (!type_eq(lt, type_bool()) || !type_eq(rt, type_bool())) {
-                diag_error(e->loc, "logical operator requires bool operands");
-                e->type = type_error();
-                return e->type;
-            }
-            e->type = type_bool();
-            return e->type;
-        }
-
-        if (op == TOK_AMP || op == TOK_PIPE || op == TOK_CARET) {
-            if (!type_is_integer(lt) || !type_is_integer(rt)) {
-                diag_error(e->loc, "bitwise operator requires integer operands");
-                e->type = type_error();
-                return e->type;
-            }
-            if (!type_eq(lt, rt)) {
-                Type *common = type_common_numeric(lt, rt);
-                if (!common) {
-                    diag_error(e->loc, "type mismatch: %s vs %s", type_name(lt), type_name(rt));
-                    e->type = type_error();
-                    return e->type;
-                }
-                if (!type_eq(lt, common)) e->binary.left = wrap_widen(ctx->arena, e->binary.left, common);
-                if (!type_eq(rt, common)) e->binary.right = wrap_widen(ctx->arena, e->binary.right, common);
-                lt = rt = common;
-            }
-            e->type = lt;
-            return e->type;
-        }
-
-        if (op == TOK_LTLT || op == TOK_GTGT) {
-            if (!type_is_integer(lt) || !type_is_integer(rt)) {
-                diag_error(e->loc, "shift requires integer operands");
-                e->type = type_error();
-                return e->type;
-            }
-            e->type = lt;
-            return e->type;
-        }
-
-        diag_error(e->loc, "unsupported binary operator");
-        e->type = type_error();
+        bool yields_bool = op == TOK_EQEQ || op == TOK_BANGEQ || op == TOK_LT ||
+                           op == TOK_GT || op == TOK_LTEQ || op == TOK_GTEQ ||
+                           op == TOK_AMPAMP || op == TOK_PIPEPIPE;
+        e->type = yields_bool ? type_bool() : lt;
         return e->type;
     }
 
@@ -10754,27 +10630,31 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
     }
 }
 
-/* Check if an expression is a compile-time constant (no variable refs or calls).
+/* What a top-level initializer may contain. A module constant (INIT_CONST)
+ * is emitted as a C constant expression. A file-level let of the entry file
+ * (INIT_FILE) is initialized at the start of main, so it may also allocate,
+ * unwrap, divide, compare aggregates and convert between str and cstr.
+ * Neither may call a function (other than constructing a union variant) or
+ * read a variable. Called after type checking, so e->type is set.
  *
- * `all_emitted` (optional) rides the same walk to answer a second question about
- * the same tree: is every byte of this value storage the *compiler* emits? It is
- * cleared by a pointer value — an address the program supplied, `(u8*)
- * 0xA0000usize` on the retro targets — and by a slice built over a raw address,
- * because neither names memory the compiler owns and writes through them must
- * stay legal. Threaded through this one walk rather than a parallel one so the
- * two questions can never disagree about the const-expr grammar.
- *
- * The `&&` short-circuits mean a *non*-constant tree may leave `all_emitted`
- * unvisited past the first rejection. That is harmless in both directions: an
- * over-set flag only over-restricts writes, and an under-set one only forgoes
- * the freeze — neither can license a write to read-only storage. */
-static bool is_const_expr_ex(Expr *e, bool *all_emitted) {
+ * `all_emitted` (optional, INIT_CONST) rides the same walk to answer a second
+ * question about the same tree: is every byte of this value storage the
+ * *compiler* emits? It is cleared by a pointer value (an address the program
+ * supplied, `(u8*) 0xA0000usize` on the retro targets) and by a slice built
+ * over a raw address, because neither names memory the compiler owns and
+ * writes through them must stay legal. The `&&` short-circuits mean a
+ * non-constant tree may leave it unvisited past the first rejection. That is
+ * harmless in both directions: an over-set flag only over-restricts writes,
+ * and an under-set one only forgoes the freeze. */
+typedef enum { INIT_CONST, INIT_FILE } InitRule;
+
+static bool is_init_expr(Expr *e, InitRule rule, bool *all_emitted) {
     if (!e) return true;
+    bool file = rule == INIT_FILE;
     if (all_emitted && e->type &&
         (e->type->kind == TYPE_POINTER || e->type->kind == TYPE_ANY_PTR))
         *all_emitted = false;
     switch (e->kind) {
-    /* Literals — always valid C constants */
     case EXPR_INT_LIT:
     case EXPR_FLOAT_LIT:
     case EXPR_BOOL_LIT:
@@ -10782,188 +10662,91 @@ static bool is_const_expr_ex(Expr *e, bool *all_emitted) {
     case EXPR_STRING_LIT:
     case EXPR_CSTRING_LIT:
     case EXPR_VOID_LIT:
-        return true;
-    /* Type operators — compile-time constants in C */
     case EXPR_SIZEOF:
     case EXPR_ALIGNOF:
     case EXPR_DEFAULT:
         return true;
-    /* Unary prefix — only negate and boolean-not emit simple C infix */
     case EXPR_UNARY_PREFIX:
-        if (e->unary_prefix.op == TOK_MINUS || e->unary_prefix.op == TOK_BANG)
-            return is_const_expr_ex(e->unary_prefix.operand, all_emitted);
-        return false;
-    /* Binary — safelist operators that emit simple C infix at file scope.
-     * Integer div/mod emit zero-check statement expressions.
-     * Equality on aggregate types emits generated comparison function calls. */
-    case EXPR_BINARY:
-        switch (e->binary.op) {
-        case TOK_PLUS: case TOK_MINUS: case TOK_STAR:
-        case TOK_LTLT: case TOK_GTGT:
-        case TOK_AMP: case TOK_PIPE: case TOK_CARET:
-        case TOK_AMPAMP: case TOK_PIPEPIPE:
-        case TOK_LT: case TOK_GT: case TOK_LTEQ: case TOK_GTEQ:
-            return is_const_expr_ex(e->binary.left, all_emitted) &&
-                   is_const_expr_ex(e->binary.right, all_emitted);
-        case TOK_SLASH: case TOK_PERCENT:
-            /* Float div/mod emits simple infix; integer emits zero-check */
-            if (e->type && type_is_integer(e->type)) return false;
-            return is_const_expr_ex(e->binary.left, all_emitted) &&
-                   is_const_expr_ex(e->binary.right, all_emitted);
-        case TOK_EQEQ: case TOK_BANGEQ:
-            /* Primitive equality is simple infix; aggregate types emit
-             * generated comparison function calls */
-            if (e->binary.left->type &&
-                type_needs_eq_func(e->binary.left->type))
-                return false;
-            return is_const_expr_ex(e->binary.left, all_emitted) &&
-                   is_const_expr_ex(e->binary.right, all_emitted);
-        default:
+        /* Negation and boolean not; deref (*) and address-of (&) read storage. */
+        if (e->unary_prefix.op != TOK_MINUS && e->unary_prefix.op != TOK_BANG)
             return false;
+        return is_init_expr(e->unary_prefix.operand, rule, all_emitted);
+    case EXPR_UNARY_POSTFIX:
+        /* x! checks at run time; x? needs an enclosing function to return from. */
+        return file && e->unary_postfix.op != TOK_QUESTION &&
+               is_init_expr(e->unary_postfix.operand, rule, all_emitted);
+    case EXPR_BINARY:
+        if (!file) {
+            switch (e->binary.op) {
+            case TOK_SLASH: case TOK_PERCENT:
+                /* integer div/mod emits a zero check, not a C constant */
+                if (e->type && type_is_integer(e->type)) return false;
+                break;
+            case TOK_EQEQ: case TOK_BANGEQ:
+                /* aggregate equality calls a generated comparison function */
+                if (e->binary.left->type && type_needs_eq_func(e->binary.left->type))
+                    return false;
+                break;
+            default:
+                break;
+            }
         }
-    /* Cast — simple type casts are fine; str↔cstr emit statement exprs */
+        return is_init_expr(e->binary.left, rule, all_emitted) &&
+               is_init_expr(e->binary.right, rule, all_emitted);
     case EXPR_CAST:
-        if (e->cast.operand->type &&
+        /* str <-> cstr conversions copy at run time */
+        if (!file && e->cast.operand->type &&
             ((is_str_type(e->cast.operand->type) && is_cstr_type(e->cast.target)) ||
              (is_cstr_type(e->cast.operand->type) && is_str_type(e->cast.target))))
             return false;
-        return is_const_expr_ex(e->cast.operand, all_emitted);
-    /* Extern constants — C macros/enums are compile-time constants.
-     * Static type properties (int32.min, float64.nan, ...) emit C macros or
-     * folded literals — all valid C constant expressions.
-     * No-payload variant constructors also emit plain compound literals. */
+        return is_init_expr(e->cast.operand, rule, all_emitted);
     case EXPR_FIELD:
+        /* Extern constants (C macros/enums), union and enum variants, static
+         * type properties (i32.min, f64.nan, ...) and declared error codes. */
         return e->field.is_extern_const || e->field.is_variant_constructor ||
                e->field.is_type_property || error_const_literal(e) != NULL;
-    /* Struct literal — valid if all field values are const */
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
-            if (!is_const_expr_ex(e->struct_lit.fields[i].value, all_emitted)) return false;
+            if (!is_init_expr(e->struct_lit.fields[i].value, rule, all_emitted)) return false;
         return true;
-    /* Tuple literal — valid if all elements are const (a plain compound literal) */
     case EXPR_TUPLE_LIT:
         for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            if (!is_const_expr_ex(e->tuple_lit.elems[i], all_emitted)) return false;
+            if (!is_init_expr(e->tuple_lit.elems[i], rule, all_emitted)) return false;
         return true;
-    /* Array literal — valid if all elements and size are const.  Codegen
-     * lifts the backing array to file scope in const context. */
     case EXPR_ARRAY_LIT:
+        /* A module constant's backing array is lifted to file scope. */
         for (int i = 0; i < e->array_lit.elem_count; i++)
-            if (!is_const_expr_ex(e->array_lit.elems[i], all_emitted)) return false;
-        return is_const_expr_ex(e->array_lit.size_expr, all_emitted);
-    /* Slice literal — valid if both ptr and len are const.  Unlike an array
-     * literal, this builds a slice over an address the program supplies
-     * (`u8[] { ptr = (u8*) 0xA0000usize, len = … }`), so the pointee is not
-     * storage the compiler owns and must stay writable. */
+            if (!is_init_expr(e->array_lit.elems[i], rule, all_emitted)) return false;
+        return is_init_expr(e->array_lit.size_expr, rule, all_emitted);
     case EXPR_SLICE_LIT:
+        /* A slice over an address the program supplies
+         * (`u8[] { ptr = (u8*) 0xA0000usize, len = … }`) is not storage the
+         * compiler owns, so it must stay writable. */
         if (all_emitted) *all_emitted = false;
-        return is_const_expr_ex(e->slice_lit.ptr_expr, all_emitted) &&
-               is_const_expr_ex(e->slice_lit.len_expr, all_emitted);
-    /* some(x) — valid if payload is const.  Emits a plain compound literal. */
-    case EXPR_SOME:
-        return is_const_expr_ex(e->some_expr.value, all_emitted);
-    /* ok(x) / err(T, c) — valid if payload/code is const. (A possibly-zero
-     * err code is rejected separately by const_fold_expr.) */
-    case EXPR_OK:
-        return is_const_expr_ex(e->ok_expr.value, all_emitted);
-    case EXPR_ERR:
-        return is_const_expr_ex(e->err_expr.code, all_emitted);
-    /* Union variant constructor with payload — valid if all args are const. */
-    case EXPR_CALL:
-        if (e->call.func->kind == EXPR_FIELD &&
-            e->call.func->field.is_variant_constructor) {
-            for (int i = 0; i < e->call.arg_count; i++)
-                if (!is_const_expr_ex(e->call.args[i], all_emitted)) return false;
-            return true;
-        }
-        return false;
-    /* Everything else is rejected by default */
-    default:
-        return false;
-    }
-}
-
-static bool is_const_expr(Expr *e) { return is_const_expr_ex(e, NULL); }
-
-/* Check if an expression is valid in a file-level initializer.
- * More permissive than is_const_expr: allows alloc, some, unwrap, array/slice
- * literals, and union variant constructors, but still disallows FC function
- * calls and variable references.  Called after type-checking so e->type is set. */
-static bool is_file_init_expr(Expr *e) {
-    if (!e) return true;
-    switch (e->kind) {
-    case EXPR_INT_LIT:
-    case EXPR_FLOAT_LIT:
-    case EXPR_BOOL_LIT:
-    case EXPR_CHAR_LIT:
-    case EXPR_STRING_LIT:
-    case EXPR_CSTRING_LIT:
-    case EXPR_VOID_LIT:
-    case EXPR_SIZEOF:
-    case EXPR_ALIGNOF:
-    case EXPR_DEFAULT:
-        return true;
-    case EXPR_UNARY_PREFIX:
-        /* Only negate (-) and boolean not (!) are safe; deref (*) and
-         * address-of (&) are not valid in init context. */
-        if (e->unary_prefix.op != TOK_MINUS && e->unary_prefix.op != TOK_BANG)
-            return false;
-        return is_file_init_expr(e->unary_prefix.operand);
-    case EXPR_UNARY_POSTFIX:
-        /* x? needs an enclosing function to return from — never a file init */
-        return e->unary_postfix.op != TOK_QUESTION &&
-               is_file_init_expr(e->unary_postfix.operand);
-    case EXPR_BINARY:
-        return is_file_init_expr(e->binary.left) && is_file_init_expr(e->binary.right);
-    case EXPR_CAST:
-        return is_file_init_expr(e->cast.operand);
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            if (!is_file_init_expr(e->struct_lit.fields[i].value)) return false;
-        return true;
-    case EXPR_TUPLE_LIT:
-        for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            if (!is_file_init_expr(e->tuple_lit.elems[i])) return false;
-        return true;
+        return is_init_expr(e->slice_lit.ptr_expr, rule, all_emitted) &&
+               is_init_expr(e->slice_lit.len_expr, rule, all_emitted);
     case EXPR_ALLOC:
-        return is_file_init_expr(e->alloc_expr.size_expr) &&
-               is_file_init_expr(e->alloc_expr.init_expr);
+        return file && is_init_expr(e->alloc_expr.size_expr, rule, all_emitted) &&
+               is_init_expr(e->alloc_expr.init_expr, rule, all_emitted);
     case EXPR_SOME:
-        return is_file_init_expr(e->some_expr.value);
+        return is_init_expr(e->some_expr.value, rule, all_emitted);
     case EXPR_OK:
-        return is_file_init_expr(e->ok_expr.value);
+        return is_init_expr(e->ok_expr.value, rule, all_emitted);
     case EXPR_ERR:
-        return is_file_init_expr(e->err_expr.code);
-    case EXPR_ARRAY_LIT:
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            if (!is_file_init_expr(e->array_lit.elems[i])) return false;
-        return is_file_init_expr(e->array_lit.size_expr);
-    case EXPR_SLICE_LIT:
-        return is_file_init_expr(e->slice_lit.ptr_expr) &&
-               is_file_init_expr(e->slice_lit.len_expr);
+        /* (A possibly-zero err code is rejected separately by const_fold_expr.) */
+        return is_init_expr(e->err_expr.code, rule, all_emitted);
     case EXPR_CALL:
-        /* Allow union variant constructors only */
-        if (e->type && e->type->kind == TYPE_UNION &&
-            e->call.func->kind == EXPR_FIELD) {
-            for (int i = 0; i < e->call.arg_count; i++)
-                if (!is_file_init_expr(e->call.args[i])) return false;
-            return true;
-        }
-        return false;
-    case EXPR_FIELD:
-        /* Allow no-payload union variant constructors and enum variants
-         * (both compile to constants; enum count rides is_type_property) */
-        if (e->type && (e->type->kind == TYPE_UNION || e->type->kind == TYPE_ENUM))
-            return true;
-        /* Allow extern constants (C macros/enums) and static type properties
-         * (int32.min, float64.nan, ...) */
-        if (e->field.is_extern_const || e->field.is_type_property)
-            return true;
-        return false;
+        if (e->call.func->kind != EXPR_FIELD || !e->call.func->field.is_variant_constructor)
+            return false;
+        for (int i = 0; i < e->call.arg_count; i++)
+            if (!is_init_expr(e->call.args[i], rule, all_emitted)) return false;
+        return true;
     default:
         return false;
     }
 }
+
+static bool is_const_expr(Expr *e) { return is_init_expr(e, INIT_CONST, NULL); }
 
 static void check_decl_let(CheckCtx *ctx, Decl *d) {
     /* For function declarations, pre-register a partial function type
@@ -11039,7 +10822,7 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     if (d->let.is_module_member && !d->let.is_mut &&
         d->let.init && d->let.init->kind != EXPR_FUNC) {
         bool all_emitted = true;
-        is_const_expr_ex(d->let.init, &all_emitted);
+        is_init_expr(d->let.init, INIT_CONST, &all_emitted);
         d->let.is_frozen = all_emitted;
         if (all_emitted) t = type_make_const(ctx->arena, t);
     }
@@ -11757,7 +11540,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
             if (d->kind == DECL_LET) {
                 check_decl_let(&ctx, d);
                 if (d->let.init && d->let.init->kind != EXPR_FUNC &&
-                    !is_file_init_expr(d->let.init)) {
+                    !is_init_expr(d->let.init, INIT_FILE, NULL)) {
                     diag_error(d->loc,
                         "file-level initializer for '%s' must not contain "
                         "function calls or variable references",

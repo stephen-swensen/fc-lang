@@ -1,0 +1,11 @@
+// Extern names that need an alias are reported and parsing carries on.
+extern struct foo__bar =
+    x: i32
+
+module m from "stdlib.h" =
+    extern free: (any*) -> void
+    extern __errno_location: () -> i32*
+
+let main = (args: str[]) ->
+    let late = struct
+    0

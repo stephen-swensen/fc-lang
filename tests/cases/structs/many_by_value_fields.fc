@@ -1,0 +1,289 @@
+// A struct with more by-value struct fields than any small fixed limit:
+// every field type is still emitted before the struct that contains it.
+struct big =
+    f0: s0
+    f1: s1
+    f2: s2
+    f3: s3
+    f4: s4
+    f5: s5
+    f6: s6
+    f7: s7
+    f8: s8
+    f9: s9
+    f10: s10
+    f11: s11
+    f12: s12
+    f13: s13
+    f14: s14
+    f15: s15
+    f16: s16
+    f17: s17
+    f18: s18
+    f19: s19
+    f20: s20
+    f21: s21
+    f22: s22
+    f23: s23
+    f24: s24
+    f25: s25
+    f26: s26
+    f27: s27
+    f28: s28
+    f29: s29
+    f30: s30
+    f31: s31
+    f32: s32
+    f33: s33
+    f34: s34
+    f35: s35
+    f36: s36
+    f37: s37
+    f38: s38
+    f39: s39
+    f40: s40
+    f41: s41
+    f42: s42
+    f43: s43
+    f44: s44
+    f45: s45
+    f46: s46
+    f47: s47
+    f48: s48
+    f49: s49
+    f50: s50
+    f51: s51
+    f52: s52
+    f53: s53
+    f54: s54
+    f55: s55
+    f56: s56
+    f57: s57
+    f58: s58
+    f59: s59
+    f60: s60
+    f61: s61
+    f62: s62
+    f63: s63
+    f64: s64
+    f65: s65
+    f66: s66
+    f67: s67
+    f68: s68
+    f69: s69
+
+struct s0 =
+    v: i32
+
+struct s1 =
+    v: i32
+
+struct s2 =
+    v: i32
+
+struct s3 =
+    v: i32
+
+struct s4 =
+    v: i32
+
+struct s5 =
+    v: i32
+
+struct s6 =
+    v: i32
+
+struct s7 =
+    v: i32
+
+struct s8 =
+    v: i32
+
+struct s9 =
+    v: i32
+
+struct s10 =
+    v: i32
+
+struct s11 =
+    v: i32
+
+struct s12 =
+    v: i32
+
+struct s13 =
+    v: i32
+
+struct s14 =
+    v: i32
+
+struct s15 =
+    v: i32
+
+struct s16 =
+    v: i32
+
+struct s17 =
+    v: i32
+
+struct s18 =
+    v: i32
+
+struct s19 =
+    v: i32
+
+struct s20 =
+    v: i32
+
+struct s21 =
+    v: i32
+
+struct s22 =
+    v: i32
+
+struct s23 =
+    v: i32
+
+struct s24 =
+    v: i32
+
+struct s25 =
+    v: i32
+
+struct s26 =
+    v: i32
+
+struct s27 =
+    v: i32
+
+struct s28 =
+    v: i32
+
+struct s29 =
+    v: i32
+
+struct s30 =
+    v: i32
+
+struct s31 =
+    v: i32
+
+struct s32 =
+    v: i32
+
+struct s33 =
+    v: i32
+
+struct s34 =
+    v: i32
+
+struct s35 =
+    v: i32
+
+struct s36 =
+    v: i32
+
+struct s37 =
+    v: i32
+
+struct s38 =
+    v: i32
+
+struct s39 =
+    v: i32
+
+struct s40 =
+    v: i32
+
+struct s41 =
+    v: i32
+
+struct s42 =
+    v: i32
+
+struct s43 =
+    v: i32
+
+struct s44 =
+    v: i32
+
+struct s45 =
+    v: i32
+
+struct s46 =
+    v: i32
+
+struct s47 =
+    v: i32
+
+struct s48 =
+    v: i32
+
+struct s49 =
+    v: i32
+
+struct s50 =
+    v: i32
+
+struct s51 =
+    v: i32
+
+struct s52 =
+    v: i32
+
+struct s53 =
+    v: i32
+
+struct s54 =
+    v: i32
+
+struct s55 =
+    v: i32
+
+struct s56 =
+    v: i32
+
+struct s57 =
+    v: i32
+
+struct s58 =
+    v: i32
+
+struct s59 =
+    v: i32
+
+struct s60 =
+    v: i32
+
+struct s61 =
+    v: i32
+
+struct s62 =
+    v: i32
+
+struct s63 =
+    v: i32
+
+struct s64 =
+    v: i32
+
+struct s65 =
+    v: i32
+
+struct s66 =
+    v: i32
+
+struct s67 =
+    v: i32
+
+struct s68 =
+    v: i32
+
+struct s69 =
+    v: i32
+
+let main = (args: str[]) ->
+    let mut b = big { }
+    b.f69.v = 7
+    assert(b.f69.v + b.f0.v == 7)
+    0
