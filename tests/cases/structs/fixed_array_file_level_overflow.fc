@@ -1,0 +1,10 @@
+// A file-level let is initialized when the program starts, so a slice literal
+// longer than its fixed-array field aborts at run time, like the same copy in a
+// function body; only module constants reject it at compile time.
+struct box =
+    data: i32[2]
+
+let b = box { data = i32[3] { 1, 2, 3 } }
+
+let main = (args: str[]) ->
+    (i32) b.data.len

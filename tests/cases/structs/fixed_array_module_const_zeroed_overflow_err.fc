@@ -1,0 +1,10 @@
+// The zero-initializing form counts its declared length: `i32[3] { }` does
+// not fit a two-element field of a module constant.
+struct box =
+    data: i32[2]
+
+module m =
+    let b = box { data = i32[3] { } }
+
+let main = (args: str[]) ->
+    (i32) m.b.data.len

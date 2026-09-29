@@ -185,11 +185,13 @@ static bool is_oct_digit(char c) { return c >= '0' && c <= '7'; }
 static bool is_dec_digit(char c) { return isdigit((unsigned char)c); }
 static bool is_hex_digit(char c) { return isxdigit((unsigned char)c); }
 
-/* Consume a run of digits in which a '_' may separate two digits. Returns
- * whether any digit was consumed. */
+/* Consume a run of digits in which a '_' may separate two digits: it needs a
+ * digit on each side, so none may lead the run (`0x_ff`). The caller has
+ * consumed at least one character. Returns whether any digit was consumed. */
 static bool scan_digits(Lexer *l, bool (*is_digit)(char)) {
     bool any = false;
-    while (is_digit(peek(l)) || (peek(l) == '_' && is_digit(peek_next(l)))) {
+    while (is_digit(peek(l)) ||
+           (peek(l) == '_' && is_digit(l->current[-1]) && is_digit(peek_next(l)))) {
         if (peek(l) != '_') any = true;
         advance(l);
     }
@@ -256,16 +258,20 @@ static Token scan_number_body(Lexer *l) {
                 }
                 return finish_float(l);
             }
+            if (!has_digit)
+                return error_token(l, "a '0x' prefix must be followed by a hex digit");
             return finish_int(l);
         }
         if (base == 'b') {
             advance(l); /* consume b */
-            scan_digits(l, is_bin_digit);
+            if (!scan_digits(l, is_bin_digit))
+                return error_token(l, "a '0b' prefix must be followed by a binary digit");
             return finish_int(l);
         }
         if (base == 'o') {
             advance(l); /* consume o */
-            scan_digits(l, is_oct_digit);
+            if (!scan_digits(l, is_oct_digit))
+                return error_token(l, "a '0o' prefix must be followed by an octal digit");
             return finish_int(l);
         }
     }

@@ -3463,9 +3463,10 @@ static void emit_struct_lit(Expr *e, FILE *out) {
     }
     if (has_fixed_array && g_const_context) {
         /* File-scope aggregate initializer: emit each field inline.  A
-         * fixed-array field's value, expected to be an EXPR_ARRAY_LIT, is
-         * unwrapped to a bare { e0, e1, ... } C array initializer, since the
-         * slice header form cannot initialize a raw C array. */
+         * fixed-array field's value is a slice literal or the empty slice
+         * (const_fold_expr rejects anything else, and any overflow), emitted
+         * as a bare { e0, e1, ... } C array initializer, since the slice
+         * header form cannot initialize a raw C array. */
         if (st->struc.c_name) {
             fprintf(out, "(%s %s){",
                 st->struc.is_c_union ? "union" : "struct", st->struc.c_name);
@@ -3487,6 +3488,10 @@ static void emit_struct_lit(Expr *e, FILE *out) {
             fprintf(out, ".%s = ", c_safe_ident(g_intern, fname));
             Expr *v = e->struct_lit.fields[i].value;
             if (field_type && field_type->kind == TYPE_FIXED_ARRAY &&
+                v && v->kind == EXPR_DEFAULT) {
+                /* The empty slice copies nothing: the array is all zero. */
+                fprintf(out, "{0}");
+            } else if (field_type && field_type->kind == TYPE_FIXED_ARRAY &&
                 v && v->kind == EXPR_ARRAY_LIT) {
                 /* Bare aggregate: no slice header, no backing */
                 fprintf(out, "{");

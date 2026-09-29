@@ -1,0 +1,18 @@
+// A module constant of an extern struct type fills its fixed-array field from a
+// slice literal and zero-fills the rest, as for an FC struct.
+module h from "fixed_array_box.h" =
+    extern struct fc_box =
+        name: u8[32]
+        filled: i32
+
+module m =
+    let b = h.fc_box { name = u8[3] { 104u8, 200u8, 105u8 }, filled = 3 }
+
+let main = (args: str[]) ->
+    let v = m.b.name
+    assert(v.len == 32)
+    assert(v[0] == 'h')
+    assert(v[1] == 200u8)
+    assert(v[3] == 0u8)
+    assert(m.b.filled == 3)
+    0

@@ -749,6 +749,8 @@ Implicit widening conversions are allowed in binary expressions and comparisons 
 | "hello" | str |
 | c"hello" | cstr — null-terminated C string pointer |
 
+A radix prefix — `0x`, `0b` or `0o`, in either case — must be followed directly by a digit of its base: `0x`, `0xu8`, `0b2` and `0x_FF` are errors. (A hex float may instead start its mantissa at the point, as in `0x.8p1`.)
+
 Numeric literals may contain single underscores (`_`) between digits as visual separators. Underscores do not affect the value and work with all literal forms:
 
 ```fc
@@ -3713,6 +3715,14 @@ let p = packet { data = src, len = 8 }
 ```
 
 Omitted fields are zero-initialized (the entire inline array is zeroed).
+
+In a module-level `let` (a constant or a `let mut` global), the struct is a static initializer with no run time in which the length check could abort, so the check moves to compile time: the field's value must be a slice literal (`T[n] { … }`, including the zero-filled `T[n] { }`) or `default(T[])`, and a literal longer than the field is a compile error. A shorter one fills the leading elements and zeroes the rest, as at run time.
+
+```fc
+module m =
+    let p = packet { data = u8[2] { 1u8, 2u8 }, len = 2 }   // ok: 254 zero bytes follow
+    // let q = packet { data = u8[300] { }, len = 0 }       // ERROR: slice of length 300 overflows fixed-array field 'data' (u8[256])
+```
 
 ### Restrictions
 

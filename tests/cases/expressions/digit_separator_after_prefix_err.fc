@@ -1,0 +1,6 @@
+// A digit separator must sit between digits, so it cannot directly follow a
+// radix prefix. Regression: `0x_ff` was accepted as 255.
+let main = (args: str[]) ->
+    let x = 0x_ff
+    assert(x == 255)
+    0

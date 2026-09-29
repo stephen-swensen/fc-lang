@@ -1,0 +1,5 @@
+// `0o` alone is not an octal literal.
+let main = (args: str[]) ->
+    let x = 0o
+    assert(x == 0)
+    0

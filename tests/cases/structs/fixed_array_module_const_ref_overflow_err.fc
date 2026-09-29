@@ -1,0 +1,11 @@
+// A constant that copies another constant is checked where the overflowing
+// literal is written.
+struct box =
+    data: i32[2]
+
+module m =
+    let a = box { data = i32[3] { 1, 2, 3 } }
+    let b = a
+
+let main = (args: str[]) ->
+    (i32) m.b.data.len

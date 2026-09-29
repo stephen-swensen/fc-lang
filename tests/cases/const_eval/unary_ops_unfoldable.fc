@@ -1,0 +1,33 @@
+// Every unary operator a constant may use (`-`, `!`, `~`) is accepted in a
+// top-level initializer, including on isize/usize, which the compiler leaves
+// to the C compiler to fold. Regression: `~` was rejected there as "not a
+// constant expression" while `-` was accepted.
+struct pair =
+    lo: isize
+    hi: usize
+
+module m =
+    let x = 5isize
+    let neg = -x
+    let bnot = ~x
+    let bnot_lit = ~5isize
+    let all_ones = ~0usize
+    let twice = ~~x
+    let not_flag = !true
+    let in_struct = pair { lo = ~x, hi = ~1usize }
+    let in_slice = isize[2] { ~x, -~x }
+
+let file_level = ~7isize
+
+let main = (args: str[]) ->
+    assert(m.neg == -5isize)
+    assert(m.bnot == -6isize)
+    assert(m.bnot_lit == -6isize)
+    assert(m.all_ones == usize.max)
+    assert(m.twice == 5isize)
+    assert(!m.not_flag)
+    assert(m.in_struct.lo == -6isize)
+    assert(m.in_struct.hi == usize.max - 1usize)
+    assert(m.in_slice[0] == -6isize && m.in_slice[1] == 6isize)
+    assert(file_level == -8isize)
+    0

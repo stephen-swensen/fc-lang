@@ -1,0 +1,14 @@
+// The overflow check uses the instance field size of a generic struct: here
+// `'n` is bound to 2 by the other field.
+struct wide =
+    limbs: u32['n]
+
+struct sized =
+    w: wide<'n>
+    data: i32['n]
+
+module m =
+    let s = sized { w = default(wide<2>), data = i32[3] { 1, 2, 3 } }
+
+let main = (args: str[]) ->
+    (i32) m.s.data.len

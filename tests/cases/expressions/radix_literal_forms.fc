@@ -1,0 +1,11 @@
+// Radix literals in every accepted form: each prefix in both cases, a single
+// digit, separators between digits, a type suffix, and a hex float whose
+// mantissa starts at the point.
+let main = (args: str[]) ->
+    assert(0x0 == 0 && 0b0 == 0 && 0o0 == 0)
+    assert(0X1F == 31 && 0B101 == 5 && 0O17 == 15)
+    assert(0x1_f == 31 && 0b1_0 == 2 && 0o1_7 == 15)
+    assert(0x1fu8 == 31u8 && 0b1i64 == 1i64 && 0o7usize == 7usize)
+    assert(0_1 == 1)
+    assert(0x.8p1 == 1.0)
+    0

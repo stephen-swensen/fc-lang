@@ -1,0 +1,10 @@
+// A `let mut` module global is a C static initializer too, so it gets the
+// same compile-time overflow check as a constant.
+struct box =
+    data: i32[2]
+
+module m =
+    let mut b = box { data = i32[3] { 1, 2, 3 } }
+
+let main = (args: str[]) ->
+    (i32) m.b.data.len

@@ -1,0 +1,6 @@
+// A type suffix is not a digit: `0xu8` has no digits. Regression: it was
+// accepted as the u8 value 0.
+let main = (args: str[]) ->
+    let x = 0xu8
+    assert(x == 0u8)
+    0

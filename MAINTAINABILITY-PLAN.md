@@ -119,7 +119,7 @@ CLAUDE.md.
   `test-all` recipe shared with `test-all-O2`, `fcc --help`, README and editor
   docs fixed. The 33 `bugsearch` test headers were rewritten too. Left undone,
   optional: restructuring `tests/lsp/lsp_test.py`.
-- Still open: B30, B32 (phase 4) and B37-B40 (phase 6). When they are
+- Still open: B30 (phase 4), B39-B42 (phase 6 and after). When they are
   settled, move this plan to `spec/hist/`.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
@@ -399,11 +399,13 @@ covers.
   `scan_type_head` carried its own copy of the type-argument scan, without
   `typearg_scan`'s parenthesis handling. It now calls `typearg_scan`.
   (`generics/const_arg_slice_lit_paren`)
-- B32 (open, not fixed). A radix prefix with no digits is accepted as an
-  integer literal: `let x = 0x` (also `0b`, `0o`, and `0xu8`) compiles
-  without error. C rejects `0x`. The lexer's `scan_digits` already reports
-  whether it consumed a digit, so the fix is a "requires at least one digit"
-  error in the three prefix paths.
+- B32 (fixed). A radix prefix with no digits was accepted as an integer
+  literal: `0x`, `0b`, `0o` and `0xu8` compiled as 0. The sibling `0x_ff` was
+  accepted too, though the spec allows `_` only between digits. Each prefix
+  now requires a digit of its base, and `scan_digits` accepts `_` only after a
+  digit. Spec: Literals. (`expressions/radix_prefix_*`,
+  `expressions/digit_separator_after_prefix_err`,
+  `expressions/radix_literal_forms`)
 - B33 (fixed; the module-side twin of B11). Inside a module, a second nested
   module sharing its name with a companion type was accepted silently, and its
   members vanished: the duplicate check looked only at the first symbol of
@@ -437,21 +439,22 @@ covers.
 ### Found while doing phase 6
 
 The comment rewrite checked every comment against the code, which turned up
-these. B37-B40 are open, not fixed.
+these. B37 and B38 are fixed; B39 and B40 are open.
 
-- B37. `~` is rejected in a top-level initializer where `-` and `!` are
-  accepted: `module m = let a = ~5isize` reports "must be a constant
-  expression", while `-5isize` compiles. (`~5` of type i32 only works because
-  it folds to a literal first.) `is_init_expr` in pass2 lists the allowed
-  prefix operators and leaves out `~`, which C accepts in a constant
-  expression.
-- B38. fcc exits 0 with C that doesn't compile. At module scope, a struct
-  literal that gives a fixed-array field a longer slice literal
-  (`data: i32[2]` with `i32[3] { 1, 2, 3 }`) is accepted and emitted as
-  `.data = {1, 2, 3}`, which gcc rejects under `-Werror` ("excess elements in
-  array initializer"). The same literal inside a function aborts at run time.
-  The length is known statically in the module-scope case, so pass2 can
-  reject it.
+- B37 (fixed). `~` was rejected in a top-level initializer where `-` and `!`
+  are accepted: `module m = let a = ~5isize` reported "must be a constant
+  expression". `is_init_expr` now allows it, as the spec already said.
+  (`const_eval/unary_ops_unfoldable`)
+- B38 (fixed). fcc exited 0 with C that didn't compile when a module
+  constant or `let mut` global gave a fixed-array field a longer slice
+  literal, at any nesting depth. Siblings on the same path: a raw-parts slice
+  and `default(T[])` as the field value were emitted as slice headers. A static
+  initializer has no run time to abort in, so `const_fold_expr` now checks the
+  length at compile time and requires a slice literal (or the empty slice,
+  which codegen emits as zeros). File-level and function-body copies still
+  abort at run time. Spec: Fixed-Size Inline Arrays, Struct Literals.
+  (`structs/fixed_array_module_const*`, `structs/fixed_array_module_mut_overflow_err`,
+  `structs/fixed_array_file_level_overflow`, `extern/extern_struct_fixed_array_const*`)
 - B39. Completion never offers `static_assert`: lsp.c keeps its own copy of
   the keyword list, which has drifted from the lexer's. The fix is to have
   the lexer export its keyword table and completion read it, not to add the
@@ -459,6 +462,21 @@ these. B37-B40 are open, not fixed.
 - B40 (minor). Go-to-definition into another file uses the byte column as the
   UTF-16 column, so the range is off on lines with non-ASCII text before the
   name. Same-file definitions convert correctly.
+- B41 (open, found while testing B38). A module member (a constant or a
+  function body) that instantiates a top-level generic struct whose field is
+  another generic instance gets `fcc` exit 0 and C that doesn't compile:
+  `struct outer = b: box<'a>` used as `module m = let o = outer { b = box { v = 5 } }`
+  emits a second struct `box__3_i32` (no `fc__` root) beside
+  `fc__box__3_i32` for the field. Module members are type-checked before
+  the field types of top-level structs are canonicalized, so the instance is
+  built from the unresolved stub name. On `main` the same programs were
+  rejected with a false "infinite generic instantiation" error; the phase 4
+  commit turned that into broken C.
+- B42 (open). A read-only slice cannot be copied into a fixed-array field:
+  `box { data = "ab" }` (with `data: u8[4]`) and `c.data = ro` (with
+  `ro: const u8[]`) are rejected as `str` vs `const str`, though the copy
+  only reads the source. The field is typed as a mutable slice for this
+  check.
 - Dead code (removed): the "update imported symbols' types" loop in
   `pass2_check` could never match, since module lets are only in member
   tables, never in the global table it searched. An instrumented build ran it

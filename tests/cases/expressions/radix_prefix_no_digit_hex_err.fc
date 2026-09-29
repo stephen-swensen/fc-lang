@@ -1,0 +1,6 @@
+// A radix prefix must be followed by at least one digit of its base. Regression:
+// `0x` alone was accepted as the integer 0.
+let main = (args: str[]) ->
+    let x = 0x
+    assert(x == 0)
+    0

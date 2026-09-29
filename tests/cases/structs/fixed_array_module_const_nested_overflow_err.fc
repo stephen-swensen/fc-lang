@@ -1,0 +1,10 @@
+// The overflow check reaches a struct literal inside a slice literal of a
+// module constant, whose elements go into a separate static array.
+struct box =
+    data: i32[2]
+
+module m =
+    let boxes = box[1] { box { data = i32[3] { 1, 2, 3 } } }
+
+let main = (args: str[]) ->
+    (i32) m.boxes.len

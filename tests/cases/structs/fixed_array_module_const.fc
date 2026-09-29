@@ -1,0 +1,61 @@
+// A module constant (or `let mut` global) with a fixed-array field is a C
+// static initializer: the field is filled from a slice literal's elements and
+// zero-filled past them, at every nesting depth. Regression: `default(T[])` as
+// the field value produced C that did not compile.
+struct box =
+    data: i32[3]
+
+struct outer =
+    inner: box
+    tag: i32
+
+union holder =
+    | full(box)
+    | empty
+
+struct gbox =
+    data: 'a[3]
+
+module m =
+    let exact = box { data = i32[3] { 1, 2, 3 } }
+    let shorter = box { data = i32[2] { 4, 5 } }
+    let zeroed = box { data = i32[3] { } }
+    let empty = box { data = i32[0] { } }
+    let dflt = box { data = default(i32[]) }
+    let omitted = box { }
+    let nested = outer { inner = box { data = i32[1] { 6 } }, tag = 9 }
+    let boxes = box[2] { box { data = i32[3] { 7, 8, 9 } }, box { data = i32[1] { 10 } } }
+    let maybe = some(box { data = i32[2] { 11, 12 } })
+    let held = holder.full(box { data = i32[3] { 13, 14, 15 } })
+    let generic = gbox { data = u8[2] { 16u8, 17u8 } }
+    let copy = exact
+    let mut writable = box { data = i32[1] { 20 } }
+
+let sum = (b: box) -> b.data[0] + b.data[1] + b.data[2]
+
+let main = (args: str[]) ->
+    let e = m.exact
+    assert(sum(e) == 6)
+    let s = m.shorter
+    assert(s.data[0] == 4 && s.data[1] == 5 && s.data[2] == 0)
+    assert(sum(m.zeroed) == 0)
+    assert(sum(m.empty) == 0)
+    assert(sum(m.dflt) == 0)
+    assert(sum(m.omitted) == 0)
+    let n = m.nested
+    assert(n.inner.data[0] == 6 && n.inner.data[1] == 0 && n.tag == 9)
+    assert(sum(m.boxes[0]) == 24)
+    assert(sum(m.boxes[1]) == 10)
+    match m.maybe with
+    | some(b) -> assert(sum(b) == 23)
+    | none -> assert(false)
+    match m.held with
+    | full(b) -> assert(sum(b) == 42)
+    | empty -> assert(false)
+    let g = m.generic
+    assert(g.data[0] == 16u8 && g.data[1] == 17u8 && g.data[2] == 0u8)
+    assert(sum(m.copy) == 6)
+    m.writable.data[2] = 21
+    let w = m.writable
+    assert(w.data[0] == 20 && w.data[2] == 21)
+    0

@@ -1,0 +1,15 @@
+// The overflow check reaches a union variant payload in a module constant.
+struct box =
+    data: i32[2]
+
+union holder =
+    | full(box)
+    | empty
+
+module m =
+    let h = holder.full(box { data = i32[3] { 1, 2, 3 } })
+
+let main = (args: str[]) ->
+    match m.h with
+    | full(b) -> (i32) b.data.len
+    | empty -> 0

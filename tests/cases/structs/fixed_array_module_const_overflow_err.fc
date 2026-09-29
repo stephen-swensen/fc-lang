@@ -1,0 +1,11 @@
+// A module constant has no run time to abort in, so a slice literal longer
+// than its fixed-array field is a compile error there. Regression: fcc accepted
+// it and emitted a C initializer with excess elements.
+struct box =
+    data: i32[2]
+
+module m =
+    let b = box { data = i32[3] { 1, 2, 3 } }
+
+let main = (args: str[]) ->
+    (i32) m.b.data.len

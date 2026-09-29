@@ -1,0 +1,6 @@
+// The first digit after a radix prefix must belong to its base: `2` is not a
+// binary digit.
+let main = (args: str[]) ->
+    let x = 0b2
+    assert(x == 2)
+    0

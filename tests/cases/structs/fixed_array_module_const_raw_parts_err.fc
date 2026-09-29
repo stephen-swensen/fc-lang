@@ -1,0 +1,11 @@
+// A static initializer cannot copy the elements a raw-parts slice points at,
+// so a constant's fixed-array field must be given a slice literal.
+// Regression: fcc emitted a slice header as the array initializer.
+struct box =
+    data: i32[2]
+
+module m =
+    let b = box { data = i32[] { ptr = (i32*) 16usize, len = 2 } }
+
+let main = (args: str[]) ->
+    (i32) m.b.data.len

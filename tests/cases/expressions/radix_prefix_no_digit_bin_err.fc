@@ -1,0 +1,5 @@
+// `0b` alone is not a binary literal.
+let main = (args: str[]) ->
+    let x = 0b
+    assert(x == 0)
+    0

@@ -9902,12 +9902,44 @@ static Expr **fold_list(CheckCtx *ctx, Expr **xs, int n, bool *failed) {
     return out;
 }
 
+/* A constant's fixed-array field is emitted as a C array initializer. That can
+ * only be filled from a slice literal's elements (or zeroed, for an empty
+ * slice), and there is no run time in which the length check of an ordinary
+ * copy could abort, so the check is made here. `v` is the folded value of
+ * field `fi` of struct literal `lit`. */
+static bool const_fixed_array_init_ok(Expr *lit, const FieldInit *fi, Expr *v) {
+    Type *st = lit->type;
+    if (!st || st->kind != TYPE_STRUCT) return true;
+    Type *ft = NULL;
+    for (int j = 0; j < st->struc.field_count; j++)
+        if (st->struc.fields[j].name == fi->name) { ft = st->struc.fields[j].type; break; }
+    if (!ft || ft->kind != TYPE_FIXED_ARRAY || ft->fixed_array.size_ref) return true;
+    if (v->kind == EXPR_DEFAULT) return true;   /* the empty slice */
+    if (v->kind != EXPR_ARRAY_LIT) {
+        diag_error(fi->value->loc,
+            "fixed-array field '%s' of a constant must be initialized by a "
+            "slice literal", fi->name);
+        return false;
+    }
+    Expr *size = v->array_lit.size_expr;
+    int64_t len = size && size->kind == EXPR_INT_LIT
+        ? (int64_t)size->int_lit.value : v->array_lit.elem_count;
+    if (len > ft->fixed_array.size) {
+        diag_error(fi->value->loc,
+            "slice of length %lld overflows fixed-array field '%s' (%s)",
+            (long long)len, fi->name, type_name(ft));
+        return false;
+    }
+    return true;
+}
+
 /* Recursively fold an Expr in const-expr position. Returns the folded tree
  * (same pointer if no substitution) or NULL on failure. NULL is silent for
  * most kinds (the caller reports the generic "must be a constant
  * expression"); a specific diagnostic is emitted for a reference to a mutable
- * binding, division by zero, a negative or over-capacity slice-literal len,
- * and a some()/err() payload that would need a runtime guard. */
+ * binding, division by zero, a negative or over-capacity slice-literal len, a
+ * fixed-array field initializer that overflows or is not a slice literal, and a
+ * some()/err() payload that would need a runtime guard. */
 static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
     if (!e) return e;
     switch (e->kind) {
@@ -9998,6 +10030,7 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
         for (int i = 0; i < fc; i++) {
             Expr *v = const_fold_expr(ctx, e->struct_lit.fields[i].value);
             if (!v) return NULL;
+            if (!const_fixed_array_init_ok(e, &e->struct_lit.fields[i], v)) return NULL;
             if (v != e->struct_lit.fields[i].value && !fields)
                 fields = arena_dup(ctx->arena, e->struct_lit.fields, fc, sizeof *fields);
             if (fields) fields[i].value = v;
@@ -10155,8 +10188,10 @@ static bool is_init_expr(Expr *e, InitRule rule, bool *all_emitted) {
     case EXPR_DEFAULT:
         return true;
     case EXPR_UNARY_PREFIX:
-        /* Negation and boolean not; deref (*) and address-of (&) read storage. */
-        if (e->unary_prefix.op != TOK_MINUS && e->unary_prefix.op != TOK_BANG)
+        /* Negation, boolean not and bitwise not; deref (*) and address-of (&)
+         * read storage. */
+        if (e->unary_prefix.op != TOK_MINUS && e->unary_prefix.op != TOK_BANG &&
+            e->unary_prefix.op != TOK_TILDE)
             return false;
         return is_init_expr(e->unary_prefix.operand, rule, all_emitted);
     case EXPR_UNARY_POSTFIX:
