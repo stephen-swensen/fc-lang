@@ -1,5 +1,6 @@
 // Generic inference sees the same rule: a const container absorbs a const
-// element, so a generic callee accepts what its non-generic twin accepts.
+// element, so a generic callee accepts what its non-generic twin accepts. A
+// bare 'a binds the element as read (`const str` for the string literals).
 let elem_const = (s: (const 'a*)[]) ->
     (i32) s.len
 

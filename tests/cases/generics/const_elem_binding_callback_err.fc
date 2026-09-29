@@ -1,0 +1,11 @@
+// A callback over the elements of a read-only slice of strings receives
+// `const str`, so one declared to take a writable `str` does not fit.
+let count_long = (xs: const 'a[], pred: ('a) -> bool) ->
+    let mut n = 0
+    for x in xs do
+        if pred(x) then n = n + 1
+    n
+
+let main = (args: str[]) ->
+    let words = const str[2] { "ab", "cde" }
+    count_long(words, (w: str) -> w.len > 2)

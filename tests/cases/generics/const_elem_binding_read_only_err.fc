@@ -1,0 +1,12 @@
+// A `const 'a[]` parameter binds 'a to the element as the argument hands
+// it out: from a `const str[]` that is `const str`, so a generic function
+// cannot return a writable view of a read-only string. Regression: 'a bound
+// to `str`, and the caller could write through the result.
+let first = (xs: const 'a[]) -> xs[0]
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const str[]) str[1] { buf }
+    let w = first(ro)
+    w[0] = 5u8
+    (i32) buf[0]

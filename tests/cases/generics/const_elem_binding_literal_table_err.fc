@@ -1,0 +1,10 @@
+// A table of string literals is a `(const str)[]`; its elements stay read-only
+// through a generic `const 'a[]` parameter. Regression: the element's const
+// was dropped, and writing through the result crashed on read-only memory.
+let first = (xs: const 'a[]) -> xs[0]
+
+let main = (args: str[]) ->
+    let words = const str[2] { "ab", "cd" }
+    let w = first(words)
+    w[0] = 'z'
+    0

@@ -1,0 +1,9 @@
+// A `const 'a*` parameter binds 'a to the pointee as read: through a
+// `const str*` that is `const str`, as a concrete `*p` would give.
+let deref = (p: const 'a*) -> *p
+
+let main = (args: str[]) ->
+    let buf = alloc(u8[2] { })!
+    let w = deref(&buf)
+    w[0] = 6u8
+    (i32) buf[0]

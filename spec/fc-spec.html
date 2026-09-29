@@ -1317,6 +1317,16 @@ let deref = (p: const 'a*) -> *p    // const preserved through monomorphization;
 deref(&x)                            // 'a = i32, param is const i32*
 ```
 
+When a `const 'a[]` or `const 'a*` parameter meets its argument, `'a` binds to the element (or pointee) **as the argument hands it out**: `str` from a `str[]`, but `const str` from a `const str[]`, from a `(const str)[]` such as a table of string literals, or through a `const str*`. Generic code cannot write through a value of type `'a`, so such a value can only flow back to the caller, and it comes back with the access the caller had — a generic function returns exactly what the same function written for the concrete type would:
+
+```fc
+let first = (xs: const 'a[]) -> xs[0]
+
+let words = const str[2] { "ab", "cd" }
+let w = first(words)                 // const str: the literal stays read-only
+let n = count_where(words, (s: const str) -> s.len > 1)   // callbacks take const str
+```
+
 `alloc` always returns non-const, even when the input is const — it creates a fresh mutable heap copy:
 
 ```fc

@@ -119,8 +119,8 @@ CLAUDE.md.
   `test-all` recipe shared with `test-all-O2`, `fcc --help`, README and editor
   docs fixed. The 33 `bugsearch` test headers were rewritten too. Left undone,
   optional: restructuring `tests/lsp/lsp_test.py`.
-- Still open: B30 (phase 4), B39 and B40 (phase 6), and B43 (generic
-  const). When they are settled, move this plan to `spec/hist/`.
+- Still open: B30 (phase 4), B39 and B40 (phase 6). When they are
+  settled, move this plan to `spec/hist/`.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
 - **Module cycles: complete rule (decided 2026-09-28).** Every reference
@@ -502,16 +502,19 @@ these. B37, B38, B41 and B42 are fixed; B39 and B40 are open.
   check for generic code). Measured before deciding: no existing test, stdlib
   test, demo, wolf-fc or euler-fc program is rejected. (`const/copy_out_*`,
   `const/readonly_*`)
-- B43 (open, design question). A generic function returns a writable
-  reference read out of read-only storage when its type variable binds to a
-  reference type: `first = (xs: const 'a[]) -> xs[0]` called with a
-  `const str[]` binds `'a = str` and returns a writable `str`, where the
-  concrete `(xs: const str[]) -> xs[0]` returns `const str`. The spec's
-  `deref = (p: const 'a*) -> *p` does the same for `const str*`. The concrete
-  rule is right, so this is the "a generic instance means what the concrete
-  code means" principle again; the fix is a decision about how `const`
-  composes with type variables (for example, binding `'a` to the element as
-  read, `const str`, when matching `const 'a[]`).
+- B43 (fixed). A generic function returned a writable reference read out of
+  read-only storage: `first = (xs: const 'a[]) -> xs[0]` on a `const str[]`
+  bound `'a = str`, and `deref = (p: const 'a*) -> *p` did the same through a
+  `const str*`. On a table of string literals (`(const str)[]`) the element's
+  const was stripped outright, and writing through the result segfaulted.
+  Decided: a bare type variable under a `const` parameter binds to the
+  element as the argument hands it out (`absorbed_elem`): a writable `str[]`
+  still gives `'a = str` (generic code cannot write through an `'a`, and the
+  caller had write access), while a read-only argument gives `const str`,
+  matching the concrete function. Callbacks over read-only string slices take
+  `const str`. Measured: no corpus program rejected; one test's instance now
+  binds `const str`. Spec: const qualifier, Generics.
+  (`generics/const_elem_binding*`, `generics/const_ptr_binding_read_only_err`)
 - Dead code (removed): the "update imported symbols' types" loop in
   `pass2_check` could never match, since module lets are only in member
   tables, never in the global table it searched. An instrumented build ran it

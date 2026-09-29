@@ -2399,14 +2399,28 @@ static Type *bound_type(CheckCtx *ctx, Type *t, SrcLoc loc);
 
 /* ---- Generic unification ---- */
 
-/* A const container absorbs a const element: matching `(const i32*)[]`
- * against `const 'a*[]` must still bind 'a = i32. This is the inference-side
- * form of the rule type_can_widen applies to concrete types (the target
- * forbids writing the slot, and deep const hands the element back const on
- * every load); the two must agree or a generic callee rejects an argument its
+/* The argument element (or pointee) a parameter element binds against.
+ *
+ * When the parameter element is a bare type variable (`const 'a[]`,
+ * `const 'a*`), the variable takes the element as the argument hands it out:
+ * `str` from a `str[]`, but `const str` from a `const str[]` or a
+ * `(const str)[]`. Generic code cannot write through a value of type 'a, so
+ * such a value can only flow back to the caller, and the caller must get it
+ * with the access it had: a writable view of a read-only string (a string
+ * literal in read-only memory, say) would otherwise come back out.
+ *
+ * Otherwise a const container absorbs a const element: matching
+ * `(const i32*)[]` against `const 'a*[]` must still bind 'a = i32. This is the
+ * inference-side form of the rule type_can_widen applies to concrete types
+ * (the target forbids writing the slot, and deep const hands the element back
+ * const on every load, since the parameter element spells the reference
+ * itself); the two must agree or a generic callee rejects an argument its
  * non-generic twin accepts. Only the element's own qualifier is dropped, and
  * only when the container adds one. */
-static Type *absorbed_elem(Arena *arena, Type *container, Type *param_elem, Type *arg_elem) {
+static Type *absorbed_elem(Arena *arena, Type *container, Type *param_elem,
+                           Type *arg_container, Type *arg_elem) {
+    if (param_elem && param_elem->kind == TYPE_TYPE_VAR)
+        return arg_container->is_const ? type_read_only(arena, arg_elem) : arg_elem;
     if (container->is_const && arg_elem && arg_elem->is_const &&
         param_elem && !param_elem->is_const)
         return type_strip_const(arena, arg_elem);
@@ -2529,7 +2543,7 @@ static bool unify(Arena *arena, Type *param_type, Type *arg_type,
         }
         return unify(arena, param_type->pointer.pointee,
                      absorbed_elem(arena, param_type, param_type->pointer.pointee,
-                                   arg_type->pointer.pointee),
+                                   arg_type, arg_type->pointer.pointee),
                      var_names, bindings, var_count);
     case TYPE_SLICE:
         if (param_type->is_const != arg_type->is_const) {
@@ -2538,7 +2552,7 @@ static bool unify(Arena *arena, Type *param_type, Type *arg_type,
         }
         return unify(arena, param_type->slice.elem,
                      absorbed_elem(arena, param_type, param_type->slice.elem,
-                                   arg_type->slice.elem),
+                                   arg_type, arg_type->slice.elem),
                      var_names, bindings, var_count);
     case TYPE_OPTION:
         return unify(arena, param_type->option.inner, arg_type->option.inner,
