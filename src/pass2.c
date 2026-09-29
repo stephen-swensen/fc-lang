@@ -2401,6 +2401,49 @@ static Type *absorbed_elem(Arena *arena, Type *container, Type *param_elem, Type
     return arg_elem;
 }
 
+/* The type of a fresh one-level copy of `t` (alloc or alloca of a slice or
+ * string): its slots are writable, and each element is what the source hands
+ * out, so a reference read from a read-only slice stays read-only. */
+static Type *fresh_copy_type(Arena *arena, Type *t) {
+    if (!t->is_const) return t;
+    Type *rt = arena_alloc(arena, sizeof(Type));
+    *rt = *t;
+    rt->is_const = false;
+    if (t->kind == TYPE_SLICE) rt->slice.elem = type_slice_elem_read(arena, t);
+    return rt;
+}
+
+/* A fixed-array field is assigned by copying the source slice's elements, so
+ * the source itself may be read-only. What must fit is each element as the
+ * source hands it out (a reference read from a read-only slice is read-only),
+ * and it must convert to the field's element type without changing
+ * representation, since the copy is a memcpy. */
+static bool fixed_array_copy_ok(Arena *arena, Type *src, Type *fixed) {
+    if (src->kind != TYPE_SLICE) return false;
+    return type_widen_repr_preserving(type_slice_elem_read(arena, src),
+                                      fixed->fixed_array.elem);
+}
+
+/* Report why `src` cannot fill fixed-array field `field` of type `fixed`. When
+ * only the read-only source is in the way, say that its elements read as
+ * const. */
+static void report_fixed_array_copy(Arena *arena, SrcLoc loc, const char *field,
+                                    Type *src, Type *fixed) {
+    Type *want = fixed->fixed_array.elem;
+    if (src->kind == TYPE_SLICE &&
+        type_widen_repr_preserving(src->slice.elem, want)) {
+        diag_error(loc, "field '%s': the elements of %s read as %s, which cannot "
+            "be copied into %s",
+            field, arena_sprintf(arena, "%s", type_name(src)),
+            arena_sprintf(arena, "%s", type_name(type_slice_elem_read(arena, src))),
+            arena_sprintf(arena, "%s", type_name(fixed)));
+        return;
+    }
+    diag_error(loc, "field '%s': expected %s, got %s", field,
+        arena_sprintf(arena, "%s", type_name(type_slice(arena, want))),
+        arena_sprintf(arena, "%s", type_name(src)));
+}
+
 /* Unify a (possibly generic) parameter type against a concrete argument type.
  * Binds type variables in var_names/bindings. Returns true on success. */
 static bool unify(Arena *arena, Type *param_type, Type *arg_type,
@@ -2456,9 +2499,12 @@ static bool unify(Arena *arena, Type *param_type, Type *arg_type,
                            : arg_type->stub.name;
             return na == nb;
         }
-        /* Fixed-array field accepts slice of matching element type */
+        /* A fixed-array field is filled by copying a slice's elements, so it
+         * binds to the element as the slice hands it out (see
+         * fixed_array_copy_ok). */
         if (param_type->kind == TYPE_FIXED_ARRAY && arg_type->kind == TYPE_SLICE)
-            return unify(arena, param_type->fixed_array.elem, arg_type->slice.elem,
+            return unify(arena, param_type->fixed_array.elem,
+                         type_slice_elem_read(arena, arg_type),
                          var_names, bindings, var_count);
         return false;
     }
@@ -5261,13 +5307,7 @@ static Type *check_alloca(CheckCtx *ctx, Expr *e) {
      * writable str pointing into .rodata). */
     if (ie->kind == EXPR_INTERP_STRING || ie->kind == EXPR_ARRAY_LIT ||
         (ie->kind == EXPR_CAST && ie->cast.licensed)) {
-        Type *rt = t;
-        if (rt->is_const) {
-            rt = arena_alloc(ctx->arena, sizeof(Type));
-            *rt = *t;
-            rt->is_const = false;
-        }
-        e->type = rt;
+        e->type = fresh_copy_type(ctx->arena, t);
         e->prov = PROV_STACK;
         return e->type;
     }
@@ -5428,13 +5468,7 @@ static Type *check_alloc_value(CheckCtx *ctx, Expr *e) {
                 "duplicates the elements, not what they point to",
                 type_name(t->slice.elem));
         }
-        Type *rt = t;
-        if (rt->is_const) {
-            rt = arena_alloc(ctx->arena, sizeof(Type));
-            *rt = *t;
-            rt->is_const = false;
-        }
-        e->type = type_option(ctx->arena, rt);
+        e->type = type_option(ctx->arena, fresh_copy_type(ctx->arena, t));
     } else if (ie->kind == EXPR_STRUCT_LIT) {
         /* alloc(struct_literal): T*? */
         e->type = type_option(ctx->arena, type_pointer(ctx->arena, t));
@@ -6317,10 +6351,17 @@ static Type *check_struct_lit(CheckCtx *ctx, Expr *e) {
                 Type *fval = check_expr(ctx, fi->value);
                 if (type_is_error(fval)) { field_error = true; found = true; break; }
                 Type *expected = resolve_type(ctx, st->struc.fields[j].type);
-                /* Fixed-array fields accept slice of matching element type */
+                if (expected->kind == TYPE_FIXED_ARRAY) {
+                    if (!type_contains_type_var(expected) &&
+                        !fixed_array_copy_ok(ctx->arena, fval, expected)) {
+                        report_fixed_array_copy(ctx->arena, fi->value->loc, fi->name,
+                                                fval, expected);
+                        field_error = true;
+                    }
+                    found = true;
+                    break;
+                }
                 Type *check_type = expected;
-                if (expected->kind == TYPE_FIXED_ARRAY)
-                    check_type = type_slice(ctx->arena, expected->fixed_array.elem);
                 if (!type_eq(fval, check_type) && !type_contains_type_var(check_type)) {
                     if (type_can_widen(fval, check_type)) {
                         fi->value = wrap_widen(ctx->arena, fi->value, check_type);
@@ -6731,7 +6772,12 @@ static Type *check_for(CheckCtx *ctx, Expr *e) {
              * iterating a stack slice of heap slices does not. */
             Provenance saved_bind = ctx->bind_prov;
             ctx->bind_prov = e->for_expr.iter->elem_prov;
-            bind_for_element(ctx, e, iter_type->slice.elem);
+            /* The element reads as indexing reads it: const through a
+             * read-only slice. */
+            Type *elem = type_slice_elem_read(ctx->arena, iter_type);
+            if (reads_frozen_const_storage(e->for_expr.iter))
+                elem = type_make_const(ctx->arena, elem);
+            bind_for_element(ctx, e, elem);
             ctx->bind_prov = saved_bind;
             if (e->for_expr.index_var) {
                 if (!e->for_expr.index_codegen_name)
@@ -6902,7 +6948,13 @@ static Type *check_assign(CheckCtx *ctx, Expr *e) {
         e->assign.target->ident.name == e->assign.value->ident.name) {
         diag_error(e->loc, "self-assignment of '%s' has no effect", e->assign.target->ident.name);
     }
-    if (!type_eq(lt, vt)) {
+    Expr *target = e->assign.target;
+    Type *fixed = (target->kind == EXPR_FIELD || target->kind == EXPR_DEREF_FIELD)
+        ? target->field.fixed_array_type : NULL;
+    if (fixed) {
+        if (!fixed_array_copy_ok(ctx->arena, vt, fixed))
+            report_fixed_array_copy(ctx->arena, e->loc, target->field.name, vt, fixed);
+    } else if (!type_eq(lt, vt)) {
         if (type_can_widen(vt, lt)) {
             e->assign.value = wrap_widen(ctx->arena, e->assign.value, lt);
         } else {
@@ -7655,11 +7707,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         }
 
         if (obj_type->kind == TYPE_SLICE) {
-            e->type = obj_type->slice.elem;
             /* Const reaches through the element: a reference loaded out of a
              * read-only slice is read-only too, whether the slice is a const
              * view or a frozen module constant. */
-            if (obj_type->is_const || reads_frozen_const_storage(e->index.object))
+            e->type = type_slice_elem_read(ctx->arena, obj_type);
+            if (reads_frozen_const_storage(e->index.object))
                 e->type = type_make_const(ctx->arena, e->type);
             /* A load yields the stored value, whose provenance is the
              * container's element provenance, not the backing store's. A heap
@@ -9903,10 +9955,10 @@ static Expr **fold_list(CheckCtx *ctx, Expr **xs, int n, bool *failed) {
 }
 
 /* A constant's fixed-array field is emitted as a C array initializer. That can
- * only be filled from a slice literal's elements (or zeroed, for an empty
- * slice), and there is no run time in which the length check of an ordinary
- * copy could abort, so the check is made here. `v` is the folded value of
- * field `fi` of struct literal `lit`. */
+ * only be filled from a slice literal's elements or a string literal's bytes
+ * (or zeroed, for an empty slice), and there is no run time in which the
+ * length check of an ordinary copy could abort, so the check is made here.
+ * `v` is the folded value of field `fi` of struct literal `lit`. */
 static bool const_fixed_array_init_ok(Expr *lit, const FieldInit *fi, Expr *v) {
     Type *st = lit->type;
     if (!st || st->kind != TYPE_STRUCT) return true;
@@ -9915,15 +9967,19 @@ static bool const_fixed_array_init_ok(Expr *lit, const FieldInit *fi, Expr *v) {
         if (st->struc.fields[j].name == fi->name) { ft = st->struc.fields[j].type; break; }
     if (!ft || ft->kind != TYPE_FIXED_ARRAY || ft->fixed_array.size_ref) return true;
     if (v->kind == EXPR_DEFAULT) return true;   /* the empty slice */
-    if (v->kind != EXPR_ARRAY_LIT) {
+    int64_t len;
+    if (v->kind == EXPR_STRING_LIT) {
+        len = decode_str_lit(v->string_lit.value, v->string_lit.length, NULL);
+    } else if (v->kind == EXPR_ARRAY_LIT) {
+        Expr *size = v->array_lit.size_expr;
+        len = size && size->kind == EXPR_INT_LIT
+            ? (int64_t)size->int_lit.value : v->array_lit.elem_count;
+    } else {
         diag_error(fi->value->loc,
             "fixed-array field '%s' of a constant must be initialized by a "
-            "slice literal", fi->name);
+            "slice or string literal", fi->name);
         return false;
     }
-    Expr *size = v->array_lit.size_expr;
-    int64_t len = size && size->kind == EXPR_INT_LIT
-        ? (int64_t)size->int_lit.value : v->array_lit.elem_count;
     if (len > ft->fixed_array.size) {
         diag_error(fi->value->loc,
             "slice of length %lld overflows fixed-array field '%s' (%s)",
@@ -10885,12 +10941,13 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
     sa_validate_decls(prog->decls, prog->decl_count);
 
     /* Pass 0: fold every type decl's fixed-array size expressions (named
-     * consts, concrete arithmetic) before any body checking. A body checked
-     * early may instantiate a template declared in a module processed later,
-     * so template sizes must be normalized program-wide first. Stub-name
-     * canonicalization stays interleaved with body checking below: it
-     * rewrites source spellings to mangled names, which must not happen
-     * before the bodies that resolve those spellings are checked. */
+     * consts, concrete arithmetic), and canonicalize the field and payload
+     * types of top-level structs and unions, before any body is checked. A
+     * body may instantiate a template declared later (in a later module, or
+     * below it in the file), and the instance's field types must already
+     * name the declarations they mean: an uncanonicalized `box<'a>` field
+     * would instantiate as an unrooted `box__...` C struct. Module types'
+     * fields are canonicalized by pass1. */
     {
         const char *ns0 = NULL;
         for (int i = 0; i < prog->decl_count; i++) {
@@ -10918,6 +10975,8 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
                 ctx.current_ns = ns0;
                 ctx.import_scope = file_tbl ? &file_import_scope : NULL;
                 normalize_decl_field_sizes(&ctx, d);
+                if (d->kind != DECL_EXTERN)
+                    canonicalize_decl_field_stubs(&ctx, d);
                 ctx.import_scope = NULL;
             }
         }
@@ -10968,23 +11027,19 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
             ctx.current_ns = d->ns.name;
             continue;
         }
-        if (d->kind == DECL_LET || d->kind == DECL_STRUCT || d->kind == DECL_UNION) {
+        if (d->kind == DECL_LET) {
             /* Set up file-level import scope for this decl's file */
             ImportTable *file_tbl = file_imports_find(file_scopes, d->loc.filename);
             ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
             ctx.import_scope = file_tbl ? &file_import_scope : NULL;
 
-            if (d->kind == DECL_LET) {
-                check_decl_let(&ctx, d);
-                if (d->let.init && d->let.init->kind != EXPR_FUNC &&
-                    !is_init_expr(d->let.init, INIT_FILE, NULL)) {
-                    diag_error(d->loc,
-                        "file-level initializer for '%s' must not contain "
-                        "function calls or variable references",
-                        d->let.name);
-                }
-            } else {
-                canonicalize_decl_field_stubs(&ctx, d);
+            check_decl_let(&ctx, d);
+            if (d->let.init && d->let.init->kind != EXPR_FUNC &&
+                !is_init_expr(d->let.init, INIT_FILE, NULL)) {
+                diag_error(d->loc,
+                    "file-level initializer for '%s' must not contain "
+                    "function calls or variable references",
+                    d->let.name);
             }
             ctx.import_scope = NULL;
         }

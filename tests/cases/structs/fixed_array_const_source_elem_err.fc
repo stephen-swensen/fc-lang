@@ -1,0 +1,10 @@
+// Copying a read-only slice of strings into a `str[N]` field would hand out
+// writable views of read-only strings: each element reads as `const str`.
+struct box =
+    names: str[1]
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const str[]) str[1] { buf }
+    let b = box { names = ro }
+    (i32) b.names.len

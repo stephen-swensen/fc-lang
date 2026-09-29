@@ -16,6 +16,13 @@ union holder =
 struct gbox =
     data: 'a[3]
 
+struct wide =
+    limbs: u32['n]
+
+struct sized =
+    w: wide<'n>
+    data: i32['n]
+
 module m =
     let exact = box { data = i32[3] { 1, 2, 3 } }
     let shorter = box { data = i32[2] { 4, 5 } }
@@ -28,6 +35,7 @@ module m =
     let maybe = some(box { data = i32[2] { 11, 12 } })
     let held = holder.full(box { data = i32[3] { 13, 14, 15 } })
     let generic = gbox { data = u8[2] { 16u8, 17u8 } }
+    let const_sized = sized { w = default(wide<2>), data = i32[2] { 18, 19 } }
     let copy = exact
     let mut writable = box { data = i32[1] { 20 } }
 
@@ -54,6 +62,8 @@ let main = (args: str[]) ->
     | empty -> assert(false)
     let g = m.generic
     assert(g.data[0] == 16u8 && g.data[1] == 17u8 && g.data[2] == 0u8)
+    let c = m.const_sized
+    assert(c.data.len == 2 && c.data[1] == 19)
     assert(sum(m.copy) == 6)
     m.writable.data[2] = 21
     let w = m.writable

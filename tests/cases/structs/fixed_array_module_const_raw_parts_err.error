@@ -1,1 +1,1 @@
-fixed-array field 'data' of a constant must be initialized by a slice literal
+fixed-array field 'data' of a constant must be initialized by a slice or string literal

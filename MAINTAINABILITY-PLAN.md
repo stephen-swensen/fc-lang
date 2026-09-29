@@ -119,8 +119,8 @@ CLAUDE.md.
   `test-all` recipe shared with `test-all-O2`, `fcc --help`, README and editor
   docs fixed. The 33 `bugsearch` test headers were rewritten too. Left undone,
   optional: restructuring `tests/lsp/lsp_test.py`.
-- Still open: B30 (phase 4), B39-B42 (phase 6 and after). When they are
-  settled, move this plan to `spec/hist/`.
+- Still open: B30 (phase 4), B39 and B40 (phase 6), and the struct-copy
+  const question. When they are settled, move this plan to `spec/hist/`.
 - Moving the walkers found five more bugs of the same kind, now fixed and
   tested (listed under B22-B26 below).
 - **Module cycles: complete rule (decided 2026-09-28).** Every reference
@@ -439,7 +439,7 @@ covers.
 ### Found while doing phase 6
 
 The comment rewrite checked every comment against the code, which turned up
-these. B37 and B38 are fixed; B39 and B40 are open.
+these. B37, B38, B41 and B42 are fixed; B39 and B40 are open.
 
 - B37 (fixed). `~` was rejected in a top-level initializer where `-` and `!`
   are accepted: `module m = let a = ~5isize` reported "must be a constant
@@ -462,21 +462,37 @@ these. B37 and B38 are fixed; B39 and B40 are open.
 - B40 (minor). Go-to-definition into another file uses the byte column as the
   UTF-16 column, so the range is off on lines with non-ASCII text before the
   name. Same-file definitions convert correctly.
-- B41 (open, found while testing B38). A module member (a constant or a
-  function body) that instantiates a top-level generic struct whose field is
-  another generic instance gets `fcc` exit 0 and C that doesn't compile:
-  `struct outer = b: box<'a>` used as `module m = let o = outer { b = box { v = 5 } }`
-  emits a second struct `box__3_i32` (no `fc__` root) beside
-  `fc__box__3_i32` for the field. Module members are type-checked before
-  the field types of top-level structs are canonicalized, so the instance is
-  built from the unresolved stub name. On `main` the same programs were
-  rejected with a false "infinite generic instantiation" error; the phase 4
-  commit turned that into broken C.
-- B42 (open). A read-only slice cannot be copied into a fixed-array field:
-  `box { data = "ab" }` (with `data: u8[4]`) and `c.data = ro` (with
-  `ro: const u8[]`) are rejected as `str` vs `const str`, though the copy
-  only reads the source. The field is typed as a mutable slice for this
-  check.
+- B41 (fixed, found while testing B38). A body type-checked before a top-level
+  generic struct's or union's field types were canonicalized (any module
+  member, or a top-level function above the declaration) instantiated it from
+  the raw stub name: `outer<'a>` with `b: box<'a>` emitted an unrooted
+  `box__3_i32` beside `fc__box__3_i32`, and the C failed to compile. (On
+  `main` these programs were rejected with a false "infinite generic
+  instantiation" error; the phase 4 commit turned that into broken C.) Top-level
+  field types are now canonicalized in pass 0, before any body; the one oracle
+  change removed an unused unrooted struct `generics/linked_list` had been
+  emitting all along. (`generics/instance_field_generic_module`,
+  `generics/instance_field_generic_before_decl`)
+- B42 (fixed). A read-only slice could not be copied into a fixed-array
+  field (`box { data = "ab" }` was `str` vs `const str`), though the copy only
+  reads it. The rule now is the element as the source hands it out must
+  convert to the field's element type without changing representation
+  (`fixed_array_copy_ok`); module constants also accept a string literal. The
+  same "element as read" rule was missing in three siblings, each a const
+  hole: a generic fixed-array field bound `'a = str` from a `const str[]`, a
+  `for` loop over a read-only slice of strings bound a writable `str`, and
+  `alloc` of a `const str[]` returned a `str[]`. All now use
+  `type_slice_elem_read`, as indexing did. Spec: Fixed-Size Inline Arrays
+  (Assignment), Deep const, and the `alloc` note. (`structs/fixed_array_const_source*`,
+  `structs/fixed_array_module_const_string_overflow_err`,
+  `generics/fixed_array_generic_const_source_err`,
+  `control_flow/for_*const_slice*`, `memory/alloc_const_slice_*`)
+- Open design question (not a bug fix): const is not carried through a
+  struct copied out of a read-only slice. `let q = ro[0]` with
+  `ro: const p[]` and `p` holding a `s: str` gives a writable `q.s`, as in
+  C's shallow const, while `ro[0].s[0] = x` is rejected. The spec says an
+  element "cannot be laundered into a writable view"; whether that should
+  reach reference fields of a copied struct is for the user to decide.
 - Dead code (removed): the "update imported symbols' types" loop in
   `pass2_check` could never match, since module lets are only in member
   tables, never in the global table it searched. An instrumented build ran it

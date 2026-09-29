@@ -1,0 +1,11 @@
+// The read-only element rule applies to assignment into a fixed-array field
+// as it does to a struct literal.
+struct box =
+    names: str[1]
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[2] { })!
+    let ro = (const str[]) str[1] { buf }
+    let mut b = box { }
+    b.names = ro
+    (i32) b.names.len

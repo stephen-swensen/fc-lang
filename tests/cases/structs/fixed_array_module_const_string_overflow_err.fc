@@ -1,0 +1,10 @@
+// A string literal longer than a module constant's fixed-array field is a
+// compile error, like an overlong slice literal.
+struct box =
+    data: u8[2]
+
+module m =
+    let b = box { data = "abc" }
+
+let main = (args: str[]) ->
+    (i32) m.b.data.len

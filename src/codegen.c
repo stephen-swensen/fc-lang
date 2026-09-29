@@ -3463,10 +3463,10 @@ static void emit_struct_lit(Expr *e, FILE *out) {
     }
     if (has_fixed_array && g_const_context) {
         /* File-scope aggregate initializer: emit each field inline.  A
-         * fixed-array field's value is a slice literal or the empty slice
-         * (const_fold_expr rejects anything else, and any overflow), emitted
-         * as a bare { e0, e1, ... } C array initializer, since the slice
-         * header form cannot initialize a raw C array. */
+         * fixed-array field's value is a slice or string literal or the empty
+         * slice (const_fold_expr rejects anything else, and any overflow),
+         * emitted as a bare { e0, e1, ... } C array initializer, since the
+         * slice header form cannot initialize a raw C array. */
         if (st->struc.c_name) {
             fprintf(out, "(%s %s){",
                 st->struc.is_c_union ? "union" : "struct", st->struc.c_name);
@@ -3491,6 +3491,19 @@ static void emit_struct_lit(Expr *e, FILE *out) {
                 v && v->kind == EXPR_DEFAULT) {
                 /* The empty slice copies nothing: the array is all zero. */
                 fprintf(out, "{0}");
+            } else if (field_type && field_type->kind == TYPE_FIXED_ARRAY &&
+                       v && v->kind == EXPR_STRING_LIT) {
+                /* A string literal's bytes, as integers: a C string
+                 * initializer would also try to store the terminating NUL. */
+                int n = decode_str_lit(v->string_lit.value, v->string_lit.length, NULL);
+                unsigned char *bytes = malloc(n > 0 ? (size_t)n : 1);
+                decode_str_lit(v->string_lit.value, v->string_lit.length, bytes);
+                fprintf(out, "{");
+                if (n == 0) fprintf(out, "0");
+                for (int j = 0; j < n; j++)
+                    fprintf(out, "%s%u", j > 0 ? ", " : "", (unsigned)bytes[j]);
+                fprintf(out, "}");
+                free(bytes);
             } else if (field_type && field_type->kind == TYPE_FIXED_ARRAY &&
                 v && v->kind == EXPR_ARRAY_LIT) {
                 /* Bare aggregate: no slice header, no backing */

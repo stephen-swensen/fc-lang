@@ -1,0 +1,7 @@
+// The index form of `for` binds the element read-only too.
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[4] { })!
+    let ro = (const str[]) str[1] { buf }
+    for i, w in ro do
+        w[i] = 7u8
+    (i32) buf[0]

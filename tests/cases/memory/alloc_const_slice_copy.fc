@@ -1,0 +1,15 @@
+// A heap copy of a read-only slice has writable slots, and each element is what
+// the source hands out: bytes of a string are plain values, while the strings
+// in a read-only slice of strings stay read-only.
+let main = (args: str[]) ->
+    let copy = alloc("hello")!
+    defer free(copy)
+    copy[0] = 'j'
+    assert(copy[0] == 'j')
+
+    let ro = (const str[]) const str[2] { "a", "b" }
+    let h = alloc(ro)!
+    defer free(h)
+    h[1] = "zz"
+    assert(h[1].len == 2 && h[0][0] == 'a')
+    0

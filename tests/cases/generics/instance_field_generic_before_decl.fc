@@ -1,0 +1,22 @@
+// A generic struct whose field is another generic instance can be used by a
+// function written above both declarations. Regression: the function body was
+// checked before the struct's field types were resolved, and the emitted C did
+// not compile.
+let main = (args: str[]) ->
+    let o = outer { b = box { v = 5 }, n = 1 }
+    let h = holder<i32>.one(box { v = 2 })
+    let from_holder = match h with
+        | one(b) -> b.v
+        | nothing -> 0
+    o.b.v + o.n + from_holder - 8
+
+struct box =
+    v: 'a
+
+struct outer =
+    b: box<'a>
+    n: i32
+
+union holder =
+    | one(box<'a>)
+    | nothing

@@ -1,0 +1,1 @@
+field 'names': the elements of const str[] read as const str, which cannot be copied into str[1]

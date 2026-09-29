@@ -1,0 +1,44 @@
+// A fixed-array field is filled by copying, so its source may be read-only: a
+// string literal, a `const u8[]`, or a read-only slice whose elements convert to
+// the field's element type. Regression: these were rejected as `str` vs
+// `const str`.
+struct box =
+    data: u8[4]
+    names: (const str)[2]
+
+module m =
+    let greeting = box { data = "hi" }
+    let escaped = box { data = "a\x41%%" }
+    let empty = box { data = "" }
+
+let fill = (b: box*, s: const str) ->
+    b.data = s
+
+let main = (args: str[]) ->
+    let lit = box { data = "abc" }
+    assert(lit.data[0] == 'a' && lit.data[2] == 'c' && lit.data[3] == 0u8)
+
+    let mut b = box { }
+    b.data = "xy"
+    assert(b.data[0] == 'x' && b.data[1] == 'y' && b.data[2] == 0u8)
+    let ro = (const u8[]) u8[3] { 1u8, 2u8, 3u8 }
+    b.data = ro
+    assert(b.data[2] == 3u8)
+    fill(&b, "zz")
+    assert(b.data[0] == 'z' && b.data[2] == 0u8)
+
+    // Elements read out of a read-only slice of strings are `const str`, which
+    // the `(const str)` slots accept; so do the `str` elements of a writable
+    // slice.
+    let words = (const str[]) const str[2] { "one", "two" }
+    b.names = words
+    assert(b.names[1].len == 3)
+    let mut buf = alloc(u8[2] { 'o', 'k' })!
+    defer free(buf)
+    b.names = str[1] { buf }
+    assert(b.names[0][1] == 'k')
+
+    assert(m.greeting.data[1] == 'i' && m.greeting.data[2] == 0u8)
+    assert(m.escaped.data[1] == 65u8 && m.escaped.data[2] == 37u8)
+    assert(m.empty.data[0] == 0u8)
+    0

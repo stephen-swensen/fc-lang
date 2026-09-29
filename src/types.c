@@ -265,6 +265,11 @@ Type *type_make_const(Arena *a, Type *t) {
     return c;
 }
 
+Type *type_slice_elem_read(Arena *a, Type *slice) {
+    Type *elem = slice->slice.elem;
+    return slice->is_const ? type_make_const(a, elem) : elem;
+}
+
 bool is_str_type(Type *t) {
     return t && t->kind == TYPE_SLICE && t->slice.elem &&
            t->slice.elem->kind == TYPE_UINT8;
@@ -662,7 +667,7 @@ static bool elem_const_absorbed(Type *from_elem, Type *to_elem) {
  * const-add and `T*` -> `any*` are valid pointer casts, and a slice/`str`
  * option's const-add is a no-op (const is display-only in the option's C
  * type). */
-static bool widen_repr_preserving(Type *from, Type *to) {
+bool type_widen_repr_preserving(Type *from, Type *to) {
     if (type_eq(from, to)) return true;
 
     /* non-const pointer/slice/any* -> const pointer/slice/any* */
@@ -692,7 +697,7 @@ bool type_can_widen(Type *from, Type *to) {
     if (type_eq(from, to)) return true;
 
     /* Representation-preserving widens: const-add and T* -> any*. */
-    if (widen_repr_preserving(from, to)) return true;
+    if (type_widen_repr_preserving(from, to)) return true;
 
     /* Option inner widening (e.g. i32*? -> const i32*?, i32*? -> any*?),
      * limited to representation-preserving inner widens: a size-changing
@@ -701,7 +706,7 @@ bool type_can_widen(Type *from, Type *to) {
      * which require an exact type match. */
     if (from->kind == TYPE_OPTION && to->kind == TYPE_OPTION &&
         from->option.inner && to->option.inner)
-        return widen_repr_preserving(from->option.inner, to->option.inner);
+        return type_widen_repr_preserving(from->option.inner, to->option.inner);
 
     TypeKind f = from->kind, t = to->kind;
 

@@ -1,0 +1,9 @@
+// The element of a `for` over a read-only slice reads as indexing reads it: a
+// reference element is read-only. Regression: the loop variable was a writable
+// `str`, so writes reached a read-only slice's strings.
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[4] { })!
+    let ro = (const str[]) str[1] { buf }
+    for w in ro do
+        w[0] = 7u8
+    (i32) buf[0]

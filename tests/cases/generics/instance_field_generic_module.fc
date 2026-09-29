@@ -1,0 +1,49 @@
+// A top-level generic struct or union whose field or payload is another generic
+// instance can be instantiated from inside a module: in a constant, a `let mut`
+// global, a function body or a parameter type. Regression: module members were
+// checked before the top-level declarations' field types were resolved, so the
+// instance named an unresolved `box__3_i32` C struct and the C failed to
+// compile.
+struct box =
+    v: 'a
+
+struct outer =
+    b: box<'a>
+    n: i32
+
+union holder =
+    | one(box<'a>)
+    | nothing
+
+struct wide =
+    limbs: u32['n]
+
+struct sized =
+    w: wide<'n>
+    k: i32
+
+module m =
+    let konst = outer { b = box { v = 5 }, n = 1 }
+    let mut global = outer { b = box { v = 7u8 }, n = 2 }
+    let sized_konst = sized { w = default(wide<2>), k = 3 }
+
+    let build = () -> outer { b = box { v = 10i64 }, n = 4 }
+    let zero = () -> default(outer<i32>)
+    let total = (o: outer<i32>) -> o.b.v + o.n
+    let held = () ->
+        match holder<i32>.one(box { v = 6 }) with
+        | one(b) -> b.v
+        | nothing -> 0
+
+let main = (args: str[]) ->
+    assert(m.konst.b.v == 5 && m.konst.n == 1)
+    m.global.b.v = 8u8
+    assert(m.global.b.v == 8u8 && m.global.n == 2)
+    assert(m.sized_konst.w.limbs.len == 2 && m.sized_konst.k == 3)
+    let o = m.build()
+    assert(o.b.v == 10i64 && o.n == 4)
+    let z = m.zero()
+    assert(z.b.v == 0 && z.n == 0)
+    assert(m.total(outer { b = box { v = 20 }, n = 2 }) == 22)
+    assert(m.held() == 6)
+    0

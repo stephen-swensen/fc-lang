@@ -189,6 +189,9 @@ Type *type_copy(Arena *a, Type *t);
 Type *type_deep_copy(Arena *a, Type *t);
 Type *type_make_const(Arena *a, Type *t);
 Type *type_strip_const(Arena *a, Type *t);
+/* The type of an element loaded from `slice`: a reference (pointer, slice or
+ * any*) read out of a read-only slice is read-only too. */
+Type *type_slice_elem_read(Arena *a, Type *slice);
 
 /* Queries */
 bool type_is_integer(Type *t);
@@ -223,6 +226,9 @@ int type_arg_depth(Type *t);
 
 /* Implicit widening: can 'from' widen to 'to' without explicit cast? */
 bool type_can_widen(Type *from, Type *to);
+/* The widenings that change no bits: identical types, added const, and a
+ * typed pointer to any*. */
+bool type_widen_repr_preserving(Type *from, Type *to);
 
 /* Find the common (wider) numeric type for two types, or NULL if no widening possible */
 Type *type_common_numeric(Type *a, Type *b);

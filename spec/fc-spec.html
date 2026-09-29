@@ -1241,7 +1241,7 @@ let f = (n: const node*) ->
 
 Deep const chains naturally: `const_ptr.a.b.c.d.e` — every pointer dereference in the chain preserves const, and every value field access inherits the write restriction from the enclosing const dereference.
 
-`.ptr` on a const slice gives a const pointer: if `s` is `const i32[]`, then `s.ptr` is `const i32*`. Loading a reference *out of* a read-only slice is const too — the element type of a `const T[]` carries the restriction, so an element cannot be laundered into a writable view. A dereference obeys the same rule: `*p` where `p` is `const str*` is a `const str`, and where `p` is `const i32*` it is an ordinary `i32`, since a value pointee needs no type change to be unwritable.
+`.ptr` on a const slice gives a const pointer: if `s` is `const i32[]`, then `s.ptr` is `const i32*`. Loading a reference *out of* a read-only slice is const too — by indexing or as a `for` loop's element — so an element cannot be laundered into a writable view: over `s: const str[]`, both `s[0]` and the `w` of `for w in s` are `const str`. A dereference obeys the same rule: `*p` where `p` is `const str*` is a `const str`, and where `p` is `const i32*` it is an ordinary `i32`, since a value pointee needs no type change to be unwritable.
 
 The same chain runs from a module constant, which is a read-only **root** rather than a read-only view: `cfg.a.b.c` and `cfg.rows[i].data` are frozen at every depth, and any pointer or slice they yield is const. The chain stops where the path leaves the constant's own storage — at a dereference of an address the constant holds (§Module constants are read-only).
 
@@ -1302,6 +1302,8 @@ deref(&x)                            // 'a = i32, param is const i32*
 let s = "hello"           // const str
 let copy = alloc(s)!      // str (non-const — new heap memory)
 ```
+
+The copy is one level deep, so each element is what the source hands out: a reference read from a read-only slice stays read-only (§Deep const). `alloc` of a `const str[]` is a `(const str)[]` — its slots are writable, but the strings they hold are the source's read-only ones.
 
 ### Statements vs. expressions
 
@@ -3691,7 +3693,7 @@ The object must be an lvalue (a named binding, not a temporary). Accessing a fix
 
 ### Assignment
 
-Assigning a slice to a fixed-array field copies data via `memcpy`:
+Assigning a slice to a fixed-array field copies data via `memcpy`. Because the source is only read, it may be read-only: a string literal or a `const u8[]` fills a `u8[N]` field. What must fit is each element as the source hands it out — a reference read from a read-only slice is read-only (§Deep const) — and it must convert to the field's element type without changing representation (the same type, one that only adds `const`, or a typed pointer to `any*`). So a `const str[]` fills a `(const str)[N]` field but not a `str[N]` one, and an `i32[]` never fills an `i64[N]` field.
 
 - If `src.len > N`: runtime abort (prevents data loss).
 - If `src.len <= N`: copy `src.len` elements, zero-fill the remaining `N - src.len` elements.
@@ -3716,7 +3718,7 @@ let p = packet { data = src, len = 8 }
 
 Omitted fields are zero-initialized (the entire inline array is zeroed).
 
-In a module-level `let` (a constant or a `let mut` global), the struct is a static initializer with no run time in which the length check could abort, so the check moves to compile time: the field's value must be a slice literal (`T[n] { … }`, including the zero-filled `T[n] { }`) or `default(T[])`, and a literal longer than the field is a compile error. A shorter one fills the leading elements and zeroes the rest, as at run time.
+In a module-level `let` (a constant or a `let mut` global), the struct is a static initializer with no run time in which the length check could abort, so the check moves to compile time: the field's value must be a slice literal (`T[n] { … }`, including the zero-filled `T[n] { }`), a string literal for a `u8[N]` field, or `default(T[])`, and a literal longer than the field is a compile error. A shorter one fills the leading elements and zeroes the rest, as at run time.
 
 ```fc
 module m =

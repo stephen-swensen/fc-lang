@@ -1,0 +1,14 @@
+// A generic fixed-array field binds its element type to the element as the
+// source slice hands it out, so a read-only slice of strings instantiates
+// `(const str)[1]` and its elements stay read-only, as in the concrete case.
+// Regression: `'a` bound to `str`, and the copy handed out writable views.
+struct g =
+    d: 'a[1]
+
+let main = (args: str[]) ->
+    let mut buf = alloc(u8[4] { })!
+    let ro = (const str[]) str[1] { buf }
+    let v = g { d = ro }
+    let w = v.d[0]
+    w[0] = 7u8
+    (i32) buf[0]
