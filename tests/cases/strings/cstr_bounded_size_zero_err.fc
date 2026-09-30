@@ -1,0 +1,6 @@
+// A (cstr[N]) buffer size follows the length rule for sizes: it must be
+// positive.
+let main = (args: str[]) ->
+    let s = "hi"
+    let c = (cstr[0]) s
+    0

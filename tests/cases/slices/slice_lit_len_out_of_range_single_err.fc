@@ -1,0 +1,5 @@
+// A slice literal's length that is out of range as a literal is reported
+// once. Regression: a second error judged the wrapped value as a length.
+let main = (args: str[]) ->
+    let x = u8[10000000000000000000] {}
+    0

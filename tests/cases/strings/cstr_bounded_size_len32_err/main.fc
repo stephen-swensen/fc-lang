@@ -1,0 +1,7 @@
+// A (cstr[N]) buffer size must fit --len-repr's length capacity, like every
+// other length. Regression: the size was kept in 32 bits, so 4294967298
+// (2^32 + 2) silently became a 2-byte buffer.
+let main = (args: str[]) ->
+    let s = "hello"
+    let c = (cstr[4294967298]) s
+    0

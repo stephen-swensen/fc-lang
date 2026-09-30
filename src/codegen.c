@@ -316,7 +316,9 @@ static const char *lambda_c_name(Expr *lam) {
  * names; its trampoline is `fc_ctramp_` followed by this name. */
 static const char *trampoline_target(Expr *e) {
     switch (e->kind) {
-    case EXPR_IDENT: return e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
+    case EXPR_IDENT:
+        if (e->ident.fn_literal) return lambda_c_name(e->ident.fn_literal);
+        return e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
     case EXPR_FIELD: return e->field.codegen_name;
     case EXPR_FUNC:  return lambda_c_name(e);
     default:
@@ -457,7 +459,7 @@ static void collect_hoisted_bindings(Expr *e) {
         /* (cstr[N]) bounded str->cstr cast: the truncating copy lands in a fixed
          * uint8[N] slot, reused across loop iterations, and the produced cstr
          * keeps function-frame lifetime. */
-        if (e->cast.buffer_size > 0)
+        if (e->cast.bounded)
             add_fn_backing(e, &e->cast.codegen_backing_name);
         break;
     case EXPR_ARRAY_LIT:
@@ -603,8 +605,8 @@ static void emit_fn_backing_decls(FILE *out) {
                     e->array_lit.codegen_backing_name,
                     e->array_lit.size_expr->int_lit.value);
         } else if (e->kind == EXPR_CAST) { /* (cstr[N]) */
-            fprintf(out, "uint8_t %s[%d];\n",
-                    e->cast.codegen_backing_name, e->cast.buffer_size);
+            fprintf(out, "uint8_t %s[%lld];\n",
+                    e->cast.codegen_backing_name, (long long)e->cast.buffer_size);
         } else if (e->kind == EXPR_FUNC) { /* capturing-lambda context struct */
             fprintf(out, "_ctx_%s %s;\n",
                     lambda_c_name(e), e->func.codegen_ctx_backing_name);
@@ -3714,7 +3716,8 @@ static void emit_fixed_array_view(Expr *e, const char *access, FILE *out) {
 static void emit_field(Expr *e, FILE *out) {
     /* Module member access: emit mangled name directly */
     if (e->field.codegen_name) {
-        if (e->type && e->type->kind == TYPE_FUNC) {
+        if (e->type && e->type->kind == TYPE_FUNC &&
+            !(e->field.resolved_member && decl_is_variable(e->field.resolved_member->decl))) {
             /* Module function used as a value: wrap in a fat pointer */
             fprintf(out, "(");
             emit_type(e->type, out);
@@ -3925,22 +3928,22 @@ static void emit_cast(Expr *e, FILE *out) {
     if (e->cast.operand->type && is_str_type(e->cast.operand->type) &&
         is_cstr_type(e->cast.target)) {
         int tid = g_temp_counter++;
-        if (e->cast.buffer_size > 0) {
+        if (e->cast.bounded) {
             /* (cstr[N]): truncating copy into a fixed N-byte backing array
              * hoisted to function entry: bounded, loop-safe. Copy at most
              * N-1 bytes, always NUL-terminate. */
-            int n = e->cast.buffer_size;
+            long long n = e->cast.buffer_size;
             const char *bk = e->cast.codegen_backing_name;
             fprintf(out, "({ fc_str _sc%d = ", tid);
             emit_expr(e->cast.operand, out);
             if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
                 /* `checked`: the clip is data loss on the overflow axis, so
                  * abort instead of truncating. */
-                fprintf(out, "; if (_sc%d.len > %d) fc_trunc(", tid, n - 1);
+                fprintf(out, "; if (_sc%d.len > %lld) fc_trunc(", tid, n - 1);
                 emit_loc_args(e->loc, out);
-                fprintf(out, ", \"(cstr[%d]) cast\", (long long)_sc%d.len, %d)", n, tid, n - 1);
+                fprintf(out, ", \"(cstr[%lld]) cast\", (long long)_sc%d.len, %lld)", n, tid, n - 1);
             }
-            fprintf(out, "; int64_t _cn%d = _sc%d.len < %d ? _sc%d.len : %d",
+            fprintf(out, "; int64_t _cn%d = _sc%d.len < %lld ? _sc%d.len : %lld",
                     tid, tid, n - 1, tid, n - 1);
             fprintf(out, "; memcpy(%s, _sc%d.ptr, fc_to_size(_cn%d))", bk, tid, tid);
             fprintf(out, "; %s[_cn%d] = '\\0'; (uint8_t*)%s; })", bk, tid, bk);
@@ -4416,8 +4419,8 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "(void*)%s", e->ident.name);
             break;
         }
-        if (e->type && e->type->kind == TYPE_FUNC &&
-            !e->ident.is_local) {
+        if (e->type && e->type->kind == TYPE_FUNC && !e->ident.is_local &&
+            !(e->ident.resolved_sym && decl_is_variable(e->ident.resolved_sym->decl))) {
             /* Top-level function used as a value: wrap in a fat pointer */
             fprintf(out, "(");
             emit_type(e->type, out);
@@ -5170,7 +5173,7 @@ static void emit_expr(Expr *e, FILE *out) {
 
 /* Check if a top-level decl is a function (its init expr is EXPR_FUNC) */
 static bool is_func_decl(Decl *d) {
-    return d->kind == DECL_LET && d->let.init && d->let.init->kind == EXPR_FUNC;
+    return decl_is_function(d);
 }
 
 static bool is_generic_decl(Decl *d) {
@@ -5905,12 +5908,12 @@ static void collect_trampolines_expr(Expr *e, void *set) {
                 ? call_ft->func.param_types[i] : NULL;
             Expr *arg = e->call.args[i];
             if (pt && pt->kind == TYPE_FUNC && fn_value_is_context_free(arg))
-                trampolineset_add(ts, trampoline_target(arg), arg->type);
+                trampolineset_add(ts, trampoline_target(arg), instance_type(arg->type));
         }
     } else if (e->kind == EXPR_UNARY_PREFIX && e->unary_prefix.op == TOK_AMP) {
         Expr *operand = e->unary_prefix.operand;
         if (fn_value_is_context_free(operand))
-            trampolineset_add(ts, trampoline_target(operand), operand->type);
+            trampolineset_add(ts, trampoline_target(operand), instance_type(operand->type));
     }
     expr_for_each_child(e, collect_trampolines_expr, set);
 }
@@ -7350,6 +7353,15 @@ static void emit_globals(FILE *out, Decl **all_decls, int all_count) {
         Decl *d = all_decls[i];
         if (d->kind == DECL_LET && !is_func_decl(d)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
+            Expr *init = d->let.init;
+            bool fn_var = d->let.is_module_member && init && init->kind == EXPR_FUNC;
+            if (fn_var) {
+                /* A function variable's initial lambda is defined with the
+                 * other lambdas, further down; declare it for the initializer. */
+                emit_fn_signature(lambda_c_name(init), init->type->func.return_type,
+                                  init->func.params, init->func.param_count, out);
+                fprintf(out, ";\n");
+            }
             emit_type(d->let.resolved_type, out);
             if (d->let.is_module_member) {
                 /* Module member: emit with initializer (must be const expr).
@@ -7366,6 +7378,10 @@ static void emit_globals(FILE *out, Decl **all_decls, int all_count) {
                  * freeze the pointee instead. */
                 if (!d->let.is_mut) fprintf(out, " const");
                 fprintf(out, " %s = ", cname);
+                if (fn_var) {
+                    fprintf(out, "{ .fn_ptr = %s, .ctx = NULL };\n", lambda_c_name(init));
+                    continue;
+                }
                 g_const_context = true;
                 emit_expr(d->let.init, out);
                 g_const_context = false;

@@ -190,9 +190,8 @@ operation, ...) touches these places:
 
 1. `token.h` (the token kind), `lexer.c` (its `KW` entry) and `token.c`
    (`token_kind_name`).
-2. The parser: its prefix-parse case, `token_starts_prefix_expr` if it starts
-   an expression, and `parse_type_arg`'s list if it may appear as a generic
-   argument.
+2. The parser: its prefix-parse case, and `parse_type_arg`'s list if it may
+   appear as a generic argument.
 3. The expression kind, if it gets one (see the next section).
 4. The language server: a `BUILTIN_DOCS` entry in `src/builtin_docs.inc`,
    keyed by the spelling, and a `consider_builtin` call in `lsp.c`'s node

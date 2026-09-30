@@ -1,0 +1,6 @@
+// A fixed array's size is an i64 length, so a literal beyond i64 is an
+// error. Regression: reported as a negative size.
+struct s =
+    a: u8[10000000000000000000]
+
+let main = (args: str[]) -> 0

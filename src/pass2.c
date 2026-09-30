@@ -478,7 +478,7 @@ static bool expr_may_yield_stack(const Pretaint *pt, Expr *e) {
     case EXPR_CAST:
         /* (cstr[N]) s copies into a stack buffer; other casts keep the
          * operand's provenance. */
-        return e->cast.buffer_size > 0 || expr_may_yield_stack(pt, e->cast.operand);
+        return e->cast.bounded || expr_may_yield_stack(pt, e->cast.operand);
 
     case EXPR_IDENT:
         return pretaint_has_name(pt, e->ident.name) ||
@@ -760,6 +760,12 @@ typedef struct {
        match subject, a destructured value, an unwrapped operand); check_expr
        reads and clears it on entry. See check_readonly_copy. */
     bool in_projection_position;
+    /* Set by a parent immediately before checking an identifier it uses only
+       as code, as a C function pointer (an & operand, an extern's function
+       argument); check_ident reads and clears it. A local `let` bound to a
+       non-capturing lambda literal is then not captured into an enclosing
+       lambda: the literal's code is named directly (resolve_c_callable). */
+    bool code_use;
     SymbolTable *module_symtab;  /* non-NULL when checking inside a module */
     ModuleScopeChain *parent_modules;  /* chain of ancestor module symtabs (nearest first) */
     const char *current_ns;      /* current namespace for namespace isolation */
@@ -5148,6 +5154,34 @@ static Type *check_generic_call(CheckCtx *ctx, Expr *e, Type *ft, Symbol *callee
     return e->type;
 }
 
+/* Whether function value `e` can be handed to C as a function pointer: code
+ * known at compile time (fn_value_is_context_free). A local `let` bound to a
+ * non-capturing lambda literal is resolved to that literal here
+ * (Expr.ident.fn_literal), so codegen names the literal's trampoline. */
+static bool resolve_c_callable(CheckCtx *ctx, Expr *e) {
+    if (e->kind == EXPR_IDENT && e->ident.is_local && !e->ident.fn_literal) {
+        Expr *lam = scope_lookup_lambda_init(ctx->scope, e->ident.name);
+        if (lam && lam->func.capture_count == 0) e->ident.fn_literal = lam;
+    }
+    return fn_value_is_context_free(e);
+}
+
+/* Report that function value `e` cannot be used as a C function pointer
+ * (resolve_c_callable was false). `use` is the attempted use, with `%s` where
+ * the value is named: "take the address of %s", "pass %s to an extern". */
+static void report_not_c_callable(SrcLoc loc, const char *use, Expr *e) {
+    bool named = e->kind == EXPR_IDENT;
+    char *attempt = named ? str_sprintf("'%s'", e->ident.name)
+                          : str_sprintf("this function value");
+    char *msg = str_sprintf(use, attempt);
+    diag_error(loc, "cannot %s: %sa C function pointer needs a function known "
+               "at compile time (a top-level or module function, a "
+               "non-capturing lambda literal, or a `let` bound to one)", msg,
+               named ? "its function is known only at run time, and " : "");
+    free(msg);
+    free(attempt);
+}
+
 /* A call: a variant constructor, a generic call (inferring its type
  * arguments and checking the instance), or a plain call of a function,
  * function value or extern. */
@@ -5228,8 +5262,13 @@ static Type *check_call(CheckCtx *ctx, Expr *e) {
         return poison(e);
     }
     bool arg_err = false;
+    bool extern_callee = callee_sym && callee_sym->kind == DECL_EXTERN;
     for (int i = 0; i < e->call.arg_count; i++) {
+        ctx->code_use = extern_callee && i < ft->func.param_count &&
+                        ft->func.param_types[i]->kind == TYPE_FUNC &&
+                        e->call.args[i]->kind == EXPR_IDENT;
         Type *at = check_expr(ctx, e->call.args[i]);
+        ctx->code_use = false;
         if (reject_unresolved_recursive_value(e->call.args[i])) { arg_err = true; continue; }
         if (type_is_error(at)) { arg_err = true; continue; }
         /* Variadic args beyond fixed params: type-check the expr but skip param matching */
@@ -5252,10 +5291,14 @@ static Type *check_call(CheckCtx *ctx, Expr *e) {
 
     /* Determine call mode: direct vs indirect */
     e->call.is_indirect = true;  /* default to indirect for function-type callees */
-    if (e->call.func->kind == EXPR_IDENT && !e->call.func->ident.is_local) {
+    Expr *cf = e->call.func;
+    if (cf->kind == EXPR_IDENT && !cf->ident.is_local &&
+        !(cf->ident.resolved_sym && decl_is_variable(cf->ident.resolved_sym->decl))) {
         e->call.is_indirect = false;  /* global function: direct */
-    } else if (e->call.func->kind == EXPR_FIELD && e->call.func->field.codegen_name) {
-        e->call.is_indirect = false;  /* module function: direct */
+    } else if (cf->kind == EXPR_FIELD && cf->field.codegen_name &&
+               !(cf->field.resolved_member &&
+                 decl_is_variable(cf->field.resolved_member->decl))) {
+        e->call.is_indirect = false;  /* module function or extern: direct */
     }
 
     /* Extern calls skip the _ctx parameter */
@@ -5266,14 +5309,12 @@ static Type *check_call(CheckCtx *ctx, Expr *e) {
         for (int i = 0; i < e->call.arg_count && i < ft->func.param_count; i++) {
             if (ft->func.param_types[i]->kind != TYPE_FUNC) continue;
             Expr *arg = e->call.args[i];
-            if (fn_value_is_context_free(arg)) continue;
+            if (resolve_c_callable(ctx, arg)) continue;
             if (arg->kind == EXPR_FUNC && arg->func.capture_count > 0)
                 diag_error(arg->loc, "cannot pass capturing closure to extern: "
                     "C function pointers cannot represent closures");
             else
-                diag_error(arg->loc, "cannot pass function value to extern: "
-                    "only top-level functions and non-capturing lambdas "
-                    "can be used as C function pointers");
+                report_not_c_callable(arg->loc, "pass %s to an extern", arg);
         }
     }
 
@@ -5765,7 +5806,7 @@ static Type *check_alloc_value(CheckCtx *ctx, Expr *e) {
     /* alloc((cstr) str): cstr?, a heap copy of a str-to-cstr conversion
      * (the heap form of an unbounded (cstr) cast). The bounded (cstr[N])
      * form has its own storage, so only the unbounded cast qualifies. */
-    if (ie->kind == EXPR_CAST && ie->cast.buffer_size == 0 && is_cstr_type(t)) {
+    if (ie->kind == EXPR_CAST && !ie->cast.bounded && is_cstr_type(t)) {
         Type *rt = type_pointer(ctx->arena, type_uint8());
         e->type = type_option(ctx->arena, rt);
         e->prov = PROV_HEAP;
@@ -6295,31 +6336,22 @@ static Type *check_address_of(CheckCtx *ctx, Expr *e, Type *ot) {
     }
     bool make_const = false;
     if (ot->kind == TYPE_FUNC) {
-        /* Function bindings keep their own rule: &f is C-function-pointer
-         * extraction, valid only on a non-capturing let mut / top-level
-         * function. A const-qualified C function pointer is not a
-         * meaningful interop artifact, so &f on an immutable let lambda
-         * stays an error rather than yielding a const pointer. */
-        if (operand->kind == EXPR_IDENT && operand->ident.is_local) {
-            if (!operand->ident.is_mut) {
-                diag_error(e->loc, "address-of requires mutable binding");
-                return poison(e);
-            }
-            /* Only non-capturing function bindings can yield a raw C
-             * function pointer */
-            if (scope_lookup_is_capturing(ctx->scope, operand->ident.name)) {
-                diag_error(e->loc, "cannot take address of capturing closure");
-                return poison(e);
-            }
+        /* &f names the function's code, as a C function pointer, not the
+         * storage of a binding, so a binding's mutability plays no part:
+         * the function must be known at compile time. */
+        if ((operand->kind == EXPR_FUNC && operand->func.capture_count > 0) ||
+            (operand->kind == EXPR_IDENT && operand->ident.is_local &&
+             scope_lookup_is_capturing(ctx->scope, operand->ident.name))) {
+            diag_error(e->loc, "cannot take address of capturing closure");
+            return poison(e);
+        }
+        if (!resolve_c_callable(ctx, operand)) {
+            report_not_c_callable(e->loc, "take the address of %s", operand);
+            return poison(e);
         }
     } else if (is_binding && !binding_mut) {
         /* Read-only address-of an immutable binding yields const T*. */
         make_const = true;
-    }
-    /* &(inline lambda): reject if it captures */
-    if (operand->kind == EXPR_FUNC && operand->func.capture_count > 0) {
-        diag_error(e->loc, "cannot take address of capturing closure");
-        return poison(e);
     }
     /* An address reached through a const pointer/slice is a read-only
      * address, not an error: &cp.field yields const F*. A write through it
@@ -6383,7 +6415,10 @@ static Type *check_unary_prefix(CheckCtx *ctx, Expr *e) {
         }
     }
     ctx->in_projection_position = e->unary_prefix.op == TOK_AMP;
+    ctx->code_use = e->unary_prefix.op == TOK_AMP &&
+                    e->unary_prefix.operand->kind == EXPR_IDENT;
     Type *ot = check_expr(ctx, e->unary_prefix.operand);
+    ctx->code_use = false;
     if (reject_unresolved_recursive_value(e->unary_prefix.operand)) { return poison(e); }
     if (type_is_error(ot)) { return poison(e); }
     TokenKind op = e->unary_prefix.op;
@@ -6425,6 +6460,8 @@ static Type *check_unary_prefix(CheckCtx *ctx, Expr *e) {
 /* An identifier: a local binding (a capture when it crosses a lambda
  * boundary), else a member, import or global found by name resolution. */
 static Type *check_ident(CheckCtx *ctx, Expr *e) {
+    bool code_use = ctx->code_use;
+    ctx->code_use = false;
     /* 1. Check local scope (stops at current module boundary) */
     const char *cg_name = NULL;
     bool is_mut = false;
@@ -6442,8 +6479,11 @@ static Type *check_ident(CheckCtx *ctx, Expr *e) {
                     e->ident.name);
                 return poison(e);
             }
-            /* Add capture to each lambda_ctx level */
-            LambdaCtx *lc = ctx->lambda_ctx;
+            /* Add capture to each lambda_ctx level, unless the name is
+             * used only as code whose function is known here. */
+            Expr *code = code_use ? scope_lookup_lambda_init(ctx->scope, e->ident.name) : NULL;
+            bool named_as_code = code && code->func.capture_count == 0;
+            LambdaCtx *lc = named_as_code ? NULL : ctx->lambda_ctx;
             for (int bc = 0; bc < boundary_crossings && lc; bc++) {
                 bool found = false;
                 for (int j = 0; j < lc->count; j++) {
@@ -6720,7 +6760,8 @@ static Type *check_array_lit(CheckCtx *ctx, Expr *e) {
     /* The node is EXPR_ARRAY_LIT after its backing array, but the literal
      * yields a slice. The length expression must be an integer. */
     Type *size_type = check_expr(ctx, e->array_lit.size_expr);
-    if (!type_is_error(size_type) && !type_is_integer(size_type)) {
+    if (type_is_error(size_type)) return poison(e);
+    if (!type_is_integer(size_type)) {
         diag_error(e->loc, "slice literal length must be integer, got %s", type_name(size_type));
         return poison(e);
     }
@@ -7148,17 +7189,25 @@ static Type *check_cast(CheckCtx *ctx, Expr *e) {
         return poison(e);
     }
     /* A (cstr[N]) buffer size is only meaningful for a str-to-cstr cast. */
-    if (e->cast.buffer_size > 0 && !str_to_cstr) {
+    if (e->cast.bounded && !str_to_cstr) {
         diag_error(e->loc,
             "[N] buffer size applies only to a (cstr) cast of a str");
         return poison(e);
+    }
+    if (e->cast.bounded) {
+        char *msg = static_length_error("(cstr[N]) buffer size", e->cast.buffer_size, true);
+        if (msg) {
+            diag_error(e->loc, "%s", msg);
+            free(msg);
+            return poison(e);
+        }
     }
     /* An unbounded str-to-cstr cast is rejected: its stack copy is
      * runtime-sized and would grow the frame per loop iteration. It needs
      * explicit storage, unless it is the direct operand of alloc(...) or
      * alloca(...), which provides it (the `licensed` flag, set by the
      * parser). */
-    if (str_to_cstr && e->cast.buffer_size == 0 && !e->cast.licensed) {
+    if (str_to_cstr && !e->cast.bounded && !e->cast.licensed) {
         if (e->cast.operand->kind == EXPR_STRING_LIT)
             diag_error(e->loc,
                 "use a c\"...\" literal for a null-terminated string constant "
@@ -10507,17 +10556,19 @@ static bool is_const_expr(Expr *e) { return is_init_expr(e, INIT_CONST, NULL); }
 
 static void check_decl_let(CheckCtx *ctx, Decl *d) {
     /* For function declarations, pre-register a partial function type
-     * so the body can make recursive calls. */
+     * so the body can make recursive calls. A `let mut` bound to a lambda is
+     * a variable, whose initializer is an ordinary lambda: as for a local
+     * `let mut`, it cannot refer to the variable itself. */
     const char *lookup_name = d->let.name;
     Symbol *sym = resolve_symbol(ctx, lookup_name);
 
     Type *recursive_ret = NULL;
-    if (d->let.init && d->let.init->kind == EXPR_FUNC && sym && !sym->type)
+    if (decl_is_function(d) && sym && !sym->type)
         sym->type = recursive_fn_type(ctx, d->let.init, &recursive_ret);
 
     bool saved_top = ctx->is_top_level_init;
     LetToFunc saved_handoff = ctx->pending;
-    if (d->let.init && d->let.init->kind == EXPR_FUNC) {
+    if (decl_is_function(d)) {
         ctx->is_top_level_init = true;
         ctx->pending.fn_sym = sym;   /* kind context for const params in the body */
     }
@@ -11199,7 +11250,11 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         Decl *d = prog->decls[i];
         if (d->kind != DECL_LET || !d->let.init) continue;
         if (strcmp(d->let.name, "main") != 0) continue;
-        if (d->let.init->kind != EXPR_FUNC) continue;
+        if (!decl_is_function(d)) {
+            diag_error(d->loc, "main must be a function declared with `let`: "
+                       "let main = (args: str[]) -> ...");
+            break;
+        }
         Expr *fn = d->let.init;
         Type *ft = d->let.resolved_type;
         if (!ft || ft->kind != TYPE_FUNC) break;

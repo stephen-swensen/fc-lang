@@ -346,7 +346,7 @@ bool facts_overflow_governs(const Expr *e, Type *(*resolve)(Type *)) {
         return e->unary_prefix.op == TOK_MINUS &&
                maybe_signed(gov_type(e->type, resolve));
     case EXPR_CAST: {
-        if (e->cast.buffer_size > 0) return true;   /* (cstr[N]): clips past N-1 */
+        if (e->cast.bounded) return true;   /* (cstr[N]): clips past N-1 */
         /* A lossy integer narrowing (an enum narrows as its repr). float-to-int
          * is not here: its saturation is on the guard axis, because the C
          * conversion is undefined out of range. */
@@ -368,8 +368,12 @@ bool facts_overflow_governs(const Expr *e, Type *(*resolve)(Type *)) {
 bool fn_value_is_context_free(const Expr *e) {
     if (!e->type || e->type->kind != TYPE_FUNC) return false;
     switch (e->kind) {
-    case EXPR_IDENT: return !e->ident.is_local;
-    case EXPR_FIELD: return e->field.codegen_name != NULL;
+    case EXPR_IDENT:
+        if (e->ident.is_local) return e->ident.fn_literal != NULL;
+        return !e->ident.resolved_sym || !decl_is_variable(e->ident.resolved_sym->decl);
+    case EXPR_FIELD:
+        return e->field.codegen_name != NULL &&
+               (!e->field.resolved_member || !decl_is_variable(e->field.resolved_member->decl));
     case EXPR_FUNC:  return e->func.capture_count == 0 && e->func.lifted_name;
     default:         return false;
     }

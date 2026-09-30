@@ -187,6 +187,10 @@ struct Expr {
                                                   only (a param has no doc comment of its own to scan for) */
             bool is_std_stream;                /* the built-in stdin, stdout or stderr (not a binding
                                                   that happens to share the name) */
+            struct Expr *fn_literal;           /* used as a C function pointer (`&f`, an extern
+                                                  argument): the non-capturing lambda literal the
+                                                  local `let` is bound to, whose trampoline stands
+                                                  for it (set by pass2) */
         } ident;
 
         /* EXPR_BINARY */
@@ -246,8 +250,9 @@ struct Expr {
         struct {
             Type *target;
             Expr *operand;
-            int buffer_size;  /* (cstr[N]) bounded str-to-cstr cast: N > 0; 0 = plain cast.
-                                 Copies min(len, N-1) bytes + NUL into a hoisted uint8[N]. */
+            bool bounded;     /* (cstr[N]): a bounded str-to-cstr cast, which copies
+                                 min(len, N-1) bytes + NUL into a hoisted uint8[N] */
+            int64_t buffer_size;  /* its N, as written (pass2 judges it) */
             const char *codegen_backing_name;  /* hoisted backing array name (set in codegen) */
             bool licensed;    /* true when this is the direct init of alloc(...)/alloca(...).
                                  That allows an otherwise illegal unbounded (cstr) str-to-cstr
@@ -781,3 +786,15 @@ typedef struct Program {
  * (DECL_NAMESPACE with a NULL name), so a namespace never carries over from
  * one file to the next. A single file is returned as it is. */
 Program *program_merge(Arena *a, Program **files, int count);
+
+/* Whether `d` declares a function: a `let` (not `let mut`) bound to a lambda
+ * literal. A `let mut` bound to one is a variable holding a function value,
+ * like any `let mut`: it may be reassigned, and a call goes through its
+ * current value. */
+bool decl_is_function(const Decl *d);
+
+/* Whether `d` declares a variable: a `let` or `let mut` that is not a
+ * function declaration (decl_is_function). A name bound to one holds a value;
+ * a function or extern it names is code. */
+bool decl_is_variable(const Decl *d);
+

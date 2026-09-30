@@ -1,0 +1,5 @@
+// A `let mut` function's initializer is an ordinary lambda, which cannot
+// refer to the variable it initializes (self-recursion needs a `let`).
+let mut count_down = (n: i32) -> if n == 0 then 0 else count_down(n - 1)
+
+let main = (args: str[]) -> count_down(3)

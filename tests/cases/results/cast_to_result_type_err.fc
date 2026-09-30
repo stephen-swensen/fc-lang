@@ -1,0 +1,5 @@
+// A built-in type name under `!` in parentheses is a cast, and no cast
+// targets a result type.
+let main = (args: str[]) ->
+    let a = (i32!) 5
+    0

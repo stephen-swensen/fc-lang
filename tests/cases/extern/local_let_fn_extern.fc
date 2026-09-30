@@ -1,0 +1,17 @@
+// A local `let` bound to a non-capturing lambda literal is passed to an
+// extern's function parameter as the literal is: through its trampoline. So
+// is one reached from a nested lambda, which does not capture it to do so.
+// Regression: rejected ("cannot pass function value to extern").
+module libc from "stdlib.h" =
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> i32) -> void
+
+let main = (args: str[]) ->
+    let asc = (a: const any*, b: const any*) -> *(const i32*) a - *(const i32*) b
+    let desc = (a: const any*, b: const any*) -> *(const i32*) b - *(const i32*) a
+    let mut nums = i32[3] { 3, 1, 2 }
+    libc.qsort(nums.ptr, 3usize, (usize) sizeof(i32), asc)
+    assert(nums[0] == 1 && nums[2] == 3)
+    let resort = (xs: i32[]) -> libc.qsort(xs.ptr, (usize) xs.len, (usize) sizeof(i32), desc)
+    resort(nums)
+    assert(nums[0] == 3 && nums[2] == 1)
+    0

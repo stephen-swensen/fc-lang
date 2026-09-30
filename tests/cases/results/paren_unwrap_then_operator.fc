@@ -1,0 +1,30 @@
+// A name or dotted path under `!` or `?` in parentheses is an unwrap or a
+// propagation, never a cast (no cast targets a result or option type), so an
+// operator after it applies to the unwrapped value: `(y!) - 1` subtracts 1.
+// A pointer to such a type is still a cast target: `(r!*) p`.
+// Regression: `(y!) - 1` was read as a cast of `-1` to the type `y!`.
+module m =
+    let o = some(9)
+
+struct rec =
+    x: i32
+
+let f = (o: i32?) ->
+    let a = (o?) - 1
+    let b = (m.o?) - 2
+    some(a + b)
+
+let main = (args: str[]) ->
+    let y = ok(5)
+    assert((y!) - 1 == 4)
+    assert((y!) * 2 == 10)
+    assert((m.o!) - 1 == 8)
+    assert((m.o!) + (y!) == 14)
+    match f(some(5)) with
+    | some(v) -> assert(v == 11)
+    | none -> assert(false)
+    let mut recs = rec[1] { rec { x = 3 } }
+    let raw = (any*) recs.ptr
+    let p = (rec!*) raw
+    assert((any*) p == raw)
+    0

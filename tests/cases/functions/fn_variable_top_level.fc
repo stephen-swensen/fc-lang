@@ -1,0 +1,28 @@
+// A `let mut` bound to a lambda at file or module level is a variable holding
+// a function value, like a local `let mut`: reassigning it takes effect, and
+// every call (bare, qualified, through an import, or passed on as a value)
+// runs its current value. Regression: the binding was compiled as a fixed
+// function and the reassignment silently did nothing.
+import twice from m
+
+module m =
+    let mut twice = (x: i32) -> x * 2
+    let use = (x: i32) -> twice(x) + 1
+
+let mut pick = (x: i32) -> base(x)
+let base = (x: i32) -> x + 1
+
+let apply = (f: (i32) -> i32, x: i32) -> f(x)
+
+let main = (args: str[]) ->
+    assert(pick(1) == 2)
+    assert(apply(pick, 1) == 2)
+    assert(m.use(5) == 11)
+    pick = (x: i32) -> x + 100
+    twice = (x: i32) -> x * 3
+    assert(pick(1) == 101 && apply(pick, 1) == 101)
+    assert(m.twice(5) == 15 && twice(2) == 6 && m.use(5) == 16)
+    let saved = pick
+    pick = base
+    assert(saved(1) == 101 && pick(1) == 2)
+    0

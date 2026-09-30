@@ -291,7 +291,7 @@ static void check_builtin_type_name_decls(Decl **decls, int count) {
 }
 
 static void detect_generic_func(Arena *arena, Decl *d, Symbol *sym) {
-    if (!d->let.init || d->let.init->kind != EXPR_FUNC) return;
+    if (!decl_is_function(d)) return;
     Expr *fn = d->let.init;
     const char **vars = NULL;
     uint8_t *kinds = NULL;
@@ -1594,7 +1594,7 @@ static void kind_walk_sym(KindInferCtx *kc, Symbol *s) {
     } else if (d->kind == DECL_UNION) {
         for (int i = 0; i < d->unio.variant_count; i++)
             kind_walk(kc, d->unio.variants[i].payload);
-    } else if (d->kind == DECL_LET && d->let.init && d->let.init->kind == EXPR_FUNC) {
+    } else if (decl_is_function(d)) {
         Expr *fn = d->let.init;
         for (int i = 0; i < fn->func.param_count; i++)
             kind_walk(kc, fn->func.params[i].type);

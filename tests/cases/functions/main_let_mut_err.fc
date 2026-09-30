@@ -1,0 +1,3 @@
+// `main` is the program's entry point, so it must be a function declared
+// with `let`; a `let mut` holds a function value that could change.
+let mut main = (args: str[]) -> 0

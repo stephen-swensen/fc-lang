@@ -1,0 +1,5 @@
+// A function parameter's value is known only at run time, so it has no C
+// function pointer.
+let take = (cb: (i32) -> i32) -> &cb
+
+let main = (args: str[]) -> 0

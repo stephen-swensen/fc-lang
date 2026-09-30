@@ -1,0 +1,6 @@
+// A (cstr[N]) buffer size is an i64 length, so a literal beyond i64 is an
+// error. Regression: reported as a negative size.
+let main = (args: str[]) ->
+    let s = "hi"
+    let c = (cstr[10000000000000000000]) s
+    0

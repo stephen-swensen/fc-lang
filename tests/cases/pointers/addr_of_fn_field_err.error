@@ -1,0 +1,1 @@
+cannot take the address of this function value: a C function pointer needs a function known at compile time

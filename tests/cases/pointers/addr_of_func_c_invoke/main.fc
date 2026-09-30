@@ -24,4 +24,10 @@ let main = (args: str[]) ->
     box.fn = &((x: i32) -> x + 100)
     let r3 = cb.cb_box_invoke(&box, 5)
     assert(r3 == 105)
+
+    // A local `let` bound to a non-capturing lambda literal
+    let quad = (x: i32) -> x * 4
+    assert(cb.cb_invoke(&quad, 5) == 20)
+    box.fn = &quad
+    assert(cb.cb_box_invoke(&box, 6) == 24)
     0

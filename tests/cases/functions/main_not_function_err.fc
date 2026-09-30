@@ -1,0 +1,3 @@
+// `main` must be a function. Regression: fcc accepted `let main = 5` and
+// emitted C that declared an int named main.
+let main = 5

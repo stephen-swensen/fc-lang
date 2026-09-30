@@ -1,0 +1,7 @@
+// A large (cstr[N]) buffer holds the whole string. (30000 fits every
+// --len-repr, so the test runs under each.)
+let main = (args: str[]) ->
+    let s = "hello"
+    let c = (cstr[30000]) s
+    assert(((str) c).len == 5)
+    0

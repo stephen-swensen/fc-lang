@@ -7,6 +7,6 @@ let main = (args: str[]) ->
     let y = (let x = 1)
     let n = 3
     let s = "%d{n n}"
-    let c = (cstr[0]) "hi"
+    let c = (cstr[99999999999999999999]) "hi"
     let late = struct
     0

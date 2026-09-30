@@ -1,0 +1,10 @@
+// A struct field of function type holds a value known only at run time, so
+// it has no C function pointer. Regression: accepted, yielding the address of
+// the field.
+struct handler =
+    cb: (i32) -> i32
+
+let main = (args: str[]) ->
+    let h = handler { cb = (x: i32) -> x }
+    let p = &h.cb
+    0

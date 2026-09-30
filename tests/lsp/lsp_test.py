@@ -1924,6 +1924,14 @@ CM_LIB = (
     "    module pkt =\n"                         # 19  union companion, no doc
     "        let mk = () ->\n"                   # 20
     "            pkt.quiet\n"                    # 21
+    "\n"                                         # 22
+    "    // A fault record.\n"                   # 23
+    "    struct fault =\n"                       # 24
+    "        code: i32\n"                        # 25
+    "\n"                                         # 26
+    "    // Fault codes.\n"                      # 27
+    "    error fault =\n"                        # 28  error-group companion
+    "        | bad\n"                            # 29
 )
 CM_MAIN = (
     "import * from mystd::wide\n"                # 0
@@ -1937,6 +1945,8 @@ CM_MAIN = (
     "\n"                                         # 8
     "let main = (args: str[]) ->\n"              # 9
     "    (i32) app.go()\n"                       # 10
+    "\n"                                         # 11
+    "let mk = () -> fault { code = fault.bad }\n"  # 12  struct-literal type name
 )
 cmdir = tmpdir("fc_lsp_comp_")
 with open(os.path.join(cmdir, "wide.fc"), "w") as f: f.write(CM_LIB)
@@ -1953,6 +1963,8 @@ cm = [
     cm_completion(3, 4, CM_MAIN.split("\n")[4].index("w128.") + 5),   # after 'w128.'
     cm_completion(4, 5, CM_MAIN.split("\n")[5].index("pkt.") + 4),    # after 'pkt.'
     cm_completion(5, 6, CM_MAIN.split("\n")[6].index("z.") + 2),      # after 'z.' (value)
+    req(6, "textDocument/hover", {"textDocument": {"uri": cmuri},
+        "position": {"line": 12, "character": CM_MAIN.split("\n")[12].index("fault {") + 1}}),
     req(9, "shutdown", None), note("exit", None),
 ]
 cmresp, _, cmbf, _, _ = run_session(cm)
@@ -1972,6 +1984,13 @@ check("completion on a struct type name does NOT offer the struct's fields",
       "limbs" not in cm_labels(3), str(cm_labels(3)))
 check("completion after '.' on a union type name merges companion members and variants",
       set(cm_labels(4)) >= {"mk", "ping", "quiet"}, str(cm_labels(4)))
+# An error group is a type's companion as a module is, so a type reference that
+# pass2 resolved without an expression (a struct literal's type name) hovers as
+# the merged pair.
+cm_hov6 = ((cmresp.get(6, {}).get("result") or {}).get("contents") or {}).get("value") or ""
+check("hover a struct-literal type name merges its error-group companion",
+      "struct fault" in cm_hov6 and "error fault" in cm_hov6 and "Fault codes." in cm_hov6,
+      cm_hov6)
 check("completion on a struct VALUE still offers its fields",
       "limbs" in cm_labels(5) and "zero" not in cm_labels(5), str(cm_labels(5)))
 

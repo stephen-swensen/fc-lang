@@ -662,6 +662,27 @@ static const char *dotted_name_of(Parser *p, Expr *e) {
 
 static uint64_t parse_int_value(const char *start, int length, bool *out_of_range);
 
+/* The value of a size written as an integer literal: a fixed array's T[N] or
+ * a (cstr[N]) buffer. A size is an i64 length, so a literal beyond i64 is
+ * reported here and read as 1. pass2 judges every other value with the other
+ * lengths (positive, within --len-repr). */
+static int64_t parse_size_literal(Token *t) {
+    bool oor = false;
+    uint64_t n = parse_int_value(t->start, t->length, &oor);
+    if (oor) {
+        diag_error(loc_from_token(t),
+                   "integer literal exceeds 64-bit unsigned range (max 18446744073709551615)");
+        return 1;
+    }
+    if (n > (uint64_t)INT64_MAX) {
+        diag_error(loc_from_token(t),
+                   "integer literal %llu out of range for i64 "
+                   "(-9223372036854775808..9223372036854775807)", (unsigned long long)n);
+        return 1;
+    }
+    return (int64_t)n;
+}
+
 static Type *parse_type_suffix(Parser *p, Type *base) {
     /* T*, T[], T[N], T?, applied left to right */
     for (;;) {
@@ -698,16 +719,7 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
         if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
             peek_at(p, 1)->kind == TOK_INT_LIT && peek_at(p, 2)->kind == TOK_RBRACKET) {
             advance_p(p); /* consume [ */
-            Token *size_tok = current(p);
-            bool size_oor = false;
-            int64_t size = parse_int_value(size_tok->start, size_tok->length, &size_oor);
-            /* A value too large to read has nothing to check; pass2 judges the
-             * rest (positive, within --len-repr) with every other size. */
-            if (size_oor) {
-                diag_error(loc_from_token(size_tok),
-                           "integer literal exceeds 64-bit unsigned range (max 18446744073709551615)");
-                size = 1;
-            }
+            int64_t size = parse_size_literal(current(p));
             advance_p(p); /* consume INT_LIT */
             expect(p, TOK_RBRACKET);
             base = type_fixed_array(p->arena, base, size);
@@ -1750,33 +1762,6 @@ static Expr *parse_array_lit_body(Parser *p, Type *elem_type, SrcLoc loc) {
     return e;
 }
 
-/* Can this token begin a prefix expression: is it one of parse_prefix's cases?
- * Used by the (IDENT!) cast disambiguation: a `!`-triggered cast attempt
- * commits only when the token after `)` starts an expression (the cast
- * operand). tools/check-keywords.py checks the two lists agree. */
-static bool token_starts_prefix_expr(TokenKind k) {
-    switch (k) {
-    case TOK_INT_LIT: case TOK_FLOAT_LIT: case TOK_STRING_LIT:
-    case TOK_CSTRING_LIT: case TOK_CHAR_LIT:
-    case TOK_INTERP_START: case TOK_CINTERP_START:
-    case TOK_TRUE: case TOK_FALSE: case TOK_VOID:
-    case TOK_IDENT: case TOK_TYPE_VAR: case TOK_CONST: case TOK_ERROR_KW:
-    case TOK_SOME: case TOK_NONE: case TOK_OK: case TOK_ERR:
-    case TOK_ALLOC: case TOK_ALLOCA: case TOK_FREE:
-    case TOK_SIZEOF: case TOK_ALIGNOF: case TOK_BITCAST: case TOK_ENUM_OF:
-    case TOK_DEFAULT:
-    case TOK_ASSERT: case TOK_STATIC_ASSERT: case TOK_ERROR_NAME:
-    case TOK_ATOMIC_LOAD: case TOK_ATOMIC_STORE:
-    case TOK_GUARDED: case TOK_UNGUARDED: case TOK_CHECKED: case TOK_UNCHECKED:
-    case TOK_IF: case TOK_MATCH: case TOK_LOOP: case TOK_FOR: case TOK_LET:
-    case TOK_LPAREN: case TOK_LBRACE: case TOK_LT:
-    case TOK_MINUS: case TOK_BANG: case TOK_TILDE: case TOK_AMP: case TOK_STAR:
-        return true;
-    default:
-        return false;
-    }
-}
-
 /* alloc(...) or alloca(...): a type, a type with a count, a slice literal,
  * or an expression to copy. */
 static Expr *parse_alloc(Parser *p, SrcLoc loc) {
@@ -1916,7 +1901,7 @@ static Expr *parse_alloc(Parser *p, SrcLoc loc) {
     expect(p, TOK_RPAREN);
     if (init->kind == EXPR_INTERP_STRING)
         init->interp_string.wrapped = true;
-    else if (init->kind == EXPR_CAST && init->cast.buffer_size == 0)
+    else if (init->kind == EXPR_CAST && !init->cast.bounded)
         init->cast.licensed = true;
     Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
     e->alloc_expr.alloc_type = NULL;
@@ -1924,6 +1909,20 @@ static Expr *parse_alloc(Parser *p, SrcLoc loc) {
     e->alloc_expr.init_expr = init;
     e->alloc_expr.is_stack = is_stack;
     return e;
+}
+
+/* Whether a cast target, parsed from parentheses that begin with a name
+ * (`name_led`: not a built-in type name), is only that name or dotted path
+ * under `!` and `?` suffixes. No cast targets a result or option type, so
+ * such parentheses hold an expression, an unwrap or a propagation: `(y!) - 1`
+ * subtracts 1 from the unwrapped `y`. A suffix under another type, as in
+ * `(x!*) p`, still makes a cast. */
+static bool name_suffix_only(Type *target, bool name_led) {
+    if (!name_led || !target) return false;
+    Type *t = target;
+    while (t->kind == TYPE_RESULT || t->kind == TYPE_OPTION)
+        t = t->kind == TYPE_RESULT ? t->result.inner : t->option.inner;
+    return t != target && t && t->kind == TYPE_STUB && t->stub.type_arg_count == 0;
 }
 
 /* An expression starting with `(`: a slice literal with a parenthesized
@@ -1960,18 +1959,15 @@ static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
      * Backtracking handles false positives like (a * b). */
     {
     bool try_cast = false;
-    bool bang_cast = false; /* triggered only by `!`; see the guard below */
     if (peek_at(p, 1)->kind == TOK_IDENT &&
         (type_from_name(peek_at(p, 1)->start, peek_at(p, 1)->length) ||
          peek_at(p, 2)->kind == TOK_STAR ||
          peek_at(p, 2)->kind == TOK_LT)) {
         try_cast = true;
     } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_BANG) {
-        /* (IDENT!): result-type cast. Unlike (a*), `x!` is a complete
-         * expression (postfix unwrap), so this trigger alone is ambiguous
-         * with a parenthesized unwrap; the RPAREN guard below resolves it. */
+        /* (IDENT!...): a type such as `x!*`; a bare `x!` is an unwrap (see
+         * name_suffix_only below). */
         try_cast = true;
-        bang_cast = true;
     } else if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_DOT) {
         /* Scan past IDENT (.IDENT)* and check for type suffix */
         int ca = 1; /* start at first IDENT */
@@ -1980,13 +1976,9 @@ static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
         /* ca now points to the last IDENT; check what follows */
         if (peek_at(p, ca)->kind == TOK_IDENT) {
             TokenKind after = peek_at(p, ca + 1)->kind;
-            if (after == TOK_STAR || after == TOK_QUESTION || after == TOK_LBRACKET)
+            if (after == TOK_STAR || after == TOK_QUESTION || after == TOK_LBRACKET ||
+                after == TOK_BANG)
                 try_cast = true;
-            if (after == TOK_BANG) {
-                /* (mod.type!): same unwrap ambiguity as (IDENT!) above */
-                try_cast = true;
-                bang_cast = true;
-            }
             /* A plain (mod.type) is not tried: whether the last name is a
              * type is unknown here, and (a.b) is a field access. */
         }
@@ -2002,41 +1994,31 @@ static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
          * parse are held until the cast is confirmed. */
         int save = p->pos;
         int held = diag_speculate_begin();
+        bool name_led = peek_at(p, 1)->kind == TOK_IDENT &&
+                        !type_from_name(peek_at(p, 1)->start, peek_at(p, 1)->length);
         advance_p(p); /* ( */
         Type *target = parse_type(p);
         /* (cstr[N]): bounded str-to-cstr cast. cstr is u8*, and with
          * allow_fixed_array off in expression context parse_type leaves the
          * [N] for this code to claim. */
-        int buffer_size = 0;
+        bool bounded = false;
+        int64_t buffer_size = 0;
         if (is_cstr_type(target) && check(p, TOK_LBRACKET) &&
             peek_at(p, 1)->kind == TOK_INT_LIT && peek_at(p, 2)->kind == TOK_RBRACKET) {
             advance_p(p); /* [ */
-            Token *nt = current(p);
-            bool oor = false;
-            int64_t n = parse_int_value(nt->start, nt->length, &oor);
-            if (oor || n < 1) {
-                diag_error(loc_from_token(nt),
-                           "(cstr[N]) buffer size must be a positive integer, got %lld",
-                           (long long)n);
-                n = 1;
-            }
+            buffer_size = parse_size_literal(current(p));
             advance_p(p); /* N */
             advance_p(p); /* ] */
-            buffer_size = (int)n;
+            bounded = true;
         }
-        if (check(p, TOK_RPAREN) &&
-            !(bang_cast && !token_starts_prefix_expr(peek_at(p, 1)->kind))) {
-            /* A `!`-triggered attempt commits to the cast only when the token
-             * after `)` starts an expression; otherwise `(x!)` is a
-             * parenthesized unwrap, as in `f((x!))` or `(x!) == y`. `(x!) e`
-             * is a cast to type `x!`, meaningless when `x` isn't a type, like
-             * `(a*) b`. */
+        if (check(p, TOK_RPAREN) && !name_suffix_only(target, name_led)) {
             diag_speculate_end(held, true);
             advance_p(p);
             Expr *operand = parse_expr(p, PREC_PREFIX);
             Expr *e = alloc_expr(p, EXPR_CAST, loc);
             e->cast.target = target;
             e->cast.operand = operand;
+            e->cast.bounded = bounded;
             e->cast.buffer_size = buffer_size;
             return e;
         }

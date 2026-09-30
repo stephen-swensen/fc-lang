@@ -1,0 +1,9 @@
+// A `let mut` binding's function is known only at run time (it can be
+// reassigned, even to a capturing closure), so it has no C function pointer.
+// Regression: accepted, yielding the address of the local itself, which
+// could be returned from the function and dangle.
+let handle = () ->
+    let mut f = (x: i32) -> x + 1
+    &f
+
+let main = (args: str[]) -> 0

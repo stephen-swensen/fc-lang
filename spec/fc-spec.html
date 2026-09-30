@@ -921,6 +921,8 @@ let heap_msg = alloc(c"hello %s{name}")!   // heap-allocated cstr, caller must f
 
 Explicit casts use C-style prefix cast syntax: `(T) expr`. All conversions not covered by the implicit widening rules require an explicit cast.
 
+No cast targets an option or result type, so parentheses holding a name or dotted path under `!` or `?` always hold an expression — an unwrap or a propagation — and never a cast: `(y!) - 1` subtracts 1 from the unwrapped `y`, and `(o?) * 2` doubles the propagated payload. Such a suffix under another type still makes a cast target (`(rec!*) p` casts to a pointer), and a built-in type name reads as a cast and is rejected (`(i32!) x`).
+
 **Numeric casts** — any numeric type to any other numeric type:
 
 ```fc
@@ -972,7 +974,7 @@ let s = "hello"
 let cs = (cstr[16]) s   // copy into a 16-byte stack buffer, NUL-terminated
 ```
 
-`(cstr[N])` copies at most `N-1` bytes and always NUL-terminates; a longer string is **truncated** (`strlcpy` semantics). Pick `N` to fit the longest value you expect — too small silently clips the string passed to C. Where a clip would be a bug rather than the intent, wrap the cast in `checked` — `checked (cstr[N]) s` aborts when `s.len > N-1` instead of truncating (§Checked arithmetic). A bare `(cstr) s` (no size) is a **compile error**: its copy is runtime-sized and would grow the frame per loop iteration. The `(cstr)` cast *names the conversion*; the home is named separately, and the same three homes apply as for interpolation. The bounded cast (`(cstr[N])`) carries its own fixed buffer; the two non-truncating homes are reached by wrapping the bare `(cstr)` cast in `alloc`/`alloca`, which give the otherwise-homeless cast a home:
+`N` is a length like any other written size: a positive integer literal within `--len-repr`'s capacity (§Length representation), never silently narrowed. `(cstr[N])` copies at most `N-1` bytes and always NUL-terminates; a longer string is **truncated** (`strlcpy` semantics). Pick `N` to fit the longest value you expect — too small silently clips the string passed to C. Where a clip would be a bug rather than the intent, wrap the cast in `checked` — `checked (cstr[N]) s` aborts when `s.len > N-1` instead of truncating (§Checked arithmetic). A bare `(cstr) s` (no size) is a **compile error**: its copy is runtime-sized and would grow the frame per loop iteration. The `(cstr)` cast *names the conversion*; the home is named separately, and the same three homes apply as for interpolation. The bounded cast (`(cstr[N])`) carries its own fixed buffer; the two non-truncating homes are reached by wrapping the bare `(cstr)` cast in `alloc`/`alloca`, which give the otherwise-homeless cast a home:
 
 ```fc
 // let cs = (cstr) s              // ERROR: unbounded str→cstr cast
@@ -2443,6 +2445,20 @@ let run = () ->
 
 Functions are `let` statements (at the top level) or let binding expressions (when nested) whose value is a lambda. There is no separate `fn` or `def` keyword.
 
+A function is a value like any other, so the binding keyword means what it means everywhere: `let` binds a function for good, and `let mut` makes a **variable holding a function value**, at every scope — top level, module, or local. The variable is reassigned with `=` (to a lambda, a named function, or another function value), and a call through it runs whatever it holds at that moment:
+
+```fc
+let mut on_tick = (dt: f64) -> 0.0      // a variable of type (f64) -> f64
+
+let slow = (dt: f64) -> dt * 0.5
+
+let main = (args: str[]) ->
+    on_tick = slow                       // every later on_tick(...) calls slow
+    0
+```
+
+Because its value can change, a `let mut` function's initializer is an ordinary lambda: it cannot refer to the variable itself (self-recursion needs a `let`), and C cannot be handed a pointer to it (§Address-of). `main` must be a function declared with `let`.
+
 Function overloading — multiple functions sharing the same name with different parameter types — is not supported. Each name resolves to exactly one function. This is not an arbitrary restriction: FC's directional type inference depends on call sites being unambiguous. If multiple candidates existed for a name, the compiler would need to resolve the ambiguity by examining how the result is used or what the arguments are, introducing the kind of global constraint solving the inference model is designed to avoid. See §Type inference as a design theorem.
 
 A lambda is written as `(params) ->` followed by a body expression. For multi-line bodies the body is the indented block on the following lines — the return type is always inferred from the body expression, never annotated.
@@ -2714,11 +2730,11 @@ Semantics of the promoted closure:
 - **The extern boundary is unchanged.** A heap closure still cannot cross to a C function pointer parameter — that limit is the C ABI's missing context channel, not lifetime.
 - **Cost:** one `malloc` of exactly the context struct's size at creation, one `free` at death, zero change to call sites. The generated C is the `void* user_data` pattern a C programmer writes by hand — a malloc'd context struct passed alongside the function pointer.
 >
-> **`extern` function pointer parameters** — when a function type appears as a parameter in an `extern` declaration, the compiler maps it to a plain C function pointer at the C boundary. The programmer passes a non-capturing lambda directly; the compiler extracts the `fn_ptr` field from the fat struct automatically. Passing a capturing lambda to an `extern` function pointer parameter is a compile error.
+> **`extern` function pointer parameters** — when a function type appears as a parameter in an `extern` declaration, the compiler maps it to a plain C function pointer at the C boundary. The programmer passes a function known at compile time directly — a top-level or module function, a non-capturing lambda literal, or a `let` bound to one — and the compiler passes its C calling-convention wrapper. Passing a capturing lambda, or any function value known only at run time, to an `extern` function pointer parameter is a compile error.
 >
 > The compiler may elide the fat-pointer wrapping when it can prove a function value is never used in a first-class manner — never stored, never passed as a `() -> T` parameter. This is an implementation quality optimization, not a language guarantee. Correct code is always generated without it.
 >
-> To obtain a raw C function pointer for direct use (e.g. storing in a C struct field), use `&f` on a non-capturing `let mut` binding — see §Address-of.
+> To obtain a raw C function pointer for direct use (e.g. storing in a C struct field), use `&f` on a function known at compile time — see §Address-of.
 >
 > **Tail-call optimization** — FC does not perform tail-call optimization itself, but the generated C does not close the door on it. A tail-recursive function — whether a top-level function or a self-recursive local lambda (see §Blocks) — compiles to C whose recursive call sits in tail position, and a standard C compiler (e.g. gcc or clang at `-O2`) will turn it into a loop with no stack growth. This is notable for local lambdas specifically: a self-recursive call is emitted in the uniform fat-pointer call form `closure.fn_ptr(arg, closure.ctx)`, an *indirect* call through a function pointer. Because the function value is a compile-time-constant local, the optimizer devirtualizes the call and applies the same tail-call optimization it would to a direct one — so the fat-pointer representation imposes no penalty here. As with the elision above, this is the C compiler's optimization rather than an FC guarantee; FC's contribution is to keep the recursive call in tail position so the optimization remains available.
 
@@ -3203,7 +3219,7 @@ file.fc:3: unwrap failed: r (error code 65537: file_io.not_found)
 
 ### Propagation: `x?`
 
-`x?` is unwrap's forgiving twin. The two postfix operators complete a 2×2 grid with the two type suffixes — types and expressions are disjoint grammatical contexts, so each spelling is unambiguous:
+`x?` is unwrap's forgiving twin. The two postfix operators complete a 2×2 grid with the two type suffixes — types and expressions are disjoint grammatical contexts, so each spelling is unambiguous (inside a cast's parentheses too, since no cast targets an option or result type; §Casting):
 
 |      | type suffix            | expression postfix              |
 |------|------------------------|---------------------------------|
@@ -3340,7 +3356,7 @@ match open(p) with
 
 **When to write `err` vs `error`:** `err` is the result *variant* — it never appears outside constructing or matching a `T!`. `error` is the *code domain* — declaring groups and typing codes — and it never appears inside a result context. The two meet exactly where they should: the `e` in `| err(e)` has type `error`.
 
-**A group is a pseudo-module of `i32` constants, not a type.** `file_io` never appears in type position; members are accessed as `group.member` like any module constant, participate in imports (`import not_found from file_io`), and may be declared inside modules (`io.file.not_found`). The constants' user-facing type is **`error`**, a display alias of `i32` on the `str`/`cstr` precedent: it affects diagnostics and hover only, never equality or semantics. Raw codes flow to and from C boundaries with no casts, `(e: error)` parameters work for free, and literal-code tests (`err(2)`) stay valid. `error` is also usable anywhere a built-in type name is (`(error) x`, `default(error)`, `error[]`).
+**A group is a pseudo-module of `i32` constants, not a type.** `file_io` never appears in type position; members are accessed as `group.member` like any module constant, participate in imports (`import not_found from file_io`), and may be declared inside modules (`io.file.not_found`). For name resolution a group is a module throughout, companions included: a group named like a struct, union or enum pairs with it as a companion module does (§Type-associated modules), so `conn.refused` reaches the group's member while `conn` names the type. A group and a module cannot share a name in one scope, so a type pairs with one or the other; a type that has both functions and error codes nests the group in its companion module. The constants' user-facing type is **`error`**, a display alias of `i32` on the `str`/`cstr` precedent: it affects diagnostics and hover only, never equality or semantics. Raw codes flow to and from C boundaries with no casts, `(e: error)` parameters work for free, and literal-code tests (`err(2)`) stay valid. `error` is also usable anywhere a built-in type name is (`(error) x`, `default(error)`, `error[]`).
 
 **Code-space layout.** A code's value classifies itself:
 
@@ -3435,7 +3451,7 @@ This is a rule about the *binding*, not the value: the contents of a `let` value
 
 `const T*` here means no writes *through this pointer* — not that the value never changes (§The const qualifier). An immutable **global or module-level** `let` is addressable the same way, yielding a `const T*` with static provenance (so it may be returned). Taking an address **through a const path** is likewise a read-only address, not an error: `&(cp.field)` where `cp` is a `const T*` yields a `const F*`.
 
-**Taking the address of a function** — `&f` is valid on a **top-level function** or a **non-capturing `let mut`** lambda; it is *not* valid on a `let`-bound local lambda. Like any `let`, that would be a read-only address, and a const-qualified C function pointer is not a meaningful interop artifact, so the compiler requires `let mut` (or a top-level function) instead. All function values use a fat-pointer representation internally, but a non-capturing lambda has a null context pointer, so the compiler can safely extract the raw `fn_ptr` field and produce a plain C-compatible function pointer.
+**Taking the address of a function** — `&f` yields a plain C function pointer to a function's code, typed `any*`. It is valid exactly where the function is **known at compile time**: a **top-level or module function**, a **non-capturing lambda literal** (`&((a: i32) -> a * 2)`), or a local **`let` bound to a non-capturing lambda literal** (`let f = (a: i32) -> a * 2` then `&f`). The pointer names that code, not a binding's storage, so a `let`'s read-only address rule plays no part, and it has static lifetime: it may be returned or stored anywhere. Any other function value is an error — a `let mut` binding (it may be reassigned, even to a capturing closure), a parameter, a struct field, a call's result — because its function is known only at run time, and C has no way to call a value it cannot name. A capturing closure is rejected for the same reason: a C function pointer has no channel for its context. The pointer is the function's C calling-convention wrapper (see §C Interop), since an FC function takes a hidden context argument that a C caller does not pass; taking `&f` twice yields the same pointer.
 
 In practice, `&f` is rarely needed. When a function type appears in an `extern` parameter declaration, the compiler handles the C function pointer mapping automatically — the programmer passes a non-capturing lambda directly without `&`. See §C Interop.
 
@@ -3576,7 +3592,7 @@ The maximum representable length is 2^63 − 1 (approximately 9.2 exabytes), whi
 
 The `i64` above is the length's **value domain** — the type the programmer sees, on every target, forever. The **stored representation** of the length field is a separate, build-time choice: `fcc --len-repr <16|32|64>` (default `64`) selects the width of the len field in every slice and string, and of the bounds-check comparisons that read it. The type system never sees this knob: `.len` is `i64` under every representation, all length arithmetic is `i64` arithmetic, and a program that compiles under one representation means exactly the same thing under another.
 
-What makes the narrow representations sound is a single invariant: **every stored length is proven to lie within the representation's capacity (`0..32767` for `--len-repr 16`, `0..2^31−1` for `32`) at the point the slice is constructed.** Lengths known at compile time — string literals, slice literals, fixed array sizes (including per-instance const-generic sizes) — are judged statically: a length over capacity is a compile error on that build. Runtime lengths are guarded at the handful of construction sites: a raw-parts construction or runtime-sized `alloca` whose length exceeds capacity aborts with a diagnostic (the slice would describe memory that cannot exist on such a target), and a heap slice allocation (`alloc(T[n] { })`) whose count exceeds capacity reports failure through its ordinary `none` result — an allocation that cannot succeed. After construction, every read of `.len` widens losslessly back to `i64`, so no check ever runs on a read.
+What makes the narrow representations sound is a single invariant: **every stored length is proven to lie within the representation's capacity (`0..32767` for `--len-repr 16`, `0..2^31−1` for `32`) at the point the slice is constructed.** Lengths known at compile time — string literals, slice literals, fixed array sizes (including per-instance const-generic sizes), `(cstr[N])` buffer sizes — are judged statically: a length over capacity is a compile error on that build. Runtime lengths are guarded at the handful of construction sites: a raw-parts construction or runtime-sized `alloca` whose length exceeds capacity aborts with a diagnostic (the slice would describe memory that cannot exist on such a target), and a heap slice allocation (`alloc(T[n] { })`) whose count exceeds capacity reports failure through its ordinary `none` result — an allocation that cannot succeed. After construction, every read of `.len` widens losslessly back to `i64`, so no check ever runs on a read.
 
 This is the same trade C's large-file support and the JVM's compressed references make: a fixed semantic domain, a flag-selected stored width, and a fit check where values enter. Nothing about the language changes across representations — only capacity and cost. Because the semantics are identical, a program built with `--len-repr 16` runs identically on a 64-bit development host (capacity traps included), which is what lets the narrow configurations be exercised by the ordinary test suite rather than an emulator.
 
@@ -3893,7 +3909,7 @@ Function types transpile to C function pointers. When the function type appears 
 >
 > Function values are **opaque** — the compiler never exposes `.fn_ptr` or `.ctx` as accessible fields. The only operation that matters is calling. This is intentional: a function value's internal layout is an implementation detail, and exposing it would be noise for the overwhelming majority of use cases and unsafe for the rest. Constructing a function value from raw parts is not supported.
 >
-> The one place this opacity is pierced is `&f` on a non-capturing function binding, which extracts the raw C function pointer for interop. This is not "address of the function value struct" — it reaches inside and pulls out a field — which means `&f` and `&s` are subtly different operations despite using the same syntax. `&f` is a narrow C interop escape hatch and rarely appears in FC code.
+> The one place this opacity is pierced is `&f` on a function known at compile time, which yields a raw C function pointer for interop. This is not "address of the function value struct" — it names the function's code — which means `&f` and `&s` are subtly different operations despite using the same syntax. `&f` is a narrow C interop escape hatch and rarely appears in FC code.
 
 ---
 
@@ -4763,7 +4779,7 @@ module game =
 
 When a module and union share a name, **module members take priority**. If a name is not found in the module, the compiler falls through to check if it matches a variant of the companion union. This means `shape.area(s)` resolves to the module function, while `shape.circle(5)` resolves to variant construction (since there is no module member named `circle`). If a module member and a variant share the same name, the module member wins.
 
-Companionship is a rule of *name resolution*, not of declaration: a `module` and a same-named `struct` or `union` never shadow each other. The scope at which each half is declared does not matter — they may sit inside an enclosing module (as above), at file top level, or at namespace scope, and they need not be declared or imported together. Wherever both halves are visible under one name in a lexical scope — written side by side, imported as a pair (`import shape from ns::` brings both), or imported separately from different locations (the type from one, the module from another) — the name refers to both at once: `shape.member` checks the module's members first and falls through to a same-named variant on a miss.
+Companionship is a rule of *name resolution*, not of declaration: a `module` and a same-named `struct` or `union` never shadow each other. (An `enum` pairs the same way, and an `error` group counts as a module here, §Named error codes.) The scope at which each half is declared does not matter — they may sit inside an enclosing module (as above), at file top level, or at namespace scope, and they need not be declared or imported together. Wherever both halves are visible under one name in a lexical scope — written side by side, imported as a pair (`import shape from ns::` brings both), or imported separately from different locations (the type from one, the module from another) — the name refers to both at once: `shape.member` checks the module's members first and falls through to a same-named variant on a miss.
 
 ### Qualified type names in diagnostics
 
@@ -6011,7 +6027,7 @@ The programmer is responsible for passing handles to the correct functions — F
 
 **Function pointer parameters in C interop**
 
-FC functions internally carry an extra `void* _ctx` parameter for closure support. When a non-capturing function or lambda is passed to a C extern, the compiler generates a **trampoline** — a thin static wrapper that drops the `_ctx` and matches the C calling convention. This happens automatically; the programmer just passes the function:
+FC functions internally carry an extra `void* _ctx` parameter for closure support. When a function known at compile time is passed to a C extern (or its address is taken with `&f`), the compiler generates a **trampoline** — a thin static wrapper that drops the `_ctx` and matches the C calling convention. This happens automatically; the programmer just passes the function:
 
 ```fc
 module libc from "stdlib.h" =
@@ -6033,21 +6049,27 @@ let main = (args: str[]) ->
     libc.qsort(nums.ptr, 5usize, (usize) sizeof(i32),
         (a: const any*, b: const any*) ->
             *((const i32*) b) - *((const i32*) a))
+
+    // Or name it with a `let` first — the binding stands for the literal
+    let by_last_digit = (a: const any*, b: const any*) ->
+        *((const i32*) a) % 10 - *((const i32*) b) % 10
+    libc.qsort(nums.ptr, 5usize, (usize) sizeof(i32), by_last_digit)
 ```
 
 **What can be passed to extern function parameters:**
 
-The compiler accepts only two forms at an extern call boundary:
+A trampoline wraps one particular function, so the compiler must know at compile time which function it is. It accepts exactly the functions `&f` accepts (§Address-of):
 
-1. **A top-level function name** — `int_compare` in the example above.
+1. **A top-level or module function** — `int_compare` in the example above.
 2. **A non-capturing lambda literal** — written directly at the call site.
+3. **A local `let` bound to a non-capturing lambda literal** — `by_last_digit` above. The binding is immutable, so it always names that literal; a nested lambda that passes it on does not capture it.
 
 Anything else is a compile error. In particular:
 
 - **Capturing lambdas** are rejected — a C function pointer has no way to carry the closure's captured environment.
-- **Local variables of function type** are rejected, even if the value they hold is non-capturing. Once a lambda is assigned to a binding, the compiler only sees the type `(A, B) -> C`, which does not encode whether the value captures. Since the variable could hold either a capturing or non-capturing function at runtime (e.g. from different branches of an `if`), the compiler conservatively rejects it.
+- **Function values known only at run time** are rejected, even if the value they hold is non-capturing: a `let mut` binding (which may be reassigned), a parameter, a struct field, the result of a call or an `if`. The type `(A, B) -> C` does not say which function a value is, or whether it captures.
 
-The workaround is straightforward: inline the lambda at the call site, or hoist it to a top-level `let`.
+The workaround is straightforward: name the function with a `let`, inline the lambda at the call site, or hoist it to a top-level `let`.
 
 C APIs that need stateful callbacks typically provide a `void*` context parameter for this purpose — define a context struct, pass it as `any*`, and cast back inside a non-capturing callback.
 

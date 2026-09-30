@@ -1,0 +1,20 @@
+// &f on a local `let` bound to a non-capturing lambda literal names that
+// literal's code: a C function pointer (its trampoline), known at compile
+// time. It is the same pointer wherever it is taken, including from a nested
+// lambda, which does not capture `f` to do so, and returned from the function
+// that declared `f`. Regression: rejected ("address-of requires mutable
+// binding").
+let handle = () ->
+    let f = (x: i32) -> x + 1
+    &f
+
+let main = (args: str[]) ->
+    let f = (x: i32) -> x * 2
+    let p = &f
+    assert(p != default(any*))
+    assert(p == &f)
+    let nested = () -> &f
+    assert(nested() == p)
+    assert(handle() == handle())
+    assert(handle() != p)
+    0

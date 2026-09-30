@@ -248,3 +248,13 @@ Program *program_merge(Arena *a, Program **files, int count) {
     }
     return prog;
 }
+
+bool decl_is_function(const Decl *d) {
+    return d && d->kind == DECL_LET && !d->let.is_mut && d->let.init &&
+           d->let.init->kind == EXPR_FUNC;
+}
+
+bool decl_is_variable(const Decl *d) {
+    return d && d->kind == DECL_LET && !decl_is_function(d);
+}
+

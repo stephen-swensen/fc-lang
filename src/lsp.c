@@ -1057,21 +1057,24 @@ static void find_in_decls(Decl **decls, int n, FindCtx *c) {
     for (int i = 0; i < n; i++) find_in_decl(decls[i], c);
 }
 
+/* The keyword that declares module `d`: `error` for an error group. */
+static const char *module_keyword(const Decl *d) {
+    return (d && d->kind == DECL_MODULE && d->module.is_error_group) ? "error" : "module";
+}
+
 /* Companion module of a type Symbol: the same-scope DECL_MODULE sharing the
- * type's source name. pass2 stamps this on identifier and module-member
- * references (companion_module); this recovers it for reference hits that
- * carry only the type symbol: annotations and struct-literal type names. */
+ * type's source name (an error group is one too, as in pass2's companion_of).
+ * pass2 stamps this on identifier and module-member references
+ * (companion_module); this recovers it for reference hits that carry only the
+ * type symbol: annotations and struct-literal type names. */
 static Symbol *companion_of_type_sym(AnalysisResult *r, Symbol *ts) {
     if (!ts) return NULL;
     if (ts->kind != DECL_STRUCT && ts->kind != DECL_UNION && ts->kind != DECL_ENUM)
         return NULL;
     const char *iname = intern_cstr(&r->intern, mangled_source_name(ts->name));
-    Symbol *m = ts->parent
+    return ts->parent
         ? symtab_lookup_kind(ts->parent->members, iname, DECL_MODULE)
         : symtab_lookup_module(&r->symtab, iname, ts->ns_prefix);
-    if (m && m->decl && m->decl->kind == DECL_MODULE && m->decl->module.is_error_group)
-        return NULL;   /* error groups only look like modules */
-    return m;
 }
 
 /* Run the position lookup against a document's (unit) analysis. */
@@ -2095,9 +2098,7 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
             } else {
                 const char *kw = dk == DECL_STRUCT ? "struct"
                                : dk == DECL_UNION  ? "union"
-                               : (dd && dd->kind == DECL_MODULE &&
-                                  dd->module.is_error_group) ? "error"
-                               : "module";
+                               : module_keyword(dd);
                 header = arena_sprintf(a, "%s %s", kw, nm);
             }
 
@@ -2110,12 +2111,14 @@ static void handle_hover(LspServer *S, JsonValue *id, JsonValue *params) {
             if (hit.companion) {
                 /* Render the module half whenever the pair exists: a companion
                  * without its own doc comment still gets its `module name`
-                 * fence, so the pairing itself is always visible. HOVER_RULE
-                 * (builtin_docs.inc) separates the two sections. */
+                 * (or `error name`) fence, so the pairing itself is always
+                 * visible. HOVER_RULE (builtin_docs.inc) separates the two
+                 * sections. */
+                const char *ckw = module_keyword(hit.companion->decl);
                 char *comp_sec = comp_md
-                    ? arena_sprintf(a, HOVER_RULE "\n\n```fc\nmodule %s\n```\n\n%s",
-                                    nm, comp_md)
-                    : arena_sprintf(a, HOVER_RULE "\n\n```fc\nmodule %s\n```", nm);
+                    ? arena_sprintf(a, HOVER_RULE "\n\n```fc\n%s %s\n```\n\n%s",
+                                    ckw, nm, comp_md)
+                    : arena_sprintf(a, HOVER_RULE "\n\n```fc\n%s %s\n```", ckw, nm);
                 md = doc_md
                     ? arena_sprintf(a, "```fc\n%s\n```\n\n%s\n\n%s",
                                     header, doc_md, comp_sec)

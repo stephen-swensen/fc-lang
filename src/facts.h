@@ -53,11 +53,12 @@ bool ptr_value_provably_null(const Expr *e);
 bool int_value_provably_nonzero(const Expr *e);
 bool int_value_provably_zero(const Expr *e);
 
-/* Whether function value `e` is code with no context, which C can call as a
- * raw function pointer through a trampoline: a function named at top level
- * or in a module (not a local binding), or a non-capturing lambda. pass2
- * accepts only such a value at an extern call's function parameter; codegen
- * emits a trampoline for exactly these, there and at `&f`. */
+/* Whether function value `e` is code known at compile time, with no context,
+ * which C can call as a raw function pointer through a trampoline: a function
+ * named at top level or in a module, a non-capturing lambda literal, or a
+ * local `let` bound to one (Expr.ident.fn_literal, which pass2 sets). pass2
+ * accepts only such a value at `&f` and at an extern call's function
+ * parameter; codegen emits a trampoline for exactly these. */
 bool fn_value_is_context_free(const Expr *e);
 
 /* If e is a resolved reference to a declared error constant (a member of an

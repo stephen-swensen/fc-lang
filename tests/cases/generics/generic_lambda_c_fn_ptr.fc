@@ -1,0 +1,30 @@
+// A C function pointer to a lambda in a generic body (by `&`, a local `let`
+// bound to one, or an extern argument) gets one C wrapper per instance, typed
+// by that instance. Regression: the wrapper kept the template's type
+// variables, an internal compiler error.
+module libc from "stdlib.h" =
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> i32) -> void
+
+let pick = (n: 'a) -> &((x: 'a) -> x)
+
+let pick_let = (n: 'a) ->
+    let g = (x: 'a) -> x
+    &g
+
+// A generic sort whose comparator is a lambda in the generic body.
+let sort_by_size = (xs: 'a[]) ->
+    let cmp = (a: const any*, b: const any*) -> (i32) sizeof('a) - (i32) sizeof('a)
+    libc.qsort((any*) xs.ptr, (usize) xs.len, (usize) sizeof('a), cmp)
+    libc.qsort((any*) xs.ptr, (usize) xs.len, (usize) sizeof('a),
+        (a: const any*, b: const any*) -> 0)
+
+let main = (args: str[]) ->
+    assert(pick(1) == pick(2))
+    assert(pick(1) != pick(1.5))
+    assert(pick_let(1) == pick_let(3))
+    assert(pick_let(1) != pick_let(true))
+    let mut nums = i32[3] { 3, 1, 2 }
+    sort_by_size(nums)
+    let mut fs = f64[2] { 2.0, 1.0 }
+    sort_by_size(fs)
+    0

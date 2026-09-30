@@ -1,0 +1,11 @@
+// A file- or module-level `let mut` function is a variable, whose function is
+// known only at run time, so it has no C function pointer.
+module m =
+    let mut hook = (x: i32) -> x
+
+let mut handler = (x: i32) -> x
+
+let main = (args: str[]) ->
+    let p = &handler
+    let q = &m.hook
+    0

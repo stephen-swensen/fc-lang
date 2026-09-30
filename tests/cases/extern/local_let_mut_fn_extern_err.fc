@@ -1,10 +1,10 @@
-// Local function variable cannot be passed to extern — only top-level functions
-// and non-capturing lambda literals can be used as C function pointers
+// A `let mut` binding's function is known only at run time, so it cannot be
+// passed to an extern's function parameter.
 module libc from "stdlib.h" =
     extern qsort: (any*, usize, usize, (const any*, const any*) -> i32) -> void
 
 let main = (args: str[]) ->
-    let cmp = (a: const any*, b: const any*) -> *(const i32*) a - *(const i32*) b
+    let mut cmp = (a: const any*, b: const any*) -> *(const i32*) a - *(const i32*) b
     let mut nums = i32[3] { 3, 1, 2 }
     libc.qsort(nums.ptr, 3usize, (usize) sizeof(i32), cmp)
     0

@@ -12,9 +12,6 @@ repeat it and must agree:
     identifier (a built-in operator) has an entry, and every entry names a
     keyword or a built-in global.
 
-It also checks one hand-kept token list in the parser: token_starts_prefix_expr
-names exactly the tokens parse_prefix has a case for.
-
 Run from the repository root; `make check` runs it. Exits 1 on a mismatch.
 """
 import json
@@ -115,21 +112,6 @@ for w in sorted(spec_lists.get("reserved identifiers", set()) - docs):
     fail(f"src/builtin_docs.inc: built-in '{w}' has no hover entry")
 for w in sorted(docs - keywords - NOT_KEYWORDS):
     fail(f"src/builtin_docs.inc: entry '{w}' is neither a keyword nor a built-in global")
-
-# The parser: token_starts_prefix_expr's cases against parse_prefix's.
-parser = read("src/parser.c")
-def switch_tokens(header):
-    start = parser.index(header)
-    end = parser.index("\n}\n", start)
-    body = parser[start:end]
-    return {t for line in re.findall(r"^ {4}case [^\n]*", body, re.M)
-              for t in re.findall(r"TOK_[A-Z_]+", line)}
-prefix = switch_tokens("static Expr *parse_prefix(Parser *p) {")
-starts = switch_tokens("static bool token_starts_prefix_expr(TokenKind k) {")
-for t in sorted(prefix - starts):
-    fail(f"src/parser.c: token_starts_prefix_expr lacks {t}, which parse_prefix parses")
-for t in sorted(starts - prefix):
-    fail(f"src/parser.c: token_starts_prefix_expr names {t}, which parse_prefix does not parse")
 
 if failures:
     for f in failures:

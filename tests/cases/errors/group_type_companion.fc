@@ -1,0 +1,44 @@
+// An error group pairs with a same-named struct, union or enum as its
+// companion, as a module does: `conn.refused` reaches the group's member
+// while `conn` names the type. Declared side by side, inside a module, and
+// brought in by one import of the pair.
+import link from net
+
+struct fail =
+    code: i32
+
+error fail =
+    | bad
+    | worse
+
+module net =
+    struct link =
+        port: i32
+
+    error link =
+        | refused
+        | timeout
+
+    let open = (port: i32) ->
+        if port == 0 then err(link, link.refused) else ok(link { port = port })
+
+let classify = (e: error) ->
+    match e with
+    | fail.bad -> 1
+    | link.refused -> 2
+    | _ -> 3
+
+let main = (args: str[]) ->
+    let f = fail { code = 7 }
+    assert(f.code == 7)
+    assert(classify(fail.bad) == 1)
+    assert(fail.bad != fail.worse)
+    assert(classify(net.link.refused) == 2)
+    assert(classify(link.timeout) == 3)
+    match net.open(0) with
+    | ok(l) -> assert(false)
+    | err(e) -> assert(e == link.refused)
+    match net.open(80) with
+    | ok(l) -> assert(l.port == 80)
+    | err(e) -> assert(false)
+    0
