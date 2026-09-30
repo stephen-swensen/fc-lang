@@ -169,7 +169,8 @@ int main(int argc, char **argv) {
     /* Discover transitive monomorphized instances (generic-calling-generic) */
     mono_discover_transitive(&mono, &arena, &intern_table, &symtab);
 
-    /* Finalize: sort monomorphized types for correct C emission order */
+    /* Finalize: resolve every instance's type names to their C names. (Codegen
+     * orders the type definitions; see emit_types.) */
     mono_finalize_types(&mono, &arena, &intern_table, &symtab);
 
     /* Monomorphization reports its own errors (an infinite instantiation
@@ -185,7 +186,9 @@ int main(int argc, char **argv) {
         output_path = change_extension(input_paths[0], ".c");
     }
 
-    FILE *out = fopen(output_path, "w");
+    /* Opened for update: codegen writes the body, reads it back to choose the
+     * preamble, then rewrites the file from its start. */
+    FILE *out = fopen(output_path, "w+");
     if (!out) {
         diag_fatal_simple("cannot open output '%s'", output_path);
     }
@@ -242,11 +245,7 @@ int main(int argc, char **argv) {
     free(all_tokens);
     args_compile_free(&ca);      /* frees inputs + flags array + output */
     args_expand_free(&expanded); /* frees the token strings flags borrowed */
-    symtab_free(&symtab);
-    file_scopes_free(&file_scopes);
-    free(mono.entries);
-    free(intern_table.entries);  /* hash array is malloc'd; strings live in arena */
-    arena_free(&arena);
+    front_end_free(&symtab, &intern_table, &mono, &file_scopes, &arena);
 
     return 0;
 }

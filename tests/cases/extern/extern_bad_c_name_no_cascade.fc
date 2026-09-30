@@ -1,0 +1,9 @@
+// A malformed extern declaration is reported once and abandoned; the next
+// declaration in the module parses normally.
+module c from "stdio.h" =
+    extern 42 as say: (const cstr) -> i32
+    extern puts: (const cstr) -> i32
+
+let main = (args: str[]) ->
+    let _ = c.puts(c"hi")
+    0

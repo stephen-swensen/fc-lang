@@ -30,8 +30,8 @@ exit code.
 
 | Command | What it does |
 |---------|--------------|
-| `make check` | Everything below that runs in a few minutes: the source checks, `test-all`, `test-all-len16` and `test-lsp`. Run this before sending a change; CI (`.github/workflows/check.yml`) runs it, and `test-vscode`, on every push. |
-| `make check-ascii`, `check-warnings`, `check-keywords`, `check-examples` | The source checks: `src/` is ASCII; the compiler builds warning-free under gcc and clang; every hand-kept keyword list (token names, the spec, both editor grammars) matches the lexer's table (`tools/check-keywords.py`); `spec/examples.fc` compiles and runs. |
+| `make check` | Everything below that runs in a few minutes: the source checks, `test-all`, `test-all-len16` and `test-lsp`. Run this before sending a change. CI (`.github/workflows/check.yml`) runs it and `test-vscode` on every push. |
+| `make check-ascii`, `check-warnings`, `check-keywords`, `check-examples` | The source checks: `src/` is ASCII; the compiler builds warning-free under gcc and clang; every hand-kept keyword list (token names, the spec, both editor grammars) matches the lexer's table, and every built-in operator has hover text (`tools/check-keywords.py`); `spec/examples.fc` compiles and runs. |
 | `make test-all` | The suite under gcc and clang, in parallel. |
 | `make test-gcc` / `make test-clang` | One compiler. |
 | `make test-all-O2` (and `test-gcc-O2`, `test-clang-O2`) | Compile the generated C at `-O2`, which surfaces undefined behavior the optimizer exploits. |
@@ -44,7 +44,7 @@ Add `FILTER=pattern` to run the tests whose `category/name` matches an awk
 (extended) regular expression: `make test-gcc FILTER=closures`,
 `make test-gcc FILTER='^stdlib/data'`. `JOBS=1` runs the suite serially.
 
-The runner (`tests/run_tests.sh`) compiles each test to C with `fcc`,
+The runner (`tests/run_tests.sh`, run from the repository root) compiles each test to C with `fcc`,
 compiles the C with `-std=c11 -Wall -Werror`, runs it and checks the result.
 Because of `-Werror`, every test also checks that `fcc`'s output compiles
 warning-free. Its environment variables are listed at the top of the script;
@@ -81,7 +81,7 @@ together, plus any of these files (note: no leading dot):
 | `expected_exit` | As `.expected_exit` above. |
 | `deps` | Extra source files to compile with the test, one path per line, relative to the repository root (for example `stdlib/io.fc`). Use this rather than copying stdlib files. |
 | `flags` | Conditional-compilation names, one per line; each becomes `--flag <name>`. |
-| `fcc_args` | Literal extra `fcc` arguments, one per line; `#` starts a comment line. For example `--backtraces`, or `@file.rsp`. |
+| `fcc_args` | Literal extra `fcc` arguments, one per line; `#` starts a comment line. For example `--backtraces`, or `@tests/cases/<category>/<test>/file.rsp` (paths resolve from the repository root). |
 | `expected_stderr_contains` | Lines that must each appear in the program's stderr (fixed-string); `#` starts a comment line. For output whose exact layout varies, such as backtraces. |
 | `*.h` | C headers the test's `extern` declarations include; the test's directory is on the C include path. |
 | `skip_windows` | Skip on Windows (MSYS2/UCRT). The backtrace tests use it: frames come from `execinfo`, which that platform lacks. |
@@ -136,6 +136,9 @@ particular:
 - **Decide semantic questions semantically.** The compiler sees the whole
   program, so don't approximate a name-dependent decision with token
   lookahead.
+- **Report user errors in pass1 or pass2 when you can.** The language server
+  stops after pass2, so an error raised by monomorphization or codegen fails
+  the command-line build but never reaches the editor.
 - **Update the spec** when a feature adds or changes a language rule.
 
 ### Language server tests
@@ -166,7 +169,9 @@ one thing at a time.
 ### Debugging a wrong build
 
 - **`fcc` crashes.** Build `make asan` and rerun the command with
-  `build/<os>-asan/fcc`; the report points at the bad access.
+  `build/<os>-asan/fcc`; the report points at the bad access. Set
+  `ASAN_OPTIONS=detect_leaks=0` (as `make test-asan` does): the compiler
+  leaves its memory to process exit, so the leak report is noise.
 - **An internal compiler error.** `internal compiler error: ...` (codegen) or
   `internal: ...` / `unsupported expression kind` (pass2) means a node reached
   a pass in a shape an earlier pass should have rejected or rewritten. The fix
@@ -191,10 +196,21 @@ operation, ...) touches these places:
 3. The expression kind, if it gets one (see the next section).
 4. The language server: a `BUILTIN_DOCS` entry in `src/builtin_docs.inc`,
    keyed by the spelling, and a `consider_builtin` call in `lsp.c`'s node
-   finder so hovering the keyword shows it.
-5. The spec's reserved-words list, and both editor grammars
-   (`editors/vscode/syntaxes/fc.tmLanguage.json`, `editors/vim/fc.vim`).
-   `make check-keywords` fails until these match the lexer.
+   finder (`find_in_expr`) so hovering the keyword shows it; add the keyword
+   to the built-in hover probes in `tests/lsp/lsp_test.py`.
+5. The spec: a section for it, and the word in its "reserved identifiers"
+   list (built-in operators; syntax keywords go in "reserved words"). Both
+   editor grammars (`editors/vscode/syntaxes/fc.tmLanguage.json`,
+   `editors/vim/fc.vim`). `make check-keywords` fails until these match the
+   lexer and the hover entry exists.
+6. `FEATURES.md`, the feature inventory. If the emitted C uses a GNU
+   extension the spec's "GNU extensions required" list lacks, add it there.
+   Runtime helpers the C calls go in `emit_runtime_support` (codegen); a
+   helper that prints to stderr goes in its `STDIO_HELPERS` table. The
+   preamble includes what the emitted body turns out to use.
+
+Tests for an operator or built-in go in `tests/cases/expressions/`, with its
+generic behavior in `generics/`.
 
 ### Adding an expression, pattern, declaration or type kind
 
@@ -204,15 +220,25 @@ operation, ...) touches these places:
    (`-Wswitch`), and those are the ones that must handle every kind: the
    child visitors in `ast.c`, the two dispatchers (`check_expr_inner` in
    pass2, `emit_expr` in codegen), the LSP's node finder, the whole-tree
-   predicates in pass2 (such as `expr_may_yield_stack`), and for a type kind
+   predicates in pass2 (such as `expr_may_yield_stack`), the self-recursion
+   flow (`sr_flow`: whether control can complete through the kind, or leave
+   the function from inside it), codegen's evaluation-order predicates
+   (`expr_has_side_effects`, `expr_structurally_equal`), and for a type kind
    printing, equality, substitution and mangling in `types.c` and `emit_type`
    / `emit_type_ident` / `type_ident_eq` in codegen, which must agree on what
    distinguishes two types. Handle each one; a kind that cannot reach a
    dispatcher gets an explicit internal error there, not a silent default.
 3. Then go through the switches that do have a `default`, since the compiler
-   can't point you at those: `grep -n 'case EXPR_' src/*.c` (or `TYPE_`,
-   `PAT_`, `DECL_`). They answer a question about a few kinds and default the
-   rest; decide whether the new kind belongs in the few.
+   can't point you at those. They answer a question about a few kinds and
+   default the rest; decide whether the new kind belongs in the few. For a new
+   expression kind, these are the ones that usually matter:
+   - `validate_generic_expr` (pass2): the per-instance check of a generic
+     body. A kind whose rule depends on its operand's type needs a case here,
+     or an instance at a type the rule rejects reaches codegen unchecked.
+   - `const_fold_expr`, `is_init_expr` and `const_clone_expr` (pass2):
+     whether the kind is a compile-time constant and may initialize a module
+     constant. The three must agree.
+   For a type or pattern kind: `grep -n 'case TYPE_' src/*.c` (or `PAT_`).
 4. In pass2, check a child whose value the new node consumes (an operand, an
    argument, an element) with `check_operand`, not `check_expr`: it rejects a
    self-recursive call with no base case at that point. A child whose value
@@ -242,6 +268,9 @@ operation, ...) touches these places:
   of code stay in sync; if they must, make the compiler or a test check it.
 - Diagnostics are errors; the compiler has no warnings. A check either
   matters enough to fail the build or isn't made.
+- Codegen trusts the checker but does not guess: an emitter that meets a form
+  it cannot emit reports it with `internal_error` rather than writing
+  something plausible.
 
 ### The standard library
 

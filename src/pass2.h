@@ -9,3 +9,10 @@
  * the AST. Pass the same arena that owns the AST; the caller frees it. */
 void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern, MonoTable *mono,
                   FileImportScopes *file_scopes, Arena *arena);
+
+/* Free the state a compilation's front end built (the tables pass1 and pass2
+ * fill, the instance list, the intern hash array) and then the arena, which
+ * holds the AST, the types and the interned names. fcc and the language
+ * server both tear a compilation down with it. */
+void front_end_free(SymbolTable *symtab, InternTable *intern, MonoTable *mono,
+                    FileImportScopes *file_scopes, Arena *arena);

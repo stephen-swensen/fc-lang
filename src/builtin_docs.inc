@@ -121,6 +121,15 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
       "For invariants that must hold — a violated assert ends the program. Always active; there "
       "is no disable switch." },
 
+    { "static_assert", "static_assert(cond: bool, \"message\")",
+      "Checks `cond` at **compile time**; if it is false the build fails with the message. "
+      "Emits no code and evaluates nothing at runtime — the compile-time twin of `assert`.\n\n"
+      "Over a const parameter (`'n`) it is checked once per instantiation, so it states "
+      "what an instance requires: `static_assert('n % 32 == 0, \"width must be a multiple "
+      "of 32\")`. It may stand in a function body (not inside a branch, loop, `defer` or "
+      "lambda) or among a struct's or union's members. The condition uses constants, const "
+      "parameters and operators only; no function calls." },
+
     { "atomic_load_acquire", "atomic_load_acquire(p: T*) -> T",
       "Atomically reads `*p` with **acquire** ordering: writes another thread released before "
       "storing to `*p` become visible afterward. `T` must be a lock-free integer or `bool` "

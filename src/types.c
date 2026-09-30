@@ -513,6 +513,14 @@ static const char *primitive_names[] = {
     [TYPE_NEVER]   = "never",
 };
 
+/* An operator as written: token_kind_name's spelling without its quotes. */
+static char *append_op_spelling(char *acc, TokenKind op) {
+    const char *q = token_kind_name(op);   /* "'+'" */
+    int n = (int)strlen(q);
+    return n > 2 && q[0] == '\'' ? str_appendf(acc, "%.*s", n - 2, q + 1)
+                                  : str_appendf(acc, "%s", q);
+}
+
 /* Print a const-generic expression tree for diagnostics/hover: binary nodes
  * parenthesized ("('n * 2)"), matching the required source spelling. */
 static char *const_expr_print(char *acc, Expr *e) {
@@ -525,28 +533,14 @@ static char *const_expr_print(char *acc, Expr *e) {
     case EXPR_BOOL_LIT:
         return str_appendf(acc, "%s", e->bool_lit.value ? "true" : "false");
     case EXPR_UNARY_PREFIX:
-        acc = str_appendf(acc, "%s",
-                   e->unary_prefix.op == TOK_TILDE ? "~"
-                 : e->unary_prefix.op == TOK_BANG ? "!" : "-");
+        acc = append_op_spelling(acc, e->unary_prefix.op);
         return const_expr_print(acc, e->unary_prefix.operand);
     case EXPR_BINARY: {
-        const char *op = "?";
-        switch (e->binary.op) {
-        case TOK_PLUS: op = "+"; break;   case TOK_MINUS: op = "-"; break;
-        case TOK_STAR: op = "*"; break;   case TOK_SLASH: op = "/"; break;
-        case TOK_PERCENT: op = "%"; break;
-        case TOK_AMP: op = "&"; break;    case TOK_PIPE: op = "|"; break;
-        case TOK_CARET: op = "^"; break;
-        case TOK_LTLT: op = "<<"; break;  case TOK_GTGT: op = ">>"; break;
-        case TOK_EQEQ: op = "=="; break;  case TOK_BANGEQ: op = "!="; break;
-        case TOK_LT: op = "<"; break;     case TOK_GT: op = ">"; break;
-        case TOK_LTEQ: op = "<="; break;  case TOK_GTEQ: op = ">="; break;
-        case TOK_AMPAMP: op = "&&"; break; case TOK_PIPEPIPE: op = "||"; break;
-        default: break;
-        }
         acc = str_appendf(acc, "(");
         acc = const_expr_print(acc, e->binary.left);
-        acc = str_appendf(acc, " %s ", op);
+        acc = str_appendf(acc, " ");
+        acc = append_op_spelling(acc, e->binary.op);
+        acc = str_appendf(acc, " ");
         acc = const_expr_print(acc, e->binary.right);
         return str_appendf(acc, ")");
     }
@@ -816,6 +810,12 @@ Type *type_from_int_suffix(const char *suffix, int len) {
     return NULL;
 }
 
+Type *type_from_float_suffix(const char *suffix, int len) {
+    if (len == 3 && memcmp(suffix, "f32", 3) == 0) return type_float32();
+    if (len == 3 && memcmp(suffix, "f64", 3) == 0) return type_float64();
+    return NULL;
+}
+
 /* The built-in type names and the types they denote. */
 #define PRIM(s, fn) { s, (int)sizeof(s) - 1, fn }
 static const struct { const char *n; int l; Type *(*fn)(void); } PRIMITIVE_TYPES[] = {
@@ -899,8 +899,10 @@ bool type_fixed_array_size(Type *t, int64_t *out) {
 /* ---- Const-generic expression evaluation ----
  *
  * A TYPE_CONST_EXPR carries a pass2-normalized expression tree whose only
- * nodes are integer literals, const-param references (EXPR_TYPE_VAR_REF),
- * binary arithmetic/bitwise ops, unary -/~, and fixed-width integer casts.
+ * nodes are integer and bool literals, const-param references
+ * (EXPR_TYPE_VAR_REF), binary arithmetic, bitwise, comparison and logical
+ * operators, unary - ~ and !, and fixed-width integer casts (the node set
+ * const_expr_node_ok admits; static_assert conditions use the boolean ones).
  * Evaluation is context-free, over int64_t with two's-complement wrap and
  * masked shifts (the semantics of pass2's try_eval_const), so it can run
  * inside type_substitute and monomorph's substitute_type_args, which have no
@@ -921,9 +923,33 @@ bool const_eval_error_pending(void) {
     return g_const_eval_err != NULL;
 }
 
-static void const_eval_fail(Expr *e, const char *msg) {
+static void const_eval_fail(const Expr *e, const char *msg) {
     /* First failure wins: it names the innermost real cause. */
-    if (!g_const_eval_err) { g_const_eval_err = msg; g_const_eval_err_loc = e->loc; }
+    if (!g_const_eval_err) {
+        g_const_eval_err = msg;
+        g_const_eval_err_loc = e ? e->loc : (SrcLoc){0};
+    }
+}
+
+/* The value const parameter `name` is bound to under (var_names, concrete,
+ * count). True with *out when it is bound to a value. False with no error when
+ * it is unbound or bound to another symbolic parameter (a generic body naming
+ * wide<'n> with the caller's own 'n): the expression stays symbolic. False
+ * with an error stashed (at `at`, which may be NULL) when it is bound to a
+ * type. */
+static bool const_param_value(const char *name, const Expr *at, const char **var_names,
+                              Type **concrete, int count, int64_t *out) {
+    for (int i = 0; i < count; i++) {
+        if (var_names[i] != name) continue;
+        if (concrete[i]->kind == TYPE_CONST_INT) {
+            *out = concrete[i]->const_int.value;
+            return true;
+        }
+        if (concrete[i]->kind != TYPE_TYPE_VAR && concrete[i]->kind != TYPE_CONST_EXPR)
+            const_eval_fail(at, "generic parameter used as a constant is bound to a type");
+        return false;
+    }
+    return false;
 }
 
 uint64_t const_mask_extend(uint64_t v, int width, bool is_signed) {
@@ -943,6 +969,33 @@ bool const_op_yields_bool(TokenKind op) {
     default:
         return false;
     }
+}
+
+ConstOpStatus const_unary_op(TokenKind op, uint64_t v, int width, bool is_signed,
+                             uint64_t *out) {
+    switch (op) {
+    case TOK_MINUS: *out = const_mask_extend(0 - v, width, is_signed); return CONST_OP_OK;
+    case TOK_TILDE: *out = const_mask_extend(~v, width, is_signed);    return CONST_OP_OK;
+    case TOK_BANG:  *out = v == 0;                                      return CONST_OP_OK;
+    default:        return CONST_OP_UNSUPPORTED;
+    }
+}
+
+bool const_binary_op_supported(TokenKind op) {
+    uint64_t r;
+    return const_binary_op(op, 0, 1, 64, true, &r) != CONST_OP_UNSUPPORTED;
+}
+
+bool const_unary_op_supported(TokenKind op) {
+    uint64_t r;
+    return const_unary_op(op, 0, 64, true, &r) != CONST_OP_UNSUPPORTED;
+}
+
+bool const_cast_value(Type *target, uint64_t v, uint64_t *out) {
+    int w = target ? type_fixed_int_bits(target) : 0;
+    if (w == 0) return false;
+    *out = const_mask_extend(v, w, type_is_signed(target));
+    return true;
 }
 
 ConstOpStatus const_binary_op(TokenKind op, uint64_t l, uint64_t r, int width,
@@ -1024,32 +1077,20 @@ static bool const_expr_eval(Expr *e, bool typed, const char **var_names,
         *out = e->bool_lit.value ? 1 : 0;
         return true;
     case EXPR_TYPE_VAR_REF: {
-        for (int i = 0; i < count; i++) {
-            if (var_names[i] == e->type_var_ref.name) {
-                if (concrete[i]->kind == TYPE_CONST_INT) {
-                    int64_t v = concrete[i]->const_int.value;
-                    int w; bool sg;
-                    const_eval_width(e, typed, &w, &sg);
-                    if ((int64_t)const_mask_extend((uint64_t)v, w, sg) != v) {
-                        const_eval_fail(e, "const parameter does not fit i32 in expression "
-                            "position (a const parameter is an i32 where it is read as a "
-                            "value; a value this large is usable only in a type or size "
-                            "position)");
-                        return false;
-                    }
-                    *out = v;
-                    return true;
-                }
-                /* Bound to another symbolic param (a generic body naming
-                 * wide<'n> with the caller's own 'n): stays symbolic. */
-                if (concrete[i]->kind == TYPE_TYPE_VAR ||
-                    concrete[i]->kind == TYPE_CONST_EXPR)
-                    return false;
-                const_eval_fail(e, "generic parameter used as a constant is bound to a type");
-                return false;
-            }
+        int64_t v;
+        if (!const_param_value(e->type_var_ref.name, e, var_names, concrete, count, &v))
+            return false;
+        int w; bool sg;
+        const_eval_width(e, typed, &w, &sg);
+        if ((int64_t)const_mask_extend((uint64_t)v, w, sg) != v) {
+            const_eval_fail(e, "const parameter does not fit i32 in expression "
+                "position (a const parameter is an i32 where it is read as a "
+                "value; a value this large is usable only in a type or size "
+                "position)");
+            return false;
         }
-        return false;   /* unbound: stay symbolic, no error */
+        *out = v;
+        return true;
     }
     case EXPR_UNARY_PREFIX: {
         int64_t v;
@@ -1057,14 +1098,13 @@ static bool const_expr_eval(Expr *e, bool typed, const char **var_names,
             return false;
         int w; bool sg;
         const_eval_width(e, typed, &w, &sg);
-        switch (e->unary_prefix.op) {
-        case TOK_MINUS: *out = (int64_t)const_mask_extend(0 - (uint64_t)v, w, sg); return true;
-        case TOK_TILDE: *out = (int64_t)const_mask_extend(~(uint64_t)v, w, sg);    return true;
-        case TOK_BANG:  *out = (v == 0) ? 1 : 0;                                    return true;
-        default:
+        uint64_t res;
+        if (const_unary_op(e->unary_prefix.op, (uint64_t)v, w, sg, &res) != CONST_OP_OK) {
             const_eval_fail(e, "operator not allowed in a const-generic expression");
             return false;
         }
+        *out = (int64_t)res;
+        return true;
     }
     case EXPR_BINARY: {
         int64_t l, r;
@@ -1094,12 +1134,12 @@ static bool const_expr_eval(Expr *e, bool typed, const char **var_names,
     case EXPR_CAST: {
         int64_t v;
         if (!const_expr_eval(e->cast.operand, typed, var_names, concrete, count, &v)) return false;
-        int w = e->cast.target ? type_fixed_int_bits(e->cast.target) : 0;
-        if (w == 0) {
+        uint64_t res;
+        if (!const_cast_value(e->cast.target, (uint64_t)v, &res)) {
             const_eval_fail(e, "cast in a const-generic expression must target a fixed-width integer type");
             return false;
         }
-        *out = (int64_t)const_mask_extend((uint64_t)v, w, type_is_signed(e->cast.target));
+        *out = (int64_t)res;
         return true;
     }
     default:
@@ -1120,28 +1160,44 @@ bool const_type_eval(Type *t, const char **var_names, Type **concrete,
                      int count, int64_t *out) {
     if (!t) return false;
     if (t->kind == TYPE_CONST_INT) { *out = t->const_int.value; return true; }
-    if (t->kind == TYPE_TYPE_VAR) {
-        for (int i = 0; i < count; i++) {
-            if (var_names[i] != t->type_var.name) continue;
-            if (concrete[i]->kind == TYPE_CONST_INT) {
-                *out = concrete[i]->const_int.value;
-                return true;
-            }
-            /* Bound to another symbolic param: stays symbolic, no error. */
-            if (concrete[i]->kind == TYPE_TYPE_VAR ||
-                concrete[i]->kind == TYPE_CONST_EXPR)
-                return false;
-            if (!g_const_eval_err) {
-                g_const_eval_err = "generic parameter used as a constant is bound to a type";
-                g_const_eval_err_loc = (SrcLoc){0};
-            }
-            return false;
-        }
-        return false;
-    }
+    if (t->kind == TYPE_TYPE_VAR)
+        return const_param_value(t->type_var.name, NULL, var_names, concrete, count, out);
     if (t->kind == TYPE_CONST_EXPR)
         return const_expr_eval(t->const_expr.expr, false, var_names, concrete, count, out);
     return false;
+}
+
+Type *type_byval_aggregate(Type *t) {
+    if (!t) return NULL;
+    switch (t->kind) {
+    case TYPE_STUB:
+    case TYPE_STRUCT:
+    case TYPE_UNION:       return t;
+    case TYPE_FIXED_ARRAY: return type_byval_aggregate(t->fixed_array.elem);
+    /* An option's value-first struct embeds its inner; a null-sentinel
+     * option's inner is a pointer, which ends the walk. */
+    case TYPE_OPTION:      return type_byval_aggregate(t->option.inner);
+    case TYPE_RESULT:      return type_byval_aggregate(t->result.inner);
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_POINTER:
+    case TYPE_SLICE:
+    case TYPE_FUNC:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
+    }
+    return NULL;
+}
+
+bool option_inner_is_null_sentinel(const Type *inner) {
+    return inner && (inner->kind == TYPE_POINTER || inner->kind == TYPE_ANY_PTR);
 }
 
 bool type_needs_eq_func(Type *t) {
@@ -1154,8 +1210,8 @@ bool type_needs_eq_func(Type *t) {
     case TYPE_FIXED_ARRAY:
         return true;
     case TYPE_OPTION:
-        /* Pointer options use C native == (NULL for none) */
-        return !(t->option.inner && t->option.inner->kind == TYPE_POINTER);
+        /* A null-sentinel option is a pointer: C's == (NULL for none) */
+        return !option_inner_is_null_sentinel(t->option.inner);
     case TYPE_RESULT:
         /* Always the { err; value } struct; no sentinel specialization */
         return true;
@@ -1184,7 +1240,8 @@ bool type_needs_eq_func(Type *t) {
  * visits each shared node twice per level: O(2^depth). A divergent generic
  * (e.g. f(wrap{v=x}) instantiating f<wrap<'a>> -> f<wrap<wrap<'a>>> -> ...)
  * builds such chains. A set of struct/union/stub nodes already proven free of
- * type vars keeps the walk O(nodes): a `true` result returns all the way out,
+ * type vars visits each node once (the set itself is a linear scan, so a
+ * lookup costs its size, which stays small): a `true` result returns all the way out,
  * so only the clean (false) results need memoizing. The set holds only the
  * branching nodes (struct/union/stub); single-child constructors
  * (pointer/option/slice/array) cannot compound a revisit. */
@@ -1284,18 +1341,19 @@ typedef struct {
     void *ctx;
 } VarWalk;
 
+static void const_expr_walk_vars_child(Expr *e, void *w);
+
 static void const_expr_walk_vars(VarWalk *w, Expr *e) {
     if (!e) return;
-    switch (e->kind) {
-    case EXPR_TYPE_VAR_REF: w->visit(e->type_var_ref.name, GP_CONST, w->ctx); return;
-    case EXPR_UNARY_PREFIX: const_expr_walk_vars(w, e->unary_prefix.operand); return;
-    case EXPR_BINARY:
-        const_expr_walk_vars(w, e->binary.left);
-        const_expr_walk_vars(w, e->binary.right);
+    if (e->kind == EXPR_TYPE_VAR_REF) {
+        w->visit(e->type_var_ref.name, GP_CONST, w->ctx);
         return;
-    case EXPR_CAST: const_expr_walk_vars(w, e->cast.operand); return;
-    default: return;
     }
+    expr_for_each_child(e, const_expr_walk_vars_child, w);
+}
+
+static void const_expr_walk_vars_child(Expr *e, void *w) {
+    const_expr_walk_vars(w, e);
 }
 
 static uint8_t arg_slot_kind(VarWalk *w, Type *named, int i) {
@@ -1410,6 +1468,7 @@ static Expr *const_expr_subst(Arena *a, Expr *e, const char **var_names,
                 lit->kind = EXPR_INT_LIT;
                 lit->loc = e->loc;
                 lit->int_lit.value = (uint64_t)concrete[i]->const_int.value;
+                lit->int_lit.negative = concrete[i]->const_int.value < 0;
                 return lit;
             }
             if (concrete[i]->kind == TYPE_TYPE_VAR &&
@@ -1695,6 +1754,24 @@ static char *mangle_tagged(const char *tag, Type *inner) {
  *   - Multi-component manglings (function params, plus the generic/tuple joins
  *     below) length-prefix each component, so a '_' inside one component is
  *     never mistaken for a component boundary. */
+const char *instance_base_name(Type *t) {
+    Symbol *sym;
+    switch (t->kind) {
+    case TYPE_STRUCT:
+        sym = t->struc.resolved_sym;
+        return sym && sym->type && sym->type->kind == TYPE_STRUCT && sym->type->struc.name
+            ? sym->type->struc.name : t->struc.name;
+    case TYPE_UNION:
+        sym = t->unio.resolved_sym;
+        return sym && sym->type && sym->type->kind == TYPE_UNION && sym->type->unio.name
+            ? sym->type->unio.name : t->unio.name;
+    case TYPE_STUB:
+        return t->stub.base_name ? t->stub.base_name : t->stub.name;
+    default:
+        return NULL;
+    }
+}
+
 char *mangle_type_name(Type *t) {
     if (!t) return str_dup("void");
     /* Const types get a "__c" structural tag. Only pointer/slice/any* carry a
@@ -1735,23 +1812,15 @@ char *mangle_type_name(Type *t) {
          * name set by pass1) when available, which makes the spelling
          * idempotent: re-mangling a node already renamed in place to its
          * instance name cannot double-mangle. */
-        if (t->struc.type_arg_count > 0) {
-            const char *base = t->struc.name;
-            Symbol *sym = t->struc.resolved_sym;
-            if (sym && sym->type && sym->type->kind == TYPE_STRUCT && sym->type->struc.name)
-                base = sym->type->struc.name;
-            return mangle_with_args(base, t->struc.type_args, t->struc.type_arg_count);
-        }
+        if (t->struc.type_arg_count > 0)
+            return mangle_with_args(instance_base_name(t), t->struc.type_args,
+                                    t->struc.type_arg_count);
         return str_dup(t->struc.name);
     case TYPE_UNION:
         /* Same structural spelling as the TYPE_STRUCT arm above. */
-        if (t->unio.type_arg_count > 0) {
-            const char *base = t->unio.name;
-            Symbol *sym = t->unio.resolved_sym;
-            if (sym && sym->type && sym->type->kind == TYPE_UNION && sym->type->unio.name)
-                base = sym->type->unio.name;
-            return mangle_with_args(base, t->unio.type_args, t->unio.type_arg_count);
-        }
+        if (t->unio.type_arg_count > 0)
+            return mangle_with_args(instance_base_name(t), t->unio.type_args,
+                                    t->unio.type_arg_count);
         return str_dup(t->unio.name);
     case TYPE_ENUM:    return str_dup(t->enu.name);
     case TYPE_STUB:
@@ -1763,8 +1832,8 @@ char *mangle_type_name(Type *t) {
          * name, distinct instantiations would collide and resolve the wrong C
          * type name. A stub already renamed in place to its instance name
          * spells from its recorded base, so re-mangling it is idempotent. */
-        return mangle_with_args(t->stub.base_name ? t->stub.base_name : t->stub.name,
-                                t->stub.type_args, t->stub.type_arg_count);
+        return mangle_with_args(instance_base_name(t), t->stub.type_args,
+                                t->stub.type_arg_count);
     case TYPE_TYPE_VAR: return str_dup(t->type_var.name);
     case TYPE_ANY_PTR: return str_dup("__y");
     case TYPE_ERROR:   return str_dup("__err"); /* defensive: never monomorphized */
@@ -1937,7 +2006,14 @@ int type_fixed_int_bits(Type *t) {
     }
 }
 
-/* The one list of numeric type properties. Every reader (type checking, the
+bool type_enum_count_is(Type *t, const char *name) {
+    if (!t || t->kind != TYPE_ENUM || strcmp(name, ENUM_COUNT_PROPERTY) != 0) return false;
+    for (int i = 0; i < t->enu.variant_count; i++)
+        if (strcmp(t->enu.variants[i].name, name) == 0) return false;
+    return true;
+}
+
+/* The one list of numeric type properties (an enum's is type_enum_count_is). Every reader (type checking, the
  * per-instance check, editor completion) goes through type_property_type. */
 static const struct {
     const char *name;

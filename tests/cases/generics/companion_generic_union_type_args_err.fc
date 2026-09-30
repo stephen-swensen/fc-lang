@@ -1,0 +1,12 @@
+// A generic union with a companion module needs its type arguments written to
+// build a no-payload variant, as it does without the companion.
+union maybe =
+    | nothing
+    | just('a)
+
+module maybe =
+    let tag = 1
+
+let main = (args: str[]) ->
+    let x = maybe.nothing
+    0

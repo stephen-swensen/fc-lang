@@ -1,0 +1,8 @@
+// A written cast does not hide a negative literal length: in const context
+// there is no runtime guard, so `(i64) -1` must be caught statically as `-1`
+// is.
+module m =
+    let bad = u8[] { ptr = (u8*) 0xA0000usize, len = (i64) -1 }
+
+let main = (args: str[]) ->
+    (i32) m.bad.len

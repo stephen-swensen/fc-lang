@@ -37,8 +37,9 @@ struct JsonValue {
     };
 };
 
-/* Parse `text` (length `len`). Returns NULL on malformed input. Tolerates
- * leading/trailing whitespace. */
+/* Parse the value at the start of `text` (length `len`), after any leading
+ * whitespace. Returns NULL when that value is malformed; anything after it is
+ * ignored. */
 JsonValue *json_parse(Arena *a, const char *text, int len);
 
 /* Constructors (all arena-allocated). json_str/json_strn copy the bytes. */

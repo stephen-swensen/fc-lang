@@ -1,0 +1,16 @@
+// Every integer and float suffix, in each base that takes one, types its
+// literal.
+let main = (args: str[]) ->
+    let a = 1i8 + 2i8
+    let b = 1u16 + 0xffu16
+    let c = 0b101i32 + 0o17i32
+    let d = 3i64
+    let h = 4isize + 5isize
+    let k = 5usize - 4usize
+    let e = 1u8 + 1u32 + 1u64 - 1u64 - 1u32 - 1u8
+    let f = 2.5f32 + 1e3f32 + 0x1.8p3f32
+    let g = 2.5f64 + 0x1p4
+    assert(a == 3i8 && b == 256u16 && c == 20 && d == 3i64 && e == 0u8)
+    assert(h == 9isize && k == 1usize)
+    assert(f == 1014.5f32 && g == 18.5)
+    0

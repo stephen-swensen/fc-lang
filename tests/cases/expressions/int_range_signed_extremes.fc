@@ -1,0 +1,20 @@
+// The extremes of each signed type are in range written with and without a
+// minus, as are a double negation and a negated zero.
+let f = (x: i8) ->
+    match x with
+    | -128i8 -> 1
+    | 127i8 -> 2
+    | _ -> 0
+
+let main = (args: str[]) ->
+    let a = -128i8
+    let b = 127i8
+    let c = -9223372036854775808i64
+    let d = 9223372036854775807i64
+    let e = -2147483648
+    let g = -(-5)
+    let h = -0i8
+    assert(a == i8.min && b == i8.max && c == i64.min && d == i64.max)
+    assert(e == i32.min && g == 5 && h == 0i8)
+    assert(f(-128i8) == 1 && f(127i8) == 2 && f(0i8) == 0)
+    0

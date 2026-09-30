@@ -1,0 +1,25 @@
+// == on a generic 'a? is decided per instance: a pointer inner makes the
+// option a bare pointer, compared with C's ==, and any other inner a struct
+// with a generated comparison. Regression: an instance at a pointer called a
+// struct comparison that was never generated, and the C failed to compile.
+struct pt =
+    x: i32
+    y: i32
+
+let same = (a: 'a?, b: 'a?) -> a == b
+
+let main = (args: str[]) ->
+    let mut x = 5
+    let mut y = 6
+    let p = some(&x)
+    assert(same(p, p))
+    assert(!same(p, some(&y)))
+    assert(!same(p, none(i32*)))
+    let q = some((any*) &x)
+    assert(same(q, q))
+    assert(!same(q, none(any*)))
+    assert(same(some(3), some(3)))
+    assert(!same(some(3), none(i32)))
+    assert(same(some(pt { x = 1, y = 2 }), some(pt { x = 1, y = 2 })))
+    assert(!same(some(pt { x = 1, y = 2 }), some(pt { x = 1, y = 3 })))
+    0

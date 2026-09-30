@@ -103,6 +103,12 @@ PUBS = []   # (uri, [messages]) of every publishDiagnostics of the LAST run_sess
             # in order — for assertions about the URI itself, which the basename
             # keys of `diags_by_file` cannot distinguish.
 
+def record_crash(returncode, err_text):
+    """A signal (crash) or a sanitizer report fails the run, whatever the
+    scenario's own checks say."""
+    if returncode < 0 or "Sanitizer" in err_text or "runtime error:" in err_text:
+        CRASHES.append((len(CRASHES) + 1, returncode, err_text[:2000]))
+
 def run_session(messages, env=None):
     """Spawn `fcc --lsp`, send framed messages, return (responses{id}, diags[],
     diags_by_file{name->[msgs]}, returncode, stderr)."""
@@ -110,11 +116,7 @@ def run_session(messages, env=None):
     inp = b"".join(frame(m) for m in messages)
     p = subprocess.run([BIN, "--lsp"], input=inp, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE, timeout=60, env=env)
-    # A signal (crash) or a sanitizer report fails the run, whatever the
-    # scenario's own checks say.
-    err_text = p.stderr.decode(errors="replace")
-    if p.returncode < 0 or "Sanitizer" in err_text or "runtime error:" in err_text:
-        CRASHES.append((len(CRASHES) + 1, p.returncode, err_text[:2000]))
+    record_crash(p.returncode, p.stderr.decode(errors="replace"))
     responses, diags, by_file = {}, [], {}
     out, i = p.stdout, 0
     while True:
@@ -1029,7 +1031,7 @@ check("lsp.rsp project-wide: the unopened member's error clears when the dep is 
       pwrapp and pwrapp[-1] == [], str(pwrapp))
 
 # --- built-in intrinsic hover: alloc/alloca/free/some/none/default/sizeof/
-# alignof/assert/atomics and the stdin/stdout/stderr globals are not user
+# alignof/assert/static_assert/atomics and the stdin/stdout/stderr globals are not user
 # declarations, so they carry curated documentation surfaced on hover.
 bid = tmpdir("fc_lsp_builtins_")
 BUILTIN_LINES = [
@@ -1050,7 +1052,8 @@ BUILTIN_LINES = [
     "    let cur = atomic_load_acquire(&counter)",      # 14
     "    assert(cur == 1)",                             # 15
     "    let h = stdout",                               # 16
-    "    return 0",                                     # 17
+    "    static_assert(1 < 2, \"ordered\")",            # 17
+    "    return 0",                                     # 18
 ]
 BUILTINS = "\n".join(BUILTIN_LINES) + "\n"
 biuri = "file://" + os.path.join(bid, "doc.fc")
@@ -1068,6 +1071,7 @@ probes = [
     (29, 14, "atomic_load_acquire",  "visible afterward"),
     (30, 15, "assert",               "calls `abort()`"),
     (31, 16, "stdout",               "standard output stream"),
+    (32, 17, "static_assert",        "at **compile time**"),
 ]
 bm = [
     req(1, "initialize", {"capabilities": {}}),
@@ -1262,6 +1266,7 @@ else:
             proc.kill()
             proc.wait(timeout=5)
         ierr = proc.stderr.read() or b""
+    record_crash(proc.returncode, ierr.decode(errors="replace"))
 
     check("interactive: a paused didOpen is published by the idle flush (no request forced it)",
           p1 is not None and len(p1) == 1 and p1[0] == [], str(p1))
@@ -2092,6 +2097,8 @@ for rid, _, line, token in IMP_PROBES:
     imp.append(req(rid + 100, "textDocument/definition",
                    {"textDocument": {"uri": impuri}, "position": pos}))
 imp += [
+    req(60, "textDocument/completion", {"textDocument": {"uri": impuri},
+        "position": {"line": 11, "character": IL[11].index("bump")}}),
     note("textDocument/didChange", {"textDocument": {"uri": impuri, "version": 2},
          "contentChanges": [{"text": IMP_BAD}]}),
     req(50, "textDocument/hover", {"textDocument": {"uri": impuri},
@@ -2165,6 +2172,15 @@ check("imports: go-to-definition on the `from` module lands on its declaration",
 check("imports: a wildcard import's module resolves (there is no name to hover)",
       "module outer" in imp_hov(18) and imp_def(18) == ("lib.fc", 1, 0),
       repr((imp_hov(18), imp_def(18))))
+def imp_item_kinds(rid):
+    r = impresp.get(rid, {}).get("result")
+    items = r if isinstance(r, list) else (r or {}).get("items") or []
+    return {it.get("label"): it.get("kind") for it in items}
+# Completion kind 3 is Function, 9 Module: an import completes as the kind of
+# symbol it imports, as a declaration in the file does.
+check("imports: a module-body import completes as the kind of what it imports",
+      imp_item_kinds(60).get("bump") == 3 and imp_item_kinds(60).get("inner") == 9,
+      repr({n: imp_item_kinds(60).get(n) for n in ("bump", "inner")}))
 check("imports: an import inside a module body resolves its name",
       "bump: (i32) -> i32" in imp_hov(21) and "Adds one." in imp_hov(21)
       and imp_def(21) == ("lib.fc", 5, 8), repr((imp_hov(21), imp_def(21))))
@@ -2596,7 +2612,8 @@ for m in [note("textDocument/didChange", {"textDocument": {"uri": rb, "version":
                                           "contentChanges": [{"text": RSRC + "\n"}]}),
           rhover(3, ra), req(9, "shutdown", None), note("exit", None)]:
     p1.stdin.write(frame(m))
-rout, _ = p1.communicate(timeout=60)
+rout, rerr = p1.communicate(timeout=60)
+record_crash(p1.returncode, rerr.decode(errors="replace"))
 rres, i = {}, 0
 while True:
     h = rout.find(b"\r\n\r\n", i)
@@ -2606,6 +2623,34 @@ while True:
     if "id" in o and "method" not in o: rres[o["id"]] = o.get("result")
 check("an lsp.rsp appearing beside an open, unedited file keeps its hover working",
       rres.get(3) is not None and "i32" in json.dumps(rres.get(3)), json.dumps(rres.get(3)))
+
+# --- a document an lsp.rsp does not list: it is analyzed with its directory in a
+# unit of its own, the same whichever file opens first, and told why; the rsp's
+# own files report only what `fcc @lsp.rsp` would ---
+up = tmpdir("fc_lsp_rsp_unlisted_")
+rwrite(os.path.join(up, "a.fc"), "let helper = (n: i32) -> n + 1\n\nlet main = (args: str[]) -> helper(1)\n")
+rwrite(os.path.join(up, "b.fc"), "let other = (n: i32) -> n + true\n")
+rwrite(os.path.join(up, "lsp.rsp"), "a.fc\n")
+for order in (["a.fc", "b.fc"], ["b.fc", "a.fc"]):
+    msgs = [req(1, "initialize", {"capabilities": {}}), note("initialized", {})]
+    for name in order:
+        path = os.path.join(up, name)
+        msgs.append(note("textDocument/didOpen", {"textDocument": {"uri": "file://" + path,
+            "languageId": "fc", "version": 1, "text": open(path).read()}}))
+    msgs += [req(2, "textDocument/hover", {"textDocument": {"uri": "file://" + os.path.join(up, "b.fc")},
+                 "position": {"line": 0, "character": 5}}),
+             req(9, "shutdown", None), note("exit", None)]
+    ur_, _, ubf, _, _ = run_session(msgs)
+    tag = " then ".join(order)
+    amsgs = ubf.get("a.fc", [["?"]])[-1]
+    bmsgs = ubf.get("b.fc", [[]])[-1]
+    check(f"lsp.rsp unlisted file ({tag}): the listed file reports nothing the CLI would not",
+          amsgs == [], str(amsgs))
+    check(f"lsp.rsp unlisted file ({tag}): the unlisted file is analyzed and told why",
+          any("not listed in" in m for m in bmsgs) and any("numeric operands" in m for m in bmsgs),
+          str(bmsgs))
+    check(f"lsp.rsp unlisted file ({tag}): hover works in the unlisted file",
+          (ur_.get(2) or {}).get("result") is not None, json.dumps(ur_.get(2))[:200])
 
 # --- a declaration name that begins with an underscore -------------------------
 # The mangled C name (`fc__m___x`) splits into the component `_x`, not `x`.

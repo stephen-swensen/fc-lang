@@ -1,0 +1,20 @@
+// Division evaluates its operands left to right, like every binary operator:
+// a float `/` and an unsigned `/` under `unguarded` (the divisions with no
+// guard of their own to sequence them) included. C leaves the order
+// unspecified, so the emitted C must fix it.
+let next = (p: i32*) ->
+    *p = *p + 1
+    (f64)*p
+
+let nextu = (p: u32*) ->
+    *p = *p + 1u32
+    *p
+
+let main = (args: str[]) ->
+    let mut a = 0
+    let q = next(&a) / next(&a)
+    let mut b = 5u32
+    let r = unguarded (nextu(&b) / nextu(&b))
+    let mut c = 0
+    let s = next(&c) - next(&c) / next(&c)
+    if q == 0.5 && r == 0u32 && s == 1.0 - 2.0 / 3.0 then 0 else 1

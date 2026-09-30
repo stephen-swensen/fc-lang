@@ -284,6 +284,8 @@ static bool type_has_provenance(Type *t) {
     if (!t) return false;
     if (t->kind == TYPE_POINTER || t->kind == TYPE_SLICE ||
         t->kind == TYPE_ANY_PTR) return true;
+    /* A fixed array holds its elements inline, so it carries what they do. */
+    if (t->kind == TYPE_FIXED_ARRAY) return type_has_provenance(t->fixed_array.elem);
     /* Capturing closures have a stack-allocated context struct */
     if (t->kind == TYPE_FUNC) return true;
     /* Option/result wrapping a pointer/slice also carries provenance */
@@ -305,6 +307,37 @@ static bool type_has_provenance(Type *t) {
     /* Conservative: unresolved stubs might refer to a struct with pointer fields */
     if (t->kind == TYPE_STUB) return true;
     return false;
+}
+
+/* The provenance a struct literal's field initializer `value` gives the
+ * struct, for a field of type `field_type`; false when it gives none. A
+ * fixed-array field holds a copy of the value's elements, so the struct holds
+ * what they point to (the value's elem_prov) inline, not the value's own
+ * storage. Any other field holds the value itself (its prov) and, one level
+ * down, what the value holds (its elem_prov). `*carrier` is the type that
+ * carries it, for messages. */
+static bool field_init_prov(Type *field_type, const Expr *value, ProvPair *out,
+                            Type **carrier) {
+    if (field_type && field_type->kind == TYPE_FIXED_ARRAY) {
+        Type *vt = value->type;
+        Type *elem = vt && vt->kind == TYPE_SLICE ? vt->slice.elem : NULL;
+        if (!type_has_provenance(elem)) return false;
+        *out = (ProvPair){ value->elem_prov, PROV_UNKNOWN };
+        *carrier = elem;
+        return true;
+    }
+    if (!type_has_provenance(value->type)) return false;
+    *out = prov_of(value);
+    *carrier = value->type;
+    return true;
+}
+
+/* The declared type of field `name` of struct type `st`, or NULL. */
+static Type *struct_field_type(Type *st, const char *name) {
+    if (!st || st->kind != TYPE_STRUCT) return NULL;
+    for (int j = 0; j < st->struc.field_count; j++)
+        if (st->struc.fields[j].name == name) return st->struc.fields[j].type;
+    return NULL;
 }
 
 /* A returned value must not point into the returning function's frame. */
@@ -894,13 +927,38 @@ static bool sr_is_self_call(Expr *e, const char *self, Type *placeholder) {
 }
 
 static int sr_flow_block(Expr **stmts, int count, const char *self, Type *ph);
+static int sr_flow(Expr *e, const char *self, Type *ph);
+
+/* The ways out that evaluating an operand opens. */
+#define SR_EXITS (SR_RETURN | SR_BREAK | SR_CONTINUE)
+
+typedef struct {
+    const char *self;
+    Type *ph;
+    int exits;
+} SrOperands;
+
+static void sr_operand(Expr *child, void *ctx) {
+    SrOperands *o = ctx;
+    o->exits |= sr_flow(child, o->self, o->ph) & SR_EXITS;
+}
+
+/* The exits (return, `x?`, break, continue) among e's operands, which run
+ * before e itself completes. A self-call among them is consumed as a value
+ * and rejected at that site, so it is not an outcome here. */
+static int sr_operand_exits(Expr *e, const char *self, Type *ph) {
+    SrOperands o = { self, ph, 0 };
+    expr_for_each_child(e, sr_operand, &o);
+    return o.exits;
+}
 
 /* Outcome set of evaluating one expression in statement/tail position. */
 static int sr_flow(Expr *e, const char *self, Type *ph) {
     if (!e) return SR_COMPLETE;
     switch (e->kind) {
     case EXPR_CALL:
-        return sr_is_self_call(e, self, ph) ? SR_SELFREC : SR_COMPLETE;
+        return (sr_is_self_call(e, self, ph) ? SR_SELFREC : SR_COMPLETE) |
+               sr_operand_exits(e, self, ph);
     case EXPR_RETURN: {
         /* A self-call in the returned value recurses before control transfers out. */
         if (e->return_expr.value) {
@@ -909,7 +967,7 @@ static int sr_flow(Expr *e, const char *self, Type *ph) {
         }
         return SR_RETURN;
     }
-    case EXPR_BREAK:    return SR_BREAK;
+    case EXPR_BREAK:    return SR_BREAK | sr_operand_exits(e, self, ph);
     case EXPR_CONTINUE: return SR_CONTINUE;
     case EXPR_BLOCK:    return sr_flow_block(e->block.stmts, e->block.count, self, ph);
     case EXPR_IF: {
@@ -918,7 +976,7 @@ static int sr_flow(Expr *e, const char *self, Type *ph) {
            whether the construct can complete. A missing `else` completes. */
         int tf = sr_flow(e->if_expr.then_body, self, ph);
         int ef = e->if_expr.else_body ? sr_flow(e->if_expr.else_body, self, ph) : SR_COMPLETE;
-        return tf | ef;
+        return tf | ef | (sr_flow(e->if_expr.cond, self, ph) & SR_EXITS);
     }
     case EXPR_MATCH: {
         /* `match` is exhaustive, so its outcome is the union of its arms; there is
@@ -927,6 +985,7 @@ static int sr_flow(Expr *e, const char *self, Type *ph) {
         for (int i = 0; i < e->match_expr.arm_count; i++)
             acc |= sr_flow_block(e->match_expr.arms[i].body,
                                  e->match_expr.arms[i].body_count, self, ph);
+        acc |= sr_flow(e->match_expr.subject, self, ph) & SR_EXITS;
         return acc ? acc : SR_COMPLETE;
     }
     case EXPR_LOOP: {
@@ -945,16 +1004,40 @@ static int sr_flow(Expr *e, const char *self, Type *ph) {
            is therefore conditional, never on every path. A `return` in the body is
            still reachable; break/continue stay within the loop. */
         return SR_COMPLETE |
-               (sr_flow_block(e->for_expr.body, e->for_expr.body_count, self, ph) & SR_RETURN);
+               (sr_flow_block(e->for_expr.body, e->for_expr.body_count, self, ph) & SR_RETURN) |
+               (sr_flow(e->for_expr.iter, self, ph) & SR_EXITS) |
+               (sr_flow(e->for_expr.range_end, self, ph) & SR_EXITS);
     case EXPR_GUARD:
         /* Transparent wrapper: flow through to the guarded body. */
         return sr_flow(e->guard.body, self, ph);
-    default:
-        /* Everything else (value expressions, let bindings, lambda definitions,
-           assignments) completes for the purpose of this analysis; a self-call buried
-           in such a position is consumed as a value and rejected at that site. */
+    case EXPR_UNARY_POSTFIX:
+        /* x? returns the error from the function, which is a way out. */
+        return SR_COMPLETE | sr_operand_exits(e, self, ph) |
+               (e->unary_postfix.op == TOK_QUESTION ? SR_RETURN : 0);
+    /* A lambda's body is its own function; a deferred expression runs at
+       scope exit; a static assertion is decided at compile time. */
+    case EXPR_FUNC:
+    case EXPR_DEFER:
+    case EXPR_STATIC_ASSERT:
+    case EXPR_ERROR:
         return SR_COMPLETE;
+    /* Value expressions, bindings, assignments and assertions: their operands
+       run, then they complete. */
+    case EXPR_INT_LIT: case EXPR_FLOAT_LIT: case EXPR_BOOL_LIT:
+    case EXPR_CHAR_LIT: case EXPR_STRING_LIT: case EXPR_CSTRING_LIT:
+    case EXPR_VOID_LIT: case EXPR_IDENT: case EXPR_BINARY:
+    case EXPR_UNARY_PREFIX: case EXPR_FIELD: case EXPR_DEREF_FIELD:
+    case EXPR_INDEX: case EXPR_SLICE: case EXPR_CAST: case EXPR_STRUCT_LIT:
+    case EXPR_TUPLE_LIT: case EXPR_ARRAY_LIT: case EXPR_SLICE_LIT:
+    case EXPR_ALLOC: case EXPR_FREE: case EXPR_SIZEOF: case EXPR_ALIGNOF:
+    case EXPR_BITCAST: case EXPR_ENUM_OF: case EXPR_DEFAULT:
+    case EXPR_INTERP_STRING: case EXPR_ASSIGN: case EXPR_SOME: case EXPR_OK:
+    case EXPR_ERR: case EXPR_ERROR_NAME: case EXPR_LET: case EXPR_LET_DESTRUCT:
+    case EXPR_TYPE_VAR_REF: case EXPR_ASSERT: case EXPR_IGNORE:
+    case EXPR_ATOMIC_LOAD: case EXPR_ATOMIC_STORE:
+        return SR_COMPLETE | sr_operand_exits(e, self, ph);
     }
+    return SR_COMPLETE;
 }
 
 /* Outcome set of a statement sequence: walk until a statement cannot complete, then
@@ -1051,15 +1134,17 @@ static void save_scope(CheckCtx *ctx, SavedCtxScope *saved) {
     };
 }
 
-/* Reconstruct ctx.module_symtab, parent_modules, import_scope, and current_ns
- * from a module Symbol's parent chain (set by pass1). Used when on-demand
- * type-checking must enter a module's scope outside the natural
- * check_module_members walk, e.g. when a user module calls into a function
- * declared in a stdlib module before the stdlib module has been checked.
+/* Enter a module's scope from its Symbol's parent chain (set by pass1): its
+ * members, the enclosing modules, the imports visible there (its own, its
+ * ancestors', its file's) and its namespace, with a fresh global scope and the
+ * default overflow and guard axes. The in-order walk enters each top-level
+ * module this way, and so does on-demand checking outside that walk, e.g. when
+ * a user module calls into a function declared in a stdlib module before the
+ * stdlib module has been checked.
  * Without it, bare stub names in the target module's signatures (like
  * `pcg_random*` inside `std::random.pcg_random.next_u32`) would not resolve,
  * leaving the parameter types as unresolved stubs. */
-static void enter_module_scope_on_demand(CheckCtx *ctx, Symbol *mod_sym,
+static void enter_module_scope(CheckCtx *ctx, Symbol *mod_sym,
                                           SavedCtxScope *saved) {
     save_scope(ctx, saved);
 
@@ -1122,7 +1207,7 @@ static void enter_module_scope_on_demand(CheckCtx *ctx, Symbol *mod_sym,
 /* On-demand scope setup for a top-level (non-module) let: global members, no
  * parent modules, the let's own file-level imports, a fresh global scope, and a
  * clean overflow/guard context. The global-scope analogue of
- * enter_module_scope_on_demand. */
+ * enter_module_scope. */
 static void enter_global_scope_on_demand(CheckCtx *ctx, Symbol *sym,
                                          SavedCtxScope *saved) {
     save_scope(ctx, saved);
@@ -1185,7 +1270,7 @@ static void enter_submodule(CheckCtx *ctx, Symbol *sub, SubmoduleFrame *f) {
 static void run_let_on_demand(CheckCtx *ctx, Symbol *sym) {
     SavedCtxScope saved;
     if (sym->parent)
-        enter_module_scope_on_demand(ctx, sym->parent, &saved);
+        enter_module_scope(ctx, sym->parent, &saved);
     else
         enter_global_scope_on_demand(ctx, sym, &saved);
     check_decl_let(ctx, sym->decl);
@@ -1348,6 +1433,15 @@ static bool check_let_on_demand(CheckCtx *ctx, Symbol *sym) {
     return true;
 }
 
+/* Report a use of the let `name` (as the use spells it: `x` or `mod.x`)
+ * reached again while its own type is being checked (check_let_on_demand
+ * returned false). `via_import` when the use reached it through an import. */
+static Type *report_let_cycle(Expr *e, const char *name, bool via_import) {
+    diag_error(e->loc, "circular dependency: '%s' depends on itself%s",
+               name, via_import ? " through imports" : "");
+    return poison(e);
+}
+
 static bool is_type_decl_kind(DeclKind k) {
     return k == DECL_STRUCT || k == DECL_UNION || k == DECL_ENUM;
 }
@@ -1373,13 +1467,8 @@ static Type *bind_resolved_symbol(CheckCtx *ctx, Expr *e, Symbol *sym, Symbol *c
         return e->type;
     }
     bool is_let = sym->decl && sym->decl->kind == DECL_LET;
-    if (is_let && !sym->type && !check_let_on_demand(ctx, sym)) {
-        diag_error(e->loc, via_import
-                       ? "circular dependency: '%s' depends on itself through imports"
-                       : "circular dependency: '%s' depends on itself",
-                   e->ident.name);
-        return poison(e);
-    }
+    if (is_let && !sym->type && !check_let_on_demand(ctx, sym))
+        return report_let_cycle(e, e->ident.name, via_import);
     if (is_let) {
         if (sym->decl->let.codegen_name) e->ident.codegen_name = sym->decl->let.codegen_name;
         e->ident.is_mut = sym->decl->let.is_mut;
@@ -1393,11 +1482,31 @@ static Type *bind_resolved_symbol(CheckCtx *ctx, Expr *e, Symbol *sym, Symbol *c
     return e->type;
 }
 
-/* The other half of `sym`'s companion pair in member table `tab`, or NULL. */
-static Symbol *companion_in_table(SymbolTable *tab, Symbol *sym) {
-    if (is_type_decl_kind(sym->kind)) return symtab_lookup_kind(tab, sym->name, DECL_MODULE);
-    if (sym->kind == DECL_MODULE) return symtab_lookup_type(tab, sym->name);
-    return NULL;
+/* The other half of `sym`'s companion pair (a struct, union or enum and a
+ * module sharing the name `name`), looked up where resolve_name found `sym`
+ * (`r`): in the same member table, in the same span of imports, or in the
+ * global table, namespace-aware. A type half is a struct, else a union, else an
+ * enum, as symtab_lookup_type orders them. NULL when there is none. */
+static Symbol *companion_of(CheckCtx *ctx, const Resolution *r, Symbol *sym,
+                            const char *name) {
+    static const DeclKind type_kinds[] = { DECL_STRUCT, DECL_UNION, DECL_ENUM };
+    bool want_module = is_type_decl_kind(sym->kind);
+    if (!want_module && sym->kind != DECL_MODULE) return NULL;
+    if (r->members)
+        return want_module ? symtab_lookup_kind(r->members, name, DECL_MODULE)
+                           : symtab_lookup_type(r->members, name);
+    Symbol *c = NULL;
+    if (r->imports) {
+        if (want_module)
+            return import_scope_lookup_kind_until(r->imports, name, DECL_MODULE, r->imports_stop);
+        for (size_t i = 0; !c && i < sizeof type_kinds / sizeof type_kinds[0]; i++)
+            c = import_scope_lookup_kind_until(r->imports, name, type_kinds[i], r->imports_stop);
+        return c;
+    }
+    if (want_module) return symtab_lookup_module(ctx->symtab, name, ctx->current_ns);
+    for (size_t i = 0; !c && i < sizeof type_kinds / sizeof type_kinds[0]; i++)
+        c = symtab_lookup_kind_ns(ctx->symtab, name, type_kinds[i], ctx->current_ns);
+    return c;
 }
 
 /* True when an already-checked expression denotes a type, not a value: a bare
@@ -1509,14 +1618,12 @@ static Symbol *resolve_type_symbol(CheckCtx *ctx, const char *name) {
 
 static void register_concrete_tuple(CheckCtx *ctx, Type *tup);
 
-static bool resolve_size_ref_inplace(CheckCtx *ctx, Type *t, SrcLoc loc);
-
 /* A generic type name written without its type arguments is not a type: its
  * type variables are unbound, so it has no layout and `fc__box` would be
  * referenced but never defined. Every `<...>` spelling flows through
- * mono_register, which owns the arity and kind judgments; the bare name never
- * reaches it, so every place that turns a written name into a type judges it
- * here. Returns true when it reported (the caller poisons).
+ * instantiate_written, which judges the argument count and kinds; the bare
+ * name never reaches it, so every place that turns a written name into a type
+ * judges it here. Returns true when it reported (the caller poisons).
  *
  * Takes the pieces rather than a node because the same name arrives in two
  * representations: an unresolved TYPE_STUB (the usual case) and, for a
@@ -1563,12 +1670,8 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
     case TYPE_RESULT:  canonicalize_field_stubs(ctx, t->result.inner); return;
     case TYPE_SLICE:   canonicalize_field_stubs(ctx, t->slice.elem); return;
     case TYPE_FIXED_ARRAY:
+        /* The size was folded by normalize_type_sizes, which runs first. */
         canonicalize_field_stubs(ctx, t->fixed_array.elem);
-        /* Fold the field's size expression: named consts resolve here (the
-         * decl's own scope), concrete sizes fold to a positive `size`, and
-         * const-param sizes keep a normalized symbolic form for per-instance
-         * folding. */
-        resolve_size_ref_inplace(ctx, t, ctx->type_loc);
         return;
     case TYPE_STRUCT:
         /* A tuple field type: canonicalize element stub names, then name+register
@@ -1713,32 +1816,36 @@ static void register_concrete_tuple(CheckCtx *ctx, Type *tup) {
     }
 }
 
-/* Does this (already-checked) expression reference a const generic param? */
+/* Does this (already-checked) expression reference a const generic param,
+ * anywhere in it? */
+static bool refs_const_param_child(Expr *e, void *unused);
+
 static bool expr_refs_const_param(Expr *e) {
     if (!e) return false;
-    switch (e->kind) {
-    case EXPR_TYPE_VAR_REF: return e->type_var_ref.is_const_param;
-    case EXPR_UNARY_PREFIX: return expr_refs_const_param(e->unary_prefix.operand);
-    case EXPR_BINARY: return expr_refs_const_param(e->binary.left) ||
-                             expr_refs_const_param(e->binary.right);
-    case EXPR_CAST: return expr_refs_const_param(e->cast.operand);
-    default: return false;
-    }
+    if (e->kind == EXPR_TYPE_VAR_REF) return e->type_var_ref.is_const_param;
+    return expr_any_child(e, refs_const_param_child, NULL);
+}
+
+static bool refs_const_param_child(Expr *e, void *unused) {
+    (void)unused;
+    return expr_refs_const_param(e);
 }
 
 static Type *resolve_type(CheckCtx *ctx, Type *t);
 
-/* Does this (possibly unchecked) expression tree mention a 'x variable? */
+/* Does this (possibly unchecked) expression tree mention a 'x variable,
+ * anywhere in it? */
+static bool mentions_type_var_child(Expr *e, void *unused);
+
 static bool expr_mentions_type_var(Expr *e) {
     if (!e) return false;
-    switch (e->kind) {
-    case EXPR_TYPE_VAR_REF: return true;
-    case EXPR_UNARY_PREFIX: return expr_mentions_type_var(e->unary_prefix.operand);
-    case EXPR_BINARY: return expr_mentions_type_var(e->binary.left) ||
-                             expr_mentions_type_var(e->binary.right);
-    case EXPR_CAST: return expr_mentions_type_var(e->cast.operand);
-    default: return false;
-    }
+    if (e->kind == EXPR_TYPE_VAR_REF) return true;
+    return expr_any_child(e, mentions_type_var_child, NULL);
+}
+
+static bool mentions_type_var_child(Expr *e, void *unused) {
+    (void)unused;
+    return expr_mentions_type_var(e);
 }
 
 /* The operators and casts the context-free const evaluator (const_type_eval)
@@ -1748,23 +1855,13 @@ static bool expr_mentions_type_var(Expr *e) {
 static bool const_expr_node_ok(Expr *e, bool allow_bool_ops) {
     switch (e->kind) {
     case EXPR_UNARY_PREFIX:
-        return e->unary_prefix.op == TOK_MINUS || e->unary_prefix.op == TOK_TILDE ||
-               (allow_bool_ops && e->unary_prefix.op == TOK_BANG);
+        return const_unary_op_supported(e->unary_prefix.op) &&
+               (allow_bool_ops || e->unary_prefix.op != TOK_BANG);
     case EXPR_BINARY:
-        switch (e->binary.op) {
-        case TOK_PLUS: case TOK_MINUS: case TOK_STAR: case TOK_SLASH:
-        case TOK_PERCENT: case TOK_AMP: case TOK_PIPE: case TOK_CARET:
-        case TOK_LTLT: case TOK_GTGT:
-            return true;
-        case TOK_EQEQ: case TOK_BANGEQ: case TOK_LT: case TOK_GT:
-        case TOK_LTEQ: case TOK_GTEQ: case TOK_AMPAMP: case TOK_PIPEPIPE:
-            return allow_bool_ops;
-        default:
-            return false;
-        }
+        return const_binary_op_supported(e->binary.op) &&
+               (allow_bool_ops || !const_op_yields_bool(e->binary.op));
     case EXPR_CAST:
-        return e->cast.target && e->cast.target->kind >= TYPE_INT8 &&
-               e->cast.target->kind <= TYPE_UINT64;
+        return e->cast.target && type_fixed_int_bits(e->cast.target) != 0;
     default:
         return false;
     }
@@ -1832,35 +1929,45 @@ static Expr *fold_const_leaf(CheckCtx *ctx, Expr *e, ConstSlot slot) {
     return NULL;
 }
 
+/* The kind of the enclosing function's generic parameter `var`, once an
+ * occurrence that is evidence of kind `want` (GP_TYPE or GP_CONST) is counted:
+ * a parameter no occurrence has decided yet takes `want`. A function with no
+ * recorded kinds has only type parameters. -1 when `var` is not one of its
+ * parameters, or there is no enclosing generic function. */
+static int pin_fn_param_kind(CheckCtx *ctx, const char *var, uint8_t want) {
+    Symbol *fs = ctx->active_fn_sym;
+    if (!fs) return -1;
+    for (int i = 0; i < fs->type_param_count; i++) {
+        if (fs->type_params[i] != var) continue;
+        if (!fs->param_kinds) return GP_TYPE;
+        if (fs->param_kinds[i] == GP_UNKNOWN) fs->param_kinds[i] = want;
+        return fs->param_kinds[i];
+    }
+    return -1;
+}
+
 /* A 'x in a size: it must be a const parameter of the owning declaration
  * (active_fn_sym inside a generic function body, td_params during a type
- * decl's canonicalize walk). A function's prefix var of unknown kind is pinned
- * const here, since a size position is const evidence. */
+ * decl's canonicalize walk). A size position is const evidence. */
 static Expr *classify_size_param(CheckCtx *ctx, Expr *e) {
-    const char **params = NULL;
-    uint8_t *kinds = NULL;
-    int ntp = 0;
-    Symbol *fs = ctx->active_fn_sym;
-    if (fs) { params = fs->type_params; kinds = fs->param_kinds; ntp = fs->type_param_count; }
-    else { params = ctx->td_params; kinds = ctx->td_kinds; ntp = ctx->td_ntp; }
-    for (int i = 0; i < ntp; i++) {
-        if (params[i] != e->type_var_ref.name) continue;
-        uint8_t k = kinds ? kinds[i] : GP_TYPE;
-        if (k == GP_UNKNOWN && fs && fs->param_kinds) {
-            fs->param_kinds[i] = GP_CONST;
-            k = GP_CONST;
-        }
-        if (k == GP_CONST) {
-            e->type_var_ref.is_const_param = true;
-            return e;
-        }
-        diag_error(e->loc, "%s is a type parameter and cannot size a fixed array",
-                   e->type_var_ref.name);
+    const char *name = e->type_var_ref.name;
+    int k = -1;
+    if (ctx->active_fn_sym) {
+        k = pin_fn_param_kind(ctx, name, GP_CONST);
+    } else {
+        for (int i = 0; i < ctx->td_ntp && k < 0; i++)
+            if (ctx->td_params[i] == name) k = ctx->td_kinds ? ctx->td_kinds[i] : GP_TYPE;
+    }
+    if (k < 0) {
+        diag_error(e->loc, "%s is not a generic parameter of the enclosing declaration", name);
         return NULL;
     }
-    diag_error(e->loc, "%s is not a generic parameter of the enclosing declaration",
-               e->type_var_ref.name);
-    return NULL;
+    if (k != GP_CONST) {
+        diag_error(e->loc, "%s is a type parameter and cannot size a fixed array", name);
+        return NULL;
+    }
+    e->type_var_ref.is_const_param = true;
+    return e;
 }
 
 /* Normalize a const expression for `slot`: fold every parameter-free subtree
@@ -1912,6 +2019,48 @@ static Expr *normalize_const_tree(CheckCtx *ctx, Expr *e, ConstSlot slot) {
     }
 }
 
+/* The rule on a length known at compile time, shared by every construct that
+ * states one: a slice literal's length (T[N] { } or a raw-parts len), a fixed
+ * array's size, which must also be positive, and a string literal's byte
+ * count. A length must be non-negative, and it must fit the stored length of
+ * --len-repr, because every one of them is viewed as a slice. NULL when `n` is
+ * valid, else the diagnostic (malloc'd), naming the length as `what`. */
+static char *static_length_error(const char *what, int64_t n, bool must_be_positive) {
+    if (must_be_positive && n <= 0)
+        return str_sprintf("%s must be positive, got %lld", what, (long long)n);
+    if (n < 0)
+        return str_sprintf("%s cannot be negative, got %lld", what, (long long)n);
+    if (n > fc_len_max())
+        return str_sprintf("%s %lld exceeds --len-repr %d length capacity %lld",
+                           what, (long long)n, g_len_repr, (long long)fc_len_max());
+    return NULL;
+}
+
+/* A string literal's decoded byte count is a slice's len, so it obeys the
+ * length rule. Escapes only shrink a literal, so its source length gates the
+ * decode. */
+static void check_string_lit_length(const char *value, int length, SrcLoc loc) {
+    if ((int64_t)length <= fc_len_max()) return;
+    char *msg = static_length_error("string literal length",
+                                    decode_str_lit(value, length, NULL), false);
+    if (msg) {
+        diag_error(loc, "%s", msg);
+        free(msg);
+    }
+}
+
+/* Report static_length_error for a fixed array's size at `loc`; false after
+ * reporting, when the size is left at 1 (types are shared, so a later walk
+ * must not report it again). */
+static bool check_fixed_array_size(Type *t, SrcLoc loc) {
+    char *msg = static_length_error("fixed array size", t->fixed_array.size, true);
+    if (!msg) return true;
+    diag_error(loc, "%s", msg);
+    free(msg);
+    t->fixed_array.size = 1;
+    return false;
+}
+
 /* Resolve a TYPE_FIXED_ARRAY's symbolic size in place: normalize the size
  * expression, fold it to a concrete positive `size` when no const params
  * remain, and keep the normalized symbolic form otherwise. In-place because
@@ -1921,18 +2070,8 @@ static Expr *normalize_const_tree(CheckCtx *ctx, Expr *e, ConstSlot slot) {
 static bool resolve_size_ref_inplace(CheckCtx *ctx, Type *t, SrcLoc loc) {
     Type *sr = t->fixed_array.size_ref;
     if (!sr) {
-        /* Plain literal size (`u8[40000]`): already folded at parse and
-         * positivity-checked there, but the --len-repr capacity bound is a
-         * pass2 judgment: a fixed array is viewed as a slice, so its length
-         * must fit the stored len width. */
-        if (t->fixed_array.size > fc_len_max()) {
-            diag_error(loc, "fixed array size %lld exceeds --len-repr %d length capacity %lld",
-                       (long long)t->fixed_array.size, g_len_repr, (long long)fc_len_max());
-            t->fixed_array.size = 1;   /* poison-to-valid: types are shared, so a
-                                          later walk must not re-report */
-            return false;
-        }
-        return true;
+        /* Plain literal size (`u8[40000]`): already folded at parse. */
+        return check_fixed_array_size(t, loc);
     }
     if (sr->kind == TYPE_TYPE_VAR) return true;   /* bare 'n: kind-checked by inference */
     if (sr->kind == TYPE_CONST_INT) {
@@ -1956,21 +2095,7 @@ static bool resolve_size_ref_inplace(CheckCtx *ctx, Type *t, SrcLoc loc) {
             return true;
         }
     }
-    if (t->fixed_array.size <= 0) {
-        diag_error(loc, "fixed array size must be positive, got %lld",
-                   (long long)t->fixed_array.size);
-        t->fixed_array.size = 1;   /* poison-to-valid (see the !sr branch) */
-        return false;
-    }
-    /* A fixed array is viewed as a slice (its field access wraps ptr+len), so
-     * its length must fit the stored len width. Vacuous at --len-repr 64. */
-    if (t->fixed_array.size > fc_len_max()) {
-        diag_error(loc, "fixed array size %lld exceeds --len-repr %d length capacity %lld",
-                   (long long)t->fixed_array.size, g_len_repr, (long long)fc_len_max());
-        t->fixed_array.size = 1;   /* poison-to-valid (see the !sr branch) */
-        return false;
-    }
-    return true;
+    return check_fixed_array_size(t, loc);
 }
 
 /* Check a const-generic argument expression ('n * 2, block_bits + 1, -4).
@@ -2265,15 +2390,11 @@ static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc) 
     switch (t->kind) {
     case TYPE_FIXED_ARRAY: {
         int64_t sz;
-        if (type_fixed_array_size(t, &sz) && sz <= 0) {
-            gen_inst_diag(frame, loc, "fixed array size must be positive, got %lld (in '%s')",
-                          (long long)sz, type_name(t));
-            return false;
-        }
-        if (type_fixed_array_size(t, &sz) && sz > fc_len_max()) {
-            gen_inst_diag(frame, loc, "fixed array size %lld exceeds --len-repr %d "
-                          "length capacity %lld (in '%s')",
-                          (long long)sz, g_len_repr, (long long)fc_len_max(), type_name(t));
+        char *msg = type_fixed_array_size(t, &sz)
+            ? static_length_error("fixed array size", sz, true) : NULL;
+        if (msg) {
+            gen_inst_diag(frame, loc, "%s (in '%s')", msg, type_name(t));
+            free(msg);
             return false;
         }
         return check_inst_sizes_frame(t->fixed_array.elem, frame, loc);
@@ -2354,16 +2475,10 @@ static bool bindings_contain_type_vars(Type **bindings, int count) {
 static bool note_type_var_kind(CheckCtx *ctx, const char *var, uint8_t want, SrcLoc loc) {
     Symbol *fs = ctx->active_fn_sym;
     if (!fs || !fs->param_kinds || want == GP_UNKNOWN) return true;
-    for (int j = 0; j < fs->type_param_count; j++) {
-        if (fs->type_params[j] != var) continue;
-        if (fs->param_kinds[j] == GP_UNKNOWN)
-            fs->param_kinds[j] = want;
-        else if (fs->param_kinds[j] != want) {
-            diag_error(loc, "generic parameter %s is used both as a type and as a constant",
-                       var);
-            return false;
-        }
-        break;
+    int k = pin_fn_param_kind(ctx, var, want);
+    if (k >= 0 && k != want) {
+        diag_error(loc, "generic parameter %s is used both as a type and as a constant", var);
+        return false;
     }
     return true;
 }
@@ -2618,54 +2733,32 @@ static bool check_int_literal_range(uint64_t value, Type *type, SrcLoc loc,
                    (uint64_t)0 - value, type_name(type), range);
         return false;
     }
-    switch (type->kind) {
-    case TYPE_INT8:
-        if (value > 127 && value < (uint64_t)(int64_t)-128) {
-            diag_error(loc, "integer literal %" PRId64 " out of range for i8 (-128..127)", (int64_t)value);
+    int w = type_fixed_int_bits(type);
+    if (w == 0) return true;   /* isize/usize: the width is the target's */
+    uint64_t umax = w == 64 ? UINT64_MAX : ((uint64_t)1 << w) - 1;
+    if (!type_is_signed(type)) {
+        if (value > umax) {
+            diag_error(loc, "integer literal %" PRIu64 " out of range for %s (0..%" PRIu64 ")",
+                       value, type_name(type), umax);
             return false;
         }
-        return true;
-    case TYPE_INT16:
-        if (value > 32767 && value < (uint64_t)(int64_t)-32768) {
-            diag_error(loc, "integer literal %" PRId64 " out of range for i16 (-32768..32767)", (int64_t)value);
-            return false;
-        }
-        return true;
-    case TYPE_INT32:
-        if (value > 2147483647ULL && value < (uint64_t)(int64_t)-2147483648LL) {
-            diag_error(loc, "integer literal %" PRId64 " out of range for i32 (-2147483648..2147483647)", (int64_t)value);
-            return false;
-        }
-        return true;
-    case TYPE_INT64:
-        if (value > 9223372036854775807ULL && value < (uint64_t)INT64_MIN) {
-            diag_error(loc, "integer literal out of range for i64");
-            return false;
-        }
-        return true;
-    case TYPE_UINT8:
-        if (value > 255) {
-            diag_error(loc, "integer literal %" PRIu64 " out of range for u8 (0..255)", value);
-            return false;
-        }
-        return true;
-    case TYPE_UINT16:
-        if (value > 65535) {
-            diag_error(loc, "integer literal %" PRIu64 " out of range for u16 (0..65535)", value);
-            return false;
-        }
-        return true;
-    case TYPE_UINT32:
-        if (value > 4294967295ULL) {
-            diag_error(loc, "integer literal %" PRIu64 " out of range for u32 (0..4294967295)", value);
-            return false;
-        }
-        return true;
-    case TYPE_UINT64:
-        return true; /* always fits in uint64_t storage */
-    default:
         return true;
     }
+    /* A literal written without a minus must be at most max; one written with
+     * it (its two's-complement pattern in `value`) at least min. */
+    int64_t max = (int64_t)(umax >> 1), min = -max - 1;
+    bool fits = negative ? (int64_t)value <= 0 && (int64_t)value >= min
+                         : value <= (uint64_t)max;
+    if (!fits) {
+        if (negative)
+            diag_error(loc, "integer literal -%" PRIu64 " out of range for %s (%" PRId64
+                       "..%" PRId64 ")", (uint64_t)0 - value, type_name(type), min, max);
+        else
+            diag_error(loc, "integer literal %" PRIu64 " out of range for %s (%" PRId64
+                       "..%" PRId64 ")", value, type_name(type), min, max);
+        return false;
+    }
+    return true;
 }
 
 /* Check a float literal for overflow/underflow detected by the parser.
@@ -3218,16 +3311,41 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
 
 static void check_tuple_destruct(CheckCtx *ctx, Pattern *pat, Type *tup, bool is_mut, SrcLoc loc);
 
+/* The value of a raw-parts slice literal's len when it is an integer literal,
+ * seen through casts (an implicit widening or a written `(i64)`), each applied
+ * to the value. check_expr judges exactly these lens, and const_fold_expr the
+ * other constant ones, so each len is judged once. */
+static bool slice_len_literal_value(Expr *len, int64_t *out) {
+    if (!len) return false;
+    if (len->kind == EXPR_INT_LIT) {
+        if (len->int_lit.out_of_range) return false;
+        *out = (int64_t)len->int_lit.value;
+        return true;
+    }
+    if (len->kind != EXPR_CAST || !slice_len_literal_value(len->cast.operand, out))
+        return false;
+    int w = type_fixed_int_bits(len->cast.target);
+    if (w == 0) return false;
+    *out = (int64_t)const_mask_extend((uint64_t)*out, w, type_is_signed(len->cast.target));
+    return true;
+}
+
 /* Bind the names a pattern introduces as poison, after the value it
- * destructures failed to check, so their uses do not cascade into "undefined
- * name" errors. */
+ * destructures (or matches) failed to check, so their uses do not cascade into
+ * "undefined name" errors. A name already bound in the pattern's scope is not
+ * bound again: with no type to judge by, a repeated name may be a no-payload
+ * variant, not a duplicate binding. */
 static void bind_pattern_poison(Pattern *p, void *vctx) {
     CheckCtx *ctx = vctx;
     if (p->kind == PAT_BINDING) {
+        bool bound = false;
+        for (int i = 0; i < ctx->scope->local_count; i++)
+            if (ctx->scope->locals[i].name == p->binding.name) bound = true;
         if (!p->binding.codegen_name)
             p->binding.codegen_name = local_c_name(ctx->arena, p->binding.name);
-        scope_add(ctx->scope, p->binding.name, p->binding.codegen_name, type_error(),
-                  false, p->loc);
+        if (!bound)
+            scope_add(ctx->scope, p->binding.name, p->binding.codegen_name, type_error(),
+                      false, p->loc);
     }
     pattern_for_each_child(p, bind_pattern_poison, vctx);
 }
@@ -3812,10 +3930,11 @@ static const char *fmt_generic_inst(const char *func_name, Arena *arena,
  * pass. A self- or mutually-recursive generic (or a diamond of generic calls)
  * resolves to a finite set of distinct instantiations; validating each once
  * bounds the total work. Without it, a body with two self-calls re-descends
- * 2^depth times and exhausts memory. Keyed on (callee symbol, concrete signature) so same-named generics in
- * different modules never alias. Descriptors are stored as strcmp-comparable
- * arena copies. The memo is reset at each independent top-level entry. */
-typedef struct { const Symbol *sym; const char *desc; } GenSeen;
+ * 2^depth times and exhausts memory. Keyed on the callee symbol, so
+ * same-named generics in different modules never alias, and on the concrete
+ * signature (gen_seen_add builds the key). The memo is reset at each
+ * independent top-level entry. */
+typedef struct { const Symbol *sym; const char *key; } GenSeen;
 
 /* What one top-level validation shares with every cross-body descent it
  * makes: the descent depth, whether the infinite-instantiation error has been
@@ -3828,14 +3947,28 @@ typedef struct {
     SymbolTable *symtab;    /* for per-instance type queries (writable_ref_path) */
 } GenValidation;
 
-/* Record (sym, desc) as validated. Returns true if newly added (caller should
- * descend), false if this instantiation was already validated this pass. */
+/* The deepest nesting among an instantiation's type arguments. */
+static int inst_arg_depth(Type **bindings, int n) {
+    int depth = 0;
+    for (int i = 0; i < n; i++) {
+        int d = type_arg_depth(bindings[i]);
+        if (d > depth) depth = d;
+    }
+    return depth;
+}
+
+/* Record the instantiation of `sym` printed as `desc`, whose arguments nest
+ * `depth` deep (inst_arg_depth), as validated. The depth is part of the key,
+ * so two instantiations that differ only in nesting stay distinct even where
+ * the printed signature does not tell them apart. Returns true if newly added
+ * (the caller should descend), false if it was already validated this pass. */
 static bool gen_seen_add(GenValidation *run, Arena *arena, const Symbol *sym,
-                         const char *desc) {
+                         int depth, const char *desc) {
+    const char *key = arena_sprintf(arena, "%d:%s", depth, desc);
     for (int i = 0; i < run->seen_n; i++)
-        if (run->seen[i].sym == sym && strcmp(run->seen[i].desc, desc) == 0)
+        if (run->seen[i].sym == sym && strcmp(run->seen[i].key, key) == 0)
             return false;
-    GenSeen ent = { sym, arena_strdup(arena, desc, (int) strlen(desc)) };
+    GenSeen ent = { sym, key };
     DA_APPEND(run->seen, run->seen_n, run->seen_cap, ent);
     return true;
 }
@@ -4045,24 +4178,49 @@ static void check_generic_binary(Expr *e, GenericCheck *gc) {
     gc->ok = false;
 }
 
-/* A unary minus or bitwise not on a type-variable operand. */
+/* The operand rule for a prefix `-`, `~` or `!`, shared by the type checker
+ * and the per-instance check of generic bodies. Returns NULL when `ot`
+ * qualifies, else the diagnostic (malloc'd). */
+static char *unary_operand_error(TokenKind op, Type *ot) {
+    if (ot->kind == TYPE_ENUM)
+        return str_sprintf("enum '%s' is not numeric; cast out first: (%s) x",
+                           type_name(ot), type_name(type_enum_underlying(ot)));
+    switch (op) {
+    case TOK_MINUS:
+        /* Negation is defined only for signed integers and floats; an
+         * unsigned operand has no representable negative and would silently
+         * wrap (the literal path already rejects `-5u32`). */
+        if (!type_is_signed(ot) && !type_is_float(ot))
+            return str_sprintf("unary minus requires a signed integer or float "
+                               "operand, got %s", type_name(ot));
+        return NULL;
+    case TOK_TILDE:
+        if (!type_is_integer(ot))
+            return str_sprintf("bitwise not requires integer operand, got %s",
+                               type_name(ot));
+        return NULL;
+    case TOK_BANG:
+        if (!type_eq(ot, type_bool()))
+            return str_sprintf("unary ! requires bool operand, got %s", type_name(ot));
+        return NULL;
+    default:
+        return NULL;
+    }
+}
+
+/* A unary minus or bitwise not on a type-variable operand, judged by the
+ * concrete rule under this instance. */
 static void check_generic_unary(Expr *e, GenericCheck *gc) {
     Type *ot_raw = e->unary_prefix.operand->type;
     if (!ot_raw || !type_contains_type_var(ot_raw)) return;
+    TokenKind op = e->unary_prefix.op;
+    if (op != TOK_MINUS && op != TOK_TILDE) return;
     Type *ot = type_substitute(gc->arena, ot_raw, gc->type_params, gc->bindings, gc->ntp);
-    if (e->unary_prefix.op == TOK_MINUS) {
-        /* Same rule as the concrete path: signed/float only, never unsigned. */
-        if (!type_is_signed(ot) && !type_is_float(ot)) {
-            gen_inst_diag(gc->frame, e->loc, "unary minus requires a signed integer or float operand, got %s",
-                type_name(ot));
-            gc->ok = false;
-        }
-    } else if (e->unary_prefix.op == TOK_TILDE) {
-        if (!type_is_integer(ot)) {
-            gen_inst_diag(gc->frame, e->loc, "bitwise not requires integer operand, got %s",
-                type_name(ot));
-            gc->ok = false;
-        }
+    char *msg = unary_operand_error(op, ot);
+    if (msg) {
+        gen_inst_diag(gc->frame, e->loc, "%s", msg);
+        free(msg);
+        gc->ok = false;
     }
 }
 
@@ -4126,14 +4284,10 @@ static void check_generic_array_size(Expr *e, GenericCheck *gc) {
     wrapper.const_expr.expr = e->array_lit.size_expr;
     int64_t sz;
     if (const_type_eval(&wrapper, gc->type_params, gc->bindings, gc->ntp, &sz)) {
-        if (sz < 0) {
-            gen_inst_diag(gc->frame, e->array_lit.size_expr->loc,
-                "slice literal length cannot be negative, got %lld", (long long)sz);
-            gc->ok = false;
-        } else if (sz > fc_len_max()) {
-            gen_inst_diag(gc->frame, e->array_lit.size_expr->loc,
-                "slice literal length %lld exceeds --len-repr %d length capacity %lld",
-                (long long)sz, g_len_repr, (long long)fc_len_max());
+        char *msg = static_length_error("slice literal length", sz, false);
+        if (msg) {
+            gen_inst_diag(gc->frame, e->array_lit.size_expr->loc, "%s", msg);
+            free(msg);
             gc->ok = false;
         } else if (e->array_lit.elem_count > 0 &&
                    (int64_t)e->array_lit.elem_count != sz) {
@@ -4191,11 +4345,7 @@ static void validate_generic_callee(Expr *e, GenericCheck *gc) {
      * type argument: an infinite monomorphized family. Report once (the
      * error keeps codegen from emitting the dangling C such a family
      * produces) and don't descend. */
-    int maxd = 0;
-    for (int i = 0; i < cntp; i++) {
-        int d = type_arg_depth(cbind[i]);
-        if (d > maxd) maxd = d;
-    }
+    int maxd = inst_arg_depth(cbind, cntp);
     if (maxd > GEN_INST_DEPTH_MAX) {
         if (!gc->run->inf_reported) {
             gc->run->inf_reported = true;
@@ -4218,11 +4368,7 @@ static void validate_generic_callee(Expr *e, GenericCheck *gc) {
      * recursive or diamond generic calls otherwise re-descend exponentially. */
     const char *cdesc = fmt_generic_inst(callee->name, arena, cft,
         callee->type_params, cbind, cntp);
-    /* The memo key adds the structural depth, so two instantiations that
-     * differ only in nesting stay distinct even where the printed signature
-     * does not distinguish them. Kept separate from the display descriptor. */
-    const char *ckey = arena_sprintf(arena, "%d:%s", maxd, cdesc);
-    if (!gen_seen_add(gc->run, arena, callee, ckey)) return;
+    if (!gen_seen_add(gc->run, arena, callee, maxd, cdesc)) return;
 
     /* Push a chain frame: this callee instantiation, required by the call
      * expression `e`. Stack-allocated; it lives for this descent. */
@@ -4397,20 +4543,6 @@ static bool expr_contains_control_flow(Expr *e) {
     return e && ccf_walk(e, &in_loop);
 }
 
-/* In a generic body an operation on type-variable operands may or may not be
-   governed depending on the instantiation (`a / b` has a zero guard at i32,
-   none at f64). The redundancy scan counts it as governed when some admissible
-   instantiation would be: the marker is accepted once at definition and is a
-   no-op in instances where nothing is governed (codegen keys each emit site on
-   the concrete substituted type). Casts from or to a type variable are
-   invalid, so the cast arms of the governed-operation tests never see one. */
-static bool type_maybe_integer(Type *t) {
-    return t && (type_is_integer(t) || t->kind == TYPE_TYPE_VAR);
-}
-
-static bool type_maybe_signed(Type *t) {
-    return t && (type_is_signed(t) || t->kind == TYPE_TYPE_VAR);
-}
 
 /* Byte width of a scalar eligible for bitcast, or 0 if the type is not
  * eligible. Eligible types are the fixed-width integers (not the
@@ -4426,68 +4558,6 @@ static int bitcast_scalar_bytes(Type *t) {
     case TYPE_INT32: case TYPE_UINT32: case TYPE_FLOAT32: return 4;
     case TYPE_INT64: case TYPE_UINT64: case TYPE_FLOAT64: return 8;
     default: return 0;
-    }
-}
-
-/* Is this node one of the three value-precondition guards that `unguarded`
-   governs? Checked after type checking, so operand and result types are set.
-   Must agree with the three gated sites in codegen. */
-static bool expr_node_is_governed_guard(Expr *e) {
-    switch (e->kind) {
-    case EXPR_CAST:   /* float-to-int saturation helper */
-        return e->cast.operand->type && type_is_float(e->cast.operand->type) &&
-               e->cast.target && type_is_integer(e->cast.target);
-    case EXPR_BINARY: /* integer divide/modulo: zero + INT_MIN/-1 guard */
-        return (e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) &&
-               type_maybe_integer(e->type);
-    case EXPR_INDEX:  /* slice bounds check */
-        return e->index.object->type && e->index.object->type->kind == TYPE_SLICE;
-    case EXPR_SLICE:  /* subslice bounds check */
-        return e->slice.object->type && e->slice.object->type->kind == TYPE_SLICE;
-    default:
-        return false;
-    }
-}
-
-/* Is this node one of the data-loss operations that `checked` governs?
-   Checked after type checking, so operand and result types are set. Must agree
-   with the gated codegen sites.
-     - `+ - *`: signed and unsigned (unsigned wrap is trapped under checked too).
-     - signed `/`: the INT_MIN/-1 case (unsigned `/` never overflows; `%` never).
-     - signed unary `-`: INT_MIN negation.
-     - an integer-to-integer narrowing cast that can lose information (not a
-       lossless widen). float-to-int is not here; its saturation is on the
-       guard axis because the C conversion is UB.
-     - the two truncating string forms, a bounded `(cstr[N])` cast and a `%s`
-       interp segment with an explicit precision, whose silent clip is defined
-       data loss like a narrowing cast. (The non-truncating forms, casts under
-       alloc/alloca and wrapped unbounded interps, are not here.) */
-static bool expr_node_is_governed_overflow(Expr *e) {
-    switch (e->kind) {
-    case EXPR_BINARY:
-        if (e->binary.op == TOK_PLUS || e->binary.op == TOK_MINUS ||
-            e->binary.op == TOK_STAR)
-            return type_maybe_integer(e->type);
-        if (e->binary.op == TOK_SLASH)
-            return type_maybe_signed(e->type);
-        return false;
-    case EXPR_UNARY_PREFIX:
-        return e->unary_prefix.op == TOK_MINUS &&
-               type_maybe_signed(e->type);
-    case EXPR_CAST: {
-        if (e->cast.buffer_size > 0) return true;   /* (cstr[N]): clips past N-1 */
-        Type *from = type_enum_underlying(e->cast.operand->type);
-        Type *to = e->cast.target;
-        return from && to && type_is_integer(from) && type_is_integer(to) &&
-               !type_can_widen(from, to);   /* potentially-lossy narrowing */
-    }
-    case EXPR_INTERP_STRING:
-        for (int i = 0; i < e->interp_string.segment_count; i++)
-            if (interp_seg_trunc_prec(&e->interp_string.segments[i]) >= 0)
-                return true;                        /* %.Ns: clips past N */
-        return false;
-    default:
-        return false;
     }
 }
 
@@ -4511,7 +4581,7 @@ static bool governed_effect_walk(Expr *e, void *overflow_axis) {
             if (governed_effect_walk(e->array_lit.elems[i], overflow_axis)) return true;
         return false;
     default:
-        if (overflow ? expr_node_is_governed_overflow(e) : expr_node_is_governed_guard(e))
+        if (overflow ? facts_overflow_governs(e, NULL) : facts_guard_governs(e, NULL))
             return true;
         break;
     }
@@ -4778,6 +4848,63 @@ static bool reject_bad_no_payload_variant(CheckCtx *ctx, Type *ut, Expr *e) {
     return false;
 }
 
+/* `U.name` where U names the union `usym` (type `ut`): construction of a
+ * no-payload variant, or in callee position the constructor a call applies.
+ * Every spelling of a union type goes through here: the bare name, a module
+ * path (m.u.name) and a companion module's name. A generic union needs its
+ * type arguments written. */
+static Type *check_union_variant_ref(CheckCtx *ctx, Expr *e, Symbol *usym, Type *ut) {
+    if (reject_bad_no_payload_variant(ctx, ut, e))
+        return poison(e);
+    e->field.is_variant_constructor = true;
+    if (usym && usym->is_generic) {
+        if (e->field.type_arg_count == 0) {
+            diag_error(e->loc,
+                "generic union '%s' requires explicit type arguments: %s<...>.%s",
+                usym->name, usym->name, e->field.name);
+            return poison(e);
+        }
+        e->type = instantiate_written(ctx, usym, usym->name, e->field.type_args,
+                                      e->field.type_arg_count, e->loc);
+        return type_is_error(e->type) ? poison(e) : e->type;
+    }
+    e->type = ut;
+    return e->type;
+}
+
+/* Whether `name` is a member `E.name` of the enum `et` can name: a variant, or
+ * the variant-count property `count`. */
+static bool enum_has_member(Type *et, const char *name) {
+    for (int v = 0; v < et->enu.variant_count; v++)
+        if (et->enu.variants[v].name == name) return true;
+    return type_enum_count_is(et, name);
+}
+
+/* `E.name` where E names the enum type `et`: a variant, or the variant-count
+ * property `count` (an i32 constant; a declared variant named `count` wins).
+ * Like check_union_variant_ref, shared by every spelling of the type. */
+static Type *check_enum_member(CheckCtx *ctx, Expr *e, Type *et) {
+    if (e->field.type_arg_count > 0) {
+        diag_error(e->loc, "enum types take no type arguments");
+        return poison(e);
+    }
+    for (int v = 0; v < et->enu.variant_count; v++) {
+        if (et->enu.variants[v].name == e->field.name) {
+            e->field.is_variant_constructor = true;
+            e->type = et;
+            return e->type;
+        }
+    }
+    if (type_enum_count_is(et, e->field.name)) {
+        e->field.codegen_name = arena_sprintf(ctx->arena, "%d", et->enu.variant_count);
+        e->field.is_type_property = true;
+        e->type = type_int32();
+        return e->type;
+    }
+    diag_error(e->loc, "enum '%s' has no variant '%s'", type_name(et), e->field.name);
+    return poison(e);
+}
+
 /* A union variant constructor `u.variant(payload)`, possibly of a generic
  * union, whose type arguments come from the payload. */
 static Type *check_variant_call(CheckCtx *ctx, Expr *e, Type *ft) {
@@ -4971,18 +5098,11 @@ static Type *check_generic_call(CheckCtx *ctx, Expr *e, Type *ft, Symbol *callee
                     ctx->arena, ft, callee_sym->type_params, bindings, ntp);
                 /* Fresh memo for this top-level validation; seed it with the
                  * entry instantiation so its own self-calls don't re-descend
-                 * into an identical body. The memo key is depth-prefixed to
-                 * match the keys the cross-body descent builds (kept separate
-                 * from inst_desc, which is the display descriptor). */
-                int seed_d = 0;
-                for (int i = 0; i < ntp; i++) {
-                    int d = type_arg_depth(bindings[i]);
-                    if (d > seed_d) seed_d = d;
-                }
+                 * into an identical body. */
                 GenValidation run = {0};
                 run.symtab = ctx->symtab;
                 gen_seen_add(&run, ctx->arena, callee_sym,
-                    arena_sprintf(ctx->arena, "%d:%s", seed_d, inst_desc));
+                             inst_arg_depth(bindings, ntp), inst_desc);
                 /* Entry (root) chain frame: this instantiation, required by
                  * the user's call `e`. Transitive descents push children. */
                 InstFrame root = { inst_desc, e->loc, NULL };
@@ -5141,13 +5261,12 @@ static Type *check_call(CheckCtx *ctx, Expr *e) {
     /* Extern calls skip the _ctx parameter */
     if (callee_sym && callee_sym->kind == DECL_EXTERN) {
         e->call.is_extern_call = true;
-        /* Validate function-type args: only top-level functions and
-         * non-capturing lambdas can be passed as C function pointers. */
+        /* A function-type argument crosses as a raw C function pointer, so
+         * it must be code with no context. */
         for (int i = 0; i < e->call.arg_count && i < ft->func.param_count; i++) {
             if (ft->func.param_types[i]->kind != TYPE_FUNC) continue;
             Expr *arg = e->call.args[i];
-            if (arg->kind == EXPR_IDENT && !arg->ident.is_local) continue;
-            if (arg->kind == EXPR_FUNC && arg->func.capture_count == 0) continue;
+            if (fn_value_is_context_free(arg)) continue;
             if (arg->kind == EXPR_FUNC && arg->func.capture_count > 0)
                 diag_error(arg->loc, "cannot pass capturing closure to extern: "
                     "C function pointers cannot represent closures");
@@ -5186,32 +5305,14 @@ static Type *check_module_member(CheckCtx *ctx, Expr *e, Symbol *mod_sym,
          * is a sibling of the module in the parent's members table */
         if (!companion && mod_owner)
             companion = symtab_lookup_type(mod_owner, mod_sym->name);
-        if (companion && companion->type && companion->type->kind == TYPE_UNION) {
-            Type *ut = companion->type;
-            for (int v = 0; v < ut->unio.variant_count; v++) {
-                if (ut->unio.variants[v].name == e->field.name) {
-                    e->type = ut;
-                    e->field.is_variant_constructor = true;
-                    return e->type;
-                }
-            }
+        Type *ct = companion ? companion->type : NULL;
+        if (ct && ct->kind == TYPE_UNION) {
+            for (int v = 0; v < ct->unio.variant_count; v++)
+                if (ct->unio.variants[v].name == e->field.name)
+                    return check_union_variant_ref(ctx, e, companion, ct);
         }
-        if (companion && companion->type && companion->type->kind == TYPE_ENUM) {
-            Type *et = companion->type;
-            for (int v = 0; v < et->enu.variant_count; v++) {
-                if (et->enu.variants[v].name == e->field.name) {
-                    e->type = et;
-                    e->field.is_variant_constructor = true;
-                    return e->type;
-                }
-            }
-            if (strcmp(e->field.name, "count") == 0) {
-                e->field.codegen_name = arena_sprintf(ctx->arena, "%d", et->enu.variant_count);
-                e->field.is_type_property = true;
-                e->type = type_int32();
-                return e->type;
-            }
-        }
+        if (ct && ct->kind == TYPE_ENUM && enum_has_member(ct, e->field.name))
+            return check_enum_member(ctx, e, ct);
         diag_error(e->loc, "module '%s' has no member '%s'",
             mod_sym->name, e->field.name);
         return poison(e);
@@ -5268,11 +5369,9 @@ static Type *check_module_member(CheckCtx *ctx, Expr *e, Symbol *mod_sym,
      * (`pcg_random*` inside std::random.pcg_random.next_u32) resolve
      * against its declaration context, not the caller's. */
     if (!member->type && member->decl && member->decl->kind == DECL_LET &&
-        !check_let_on_demand(ctx, member)) {
-        diag_error(e->loc, "circular dependency: '%s.%s' depends on itself through imports",
-            mod_sym->name, e->field.name);
-        return poison(e);
-    }
+        !check_let_on_demand(ctx, member))
+        return report_let_cycle(e, arena_sprintf(ctx->arena, "%s.%s", mod_sym->name,
+                                                 e->field.name), false);
     if (!member->type) {
         diag_error(e->loc, "use of '%s.%s' before its type is resolved",
             mod_sym->name, e->field.name);
@@ -5296,56 +5395,15 @@ static Type *check_type_name_member(CheckCtx *ctx, Expr *e, Type *obj_type) {
           e->field.object->ident.resolved_sym->kind == DECL_ENUM) ||
          (e->field.object->kind == EXPR_FIELD &&
           e->field.object->field.resolved_member &&
-          e->field.object->field.resolved_member->kind == DECL_ENUM))) {
-        Type *et = obj_type;
-        if (e->field.type_arg_count > 0) {
-            diag_error(e->loc, "enum types take no type arguments");
-            return poison(e);
-        }
-        for (int v = 0; v < et->enu.variant_count; v++) {
-            if (et->enu.variants[v].name == e->field.name) {
-                e->field.is_variant_constructor = true;
-                e->type = et;
-                return e->type;
-            }
-        }
-        /* A declared variant named `count` wins above; otherwise `count`
-         * is the variant-count type property (an i32 constant). */
-        if (strcmp(e->field.name, "count") == 0) {
-            e->field.codegen_name = arena_sprintf(ctx->arena, "%d", et->enu.variant_count);
-            e->field.is_type_property = true;
-            e->type = type_int32();
-            return e->type;
-        }
-        diag_error(e->loc, "enum '%s' has no variant '%s'",
-            type_name(et), e->field.name);
-        return poison(e);
-    }
+          e->field.object->field.resolved_member->kind == DECL_ENUM)))
+        return check_enum_member(ctx, e, obj_type);
 
     /* An EXPR_IDENT naming a union type: variant construction (via the
      * stored resolved_sym, no re-resolution). */
     if (e->field.object->kind == EXPR_IDENT && obj_type->kind == TYPE_UNION) {
         Symbol *sym = e->field.object->ident.resolved_sym;
-        if (sym && sym->kind == DECL_UNION && sym->type && sym->type->kind == TYPE_UNION) {
-            if (reject_bad_no_payload_variant(ctx, sym->type, e)) {
-                return poison(e);
-            }
-            e->field.is_variant_constructor = true;
-            if (sym->is_generic) {
-                /* Generic union no-payload variant: require explicit type args */
-                if (e->field.type_arg_count == 0) {
-                    diag_error(e->loc,
-                        "generic union '%s' requires explicit type arguments: %s<...>.%s",
-                        sym->name, sym->name, e->field.name);
-                    return poison(e);
-                }
-                e->type = instantiate_written(ctx, sym, sym->name, e->field.type_args,
-                                              e->field.type_arg_count, e->loc);
-                return type_is_error(e->type) ? poison(e) : e->type;
-            }
-            e->type = sym->type;
-            return e->type;
-        }
+        if (sym && sym->kind == DECL_UNION && sym->type && sym->type->kind == TYPE_UNION)
+            return check_union_variant_ref(ctx, e, sym, sym->type);
     }
 
     /* The object names a union type (e.g. module.union_name.variant). It
@@ -5353,24 +5411,12 @@ static Type *check_type_name_member(CheckCtx *ctx, Expr *e, Type *obj_type) {
      * construction, and reading it as one would build a fresh `u.b` and
      * discard `x`. A value falls through to check_value_field's error. */
     if (obj_type->kind == TYPE_UNION && expr_is_type_ref(e->field.object)) {
-        if (reject_bad_no_payload_variant(ctx, obj_type, e)) {
-            return poison(e);
-        }
-        e->field.is_variant_constructor = true;
-        /* For module-qualified generic variants (m.union_name<Types>.variant),
-         * the parser puts the type args on the outer EXPR_FIELD node.
-         * Instantiate the generic union if type args are present. */
-        if (e->field.type_arg_count > 0 && obj_type->unio.variant_count > 0) {
-            /* The union's symbol, recorded when the object was checked. */
-            Symbol *usym = expr_symbol(e->field.object);
-            if (usym && usym->kind == DECL_UNION && usym->is_generic) {
-                e->type = instantiate_written(ctx, usym, usym->name, e->field.type_args,
-                                              e->field.type_arg_count, e->loc);
-                return type_is_error(e->type) ? poison(e) : e->type;
-            }
-        }
-        e->type = obj_type;
-        return e->type;
+        /* The union's symbol, recorded when the object was checked. For a
+         * module-qualified generic union the parser puts the type arguments
+         * on this outer node (m.union_name<Types>.variant). */
+        Symbol *usym = expr_symbol(e->field.object);
+        if (usym && usym->kind != DECL_UNION) usym = NULL;
+        return check_union_variant_ref(ctx, e, usym, obj_type);
     }
 
     /* Any type-name object still unclaimed here is an error. Companion
@@ -5509,20 +5555,11 @@ static Type *check_field(CheckCtx *ctx, Expr *e) {
         /* A const param is a value, not a type, so it has no properties.
          * Property access is itself type-kind evidence: it pins an
          * as-yet-unknown prefix var to type. */
-        if (ctx->active_fn_sym && ctx->active_fn_sym->param_kinds) {
-            Symbol *fs = ctx->active_fn_sym;
-            for (int i = 0; i < fs->type_param_count; i++) {
-                if (fs->type_params[i] != tv_name) continue;
-                if (fs->param_kinds[i] == GP_UNKNOWN)
-                    fs->param_kinds[i] = GP_TYPE;
-                else if (fs->param_kinds[i] == GP_CONST) {
-                    diag_error(e->loc,
-                        "const parameter %s is a value, not a type; it has no property '%s'",
-                        tv_name, prop);
-                    return poison(e);
-                }
-                break;
-            }
+        if (pin_fn_param_kind(ctx, tv_name, GP_TYPE) == GP_CONST) {
+            diag_error(e->loc,
+                "const parameter %s is a value, not a type; it has no property '%s'",
+                tv_name, prop);
+            return poison(e);
         }
         Type *pt = type_property_type(type_type_var(ctx->arena, tv_name), prop);
         if (!pt) {
@@ -5737,27 +5774,15 @@ static Type *check_alloc_value(CheckCtx *ctx, Expr *e) {
 
     /* Escape analysis: check for stack pointers in heap-allocated struct */
     if (ie->kind == EXPR_STRUCT_LIT) {
-        Type *st_type = ie->type;
         for (int i = 0; i < ie->struct_lit.field_count; i++) {
             FieldInit *fi = &ie->struct_lit.fields[i];
-            if (fi->value->prov == PROV_STACK && type_has_provenance(fi->value->type)) {
-                /* Fixed-array fields copy the data inline, so stack provenance is safe */
-                bool is_fixed = false;
-                if (st_type && st_type->kind == TYPE_STRUCT) {
-                    for (int f = 0; f < st_type->struc.field_count; f++) {
-                        if (st_type->struc.fields[f].name == fi->name &&
-                            st_type->struc.fields[f].type->kind == TYPE_FIXED_ARRAY) {
-                            is_fixed = true;
-                            break;
-                        }
-                    }
-                }
-                if (!is_fixed) {
-                    diag_error(fi->value->loc,
-                        "cannot store stack-allocated %s in heap-allocated struct",
-                        type_name(fi->value->type));
-                }
-            }
+            ProvPair c;
+            Type *carrier;
+            if (field_init_prov(struct_field_type(ie->type, fi->name), fi->value, &c, &carrier) &&
+                c.prov == PROV_STACK)
+                diag_error(fi->value->loc,
+                    "cannot store stack-allocated %s in heap-allocated struct",
+                    type_name(carrier));
         }
     }
 
@@ -6336,10 +6361,12 @@ static Type *check_unary_prefix(CheckCtx *ctx, Expr *e) {
                 return poison(e);
             }
             bool oor = operand->int_lit.out_of_range;
+            bool negative = !operand->int_lit.negative;
             e->kind = EXPR_INT_LIT;
             e->int_lit.value = val;
             e->int_lit.lit_type = lt;
             e->int_lit.out_of_range = oor;
+            e->int_lit.negative = negative;
             return check_expr(ctx, e);
         }
         if (operand->kind == EXPR_FLOAT_LIT) {
@@ -6366,32 +6393,14 @@ static Type *check_unary_prefix(CheckCtx *ctx, Expr *e) {
         e->type = ot;
         return e->type;
     }
-    if (ot->kind == TYPE_ENUM && (op == TOK_MINUS || op == TOK_TILDE || op == TOK_BANG)) {
-        diag_error(e->loc, "enum '%s' is not numeric; cast out first: (%s) x",
-            type_name(ot), type_name(type_enum_underlying(ot)));
-        return poison(e);
-    }
-    if (op == TOK_MINUS) {
-        /* Negation is defined only for signed integers and floats; an
-         * unsigned operand has no representable negative and would silently
-         * wrap (the literal path already rejects `-5u32`). */
-        if (!type_is_signed(ot) && !type_is_float(ot)) {
-            diag_error(e->loc, "unary minus requires a signed integer or float operand, got %s", type_name(ot));
+    if (op == TOK_MINUS || op == TOK_TILDE || op == TOK_BANG) {
+        char *msg = unary_operand_error(op, ot);
+        if (msg) {
+            diag_error(e->loc, "%s", msg);
+            free(msg);
             return poison(e);
         }
-        e->type = ot;
-    } else if (op == TOK_BANG) {
-        if (!type_eq(ot, type_bool())) {
-            diag_error(e->loc, "unary ! requires bool operand, got %s", type_name(ot));
-            return poison(e);
-        }
-        e->type = type_bool();
-    } else if (op == TOK_TILDE) {
-        if (!type_is_integer(ot)) {
-            diag_error(e->loc, "bitwise not requires integer operand");
-            return poison(e);
-        }
-        e->type = ot;
+        e->type = op == TOK_BANG ? type_bool() : ot;
     } else if (op == TOK_AMP) {
         return check_address_of(ctx, e, ot);
     } else if (op == TOK_STAR) {
@@ -6506,22 +6515,10 @@ static Type *check_ident(CheckCtx *ctx, Expr *e) {
      * the companion half of a type/module pair looked up where the symbol
      * was found. */
     Resolution r = resolve_name(ctx, e->ident.name, ANY_DECL_KIND);
-    if (r.members)
-        return bind_resolved_symbol(ctx, e, r.sym, companion_in_table(r.members, r.sym), false);
-    if (r.imports) {
-        Symbol *companion = NULL;
-        const char *n = e->ident.name;
-        if (is_type_decl_kind(r.sym->kind)) {
-            companion = import_scope_lookup_kind_until(r.imports, n, DECL_MODULE, r.imports_stop);
-        } else if (r.sym->kind == DECL_MODULE) {
-            companion = import_scope_lookup_kind_until(r.imports, n, DECL_STRUCT, r.imports_stop);
-            if (!companion)
-                companion = import_scope_lookup_kind_until(r.imports, n, DECL_UNION, r.imports_stop);
-            if (!companion)
-                companion = import_scope_lookup_kind_until(r.imports, n, DECL_ENUM, r.imports_stop);
-        }
-        return bind_resolved_symbol(ctx, e, r.sym, companion, true);
-    }
+    if (r.members || r.imports)
+        return bind_resolved_symbol(ctx, e, r.sym,
+                                    companion_of(ctx, &r, r.sym, e->ident.name),
+                                    r.imports != NULL);
     Symbol *sym = r.sym;
     if (!sym) {
         /* Built-in globals: stdin, stdout, stderr */
@@ -6548,12 +6545,7 @@ static Type *check_ident(CheckCtx *ctx, Expr *e) {
         }
         return poison(e);
     }
-    Symbol *companion = NULL;
-    if (is_type_decl_kind(sym->kind)) {
-        /* A type used as a value: variant construction, or a companion
-         * module's member through the type's name. */
-        companion = symtab_lookup_module(ctx->symtab, e->ident.name, ctx->current_ns);
-    } else if (sym->kind == DECL_MODULE) {
+    if (sym->kind == DECL_MODULE) {
         /* Modules resolve namespace-aware: prefer the same-namespace one. */
         sym = symtab_lookup_module(ctx->symtab, e->ident.name, ctx->current_ns);
         if (!sym) {
@@ -6561,19 +6553,15 @@ static Type *check_ident(CheckCtx *ctx, Expr *e) {
                 e->ident.name);
             return poison(e);
         }
-        /* Companion module: a file-scope struct/union/enum may share its
-         * name with a module. `global_lookup` returns whichever pass1
-         * registered first, and modules are collected before top-level types,
-         * so it returns the module. Look up the type half of the pair;
-         * bind_resolved_symbol then resolves to the type with the module as
-         * its companion (the shape the module-scoped paths above produce),
-         * so `t.x` tries the module first and falls through to variant
-         * construction on a miss. */
-        companion = symtab_lookup_kind_ns(ctx->symtab, e->ident.name, DECL_STRUCT, ctx->current_ns);
-        if (!companion) companion = symtab_lookup_kind_ns(ctx->symtab, e->ident.name, DECL_UNION, ctx->current_ns);
-        if (!companion) companion = symtab_lookup_kind_ns(ctx->symtab, e->ident.name, DECL_ENUM, ctx->current_ns);
     }
-    return bind_resolved_symbol(ctx, e, sym, companion, false);
+    /* A file-scope struct, union or enum may share its name with a module.
+     * `global_lookup` returns whichever pass1 registered first, and modules
+     * are collected before top-level types, so for a pair it returns the
+     * module; bind_resolved_symbol then resolves to the type with the module
+     * as its companion (the shape the member and import paths produce), so
+     * `t.x` tries the module first and falls through to variant construction
+     * on a miss. */
+    return bind_resolved_symbol(ctx, e, sym, companion_of(ctx, &r, sym, e->ident.name), false);
 }
 
 /* A struct literal: every field named once, each value checked against its
@@ -6707,29 +6695,21 @@ static Type *check_struct_lit(CheckCtx *ctx, Expr *e) {
         }
         e->type = instantiate_aggregate(ctx, sym, sym->name, bindings, ntp, e->loc);
         if (type_is_error(e->type)) return poison(e);
-        /* Propagate stack provenance from any stack-pointer field so that
-           returning/escaping the struct triggers the return-check rules. */
-        for (int i = 0; i < e->struct_lit.field_count; i++) {
-            FieldInit *fi = &e->struct_lit.fields[i];
-            if (fi->value->prov == PROV_STACK &&
-                type_has_provenance(fi->value->type)) {
-                e->prov = PROV_STACK;
-                break;
-            }
-        }
-        return e->type;
+    } else {
+        e->type = st;
     }
-
-    e->type = st;
+    /* The struct points into the stack if any field does. Its element
+     * provenance summarizes what its fields hold one level deeper: a struct
+     * holding a stack slice of heap blocks is itself stack (the slice is) but
+     * the blocks stay freeable. */
     for (int i = 0; i < e->struct_lit.field_count; i++) {
         FieldInit *fi = &e->struct_lit.fields[i];
-        if (!type_has_provenance(fi->value->type)) continue;
-        if (fi->value->prov == PROV_STACK) e->prov = PROV_STACK;
-        /* A struct's element provenance summarizes what its container
-         * fields hold, one level deeper than `prov`: a struct holding a
-         * stack slice of heap blocks is itself stack (the slice is) but
-         * the blocks stay freeable. */
-        e->elem_prov = merge_prov(e->elem_prov, fi->value->elem_prov);
+        ProvPair c;
+        Type *carrier;
+        if (!field_init_prov(struct_field_type(st, fi->name), fi->value, &c, &carrier))
+            continue;
+        if (c.prov == PROV_STACK) e->prov = PROV_STACK;
+        e->elem_prov = merge_prov(e->elem_prov, c.elem_prov);
     }
     return e->type;
 }
@@ -6780,20 +6760,15 @@ static Type *check_array_lit(CheckCtx *ctx, Expr *e) {
         uint64_t raw = e->array_lit.size_expr->int_lit.value;
         Type *slt = e->array_lit.size_expr->int_lit.lit_type;
         bool unrepresentable = raw > (uint64_t) INT64_MAX && slt && !type_is_signed(slt);
-        if (unrepresentable || (int64_t) raw < 0) {
-            if (unrepresentable)
-                diag_error(e->array_lit.size_expr->loc,
-                    "slice literal length %" PRIu64 " is too large", raw);
-            else
-                diag_error(e->array_lit.size_expr->loc,
-                    "slice literal length cannot be negative, got %lld",
-                    (long long) (int64_t) raw);
+        if (unrepresentable) {
+            diag_error(e->array_lit.size_expr->loc,
+                "slice literal length %" PRIu64 " is too large", raw);
             return poison(e);
         }
-        if ((int64_t) raw > fc_len_max()) {
-            diag_error(e->array_lit.size_expr->loc,
-                "slice literal length %lld exceeds --len-repr %d length capacity %lld",
-                (long long) (int64_t) raw, g_len_repr, (long long) fc_len_max());
+        char *msg = static_length_error("slice literal length", (int64_t)raw, false);
+        if (msg) {
+            diag_error(e->array_lit.size_expr->loc, "%s", msg);
+            free(msg);
             return poison(e);
         }
     }
@@ -6853,8 +6828,6 @@ static Type *check_array_lit(CheckCtx *ctx, Expr *e) {
     return e->type;
 }
 
-/* A local `let`: its initializer (with the binding visible inside a lambda
- * initializer, for recursion) and the new binding. */
 /* The type a function under definition has inside its own body, so the body
  * can call itself: its parameter types, and a TYPE_UNRESOLVED return type in
  * its own cell, returned in *placeholder. The caller patches that cell in place
@@ -6878,6 +6851,43 @@ static Type *recursive_fn_type(CheckCtx *ctx, Expr *fn, Type **placeholder) {
     return ft;
 }
 
+/* Check a `let` initializer, local or declared: its type, or poison after
+ * reporting a type name written where a value belongs. */
+static Type *check_let_init(CheckCtx *ctx, Expr *init) {
+    Type *t = check_expr(ctx, init);
+    if (expr_is_type_ref(init)) {
+        diag_error(init->loc, "'%s' is a type, not a value", type_name(t));
+        return type_error();
+    }
+    return t;
+}
+
+/* Whether a `let` named `name` may bind a value of type `t` (already checked,
+ * not poison); reports at `loc` and returns false when not. A void value, an
+ * expression every path of which diverges, and a recursive call's result
+ * before a base case fixes its type have nothing to bind. */
+static bool bindable_type(Type *t, SrcLoc loc, const char *name) {
+    switch (t->kind) {
+    case TYPE_VOID:
+        diag_error(loc, "cannot bind void expression to '%s'", name);
+        return false;
+    case TYPE_NEVER:
+        diag_error(loc, "cannot bind '%s': every path through this expression "
+            "diverges (returns, breaks, or continues), so it has no value", name);
+        return false;
+    case TYPE_UNRESOLVED:
+        /* The value is (or derives from) a self-recursive call made before any
+           base case anchors the return type: unconditional recursion. */
+        diag_error(loc, "cannot bind '%s': it depends on a recursive call made "
+            "before a base case establishes the return type", name);
+        return false;
+    default:
+        return true;
+    }
+}
+
+/* A local `let`: its initializer (with the binding visible inside a lambda
+ * initializer, for recursion) and the new binding. */
 static Type *check_let(CheckCtx *ctx, Expr *e) {
     if (e->type) return e->type;
 
@@ -6906,48 +6916,14 @@ static Type *check_let(CheckCtx *ctx, Expr *e) {
         ctx->pending.recursive_self = e->let_expr.let_name;
     }
 
-    Type *t = check_expr(ctx, e->let_expr.let_init);
-    if (expr_is_type_ref(e->let_expr.let_init)) {
-        diag_error(e->let_expr.let_init->loc, "'%s' is a type, not a value",
-            type_name(t));
-        t = type_error();
-    }
+    Type *t = check_let_init(ctx, e->let_expr.let_init);
 
     /* EXPR_FUNC clears the hand-off when it takes it; restore it anyway so
        error paths and non-lambda inits leave it as they found it. */
     ctx->pending = saved_handoff;
 
-    if (type_is_error(t)) {
+    if (type_is_error(t) || !bindable_type(t, e->loc, e->let_expr.let_name)) {
         /* Add binding with error type so subsequent uses don't cascade "undefined" */
-        e->let_expr.let_type = type_error();
-        scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut,
-                  e->let_expr.let_name_loc);
-        e->type = type_void();
-        return e->type;
-    }
-    if (t->kind == TYPE_VOID) {
-        diag_error(e->loc, "cannot bind void expression to '%s'", e->let_expr.let_name);
-        e->let_expr.let_type = type_error();
-        scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut,
-                  e->let_expr.let_name_loc);
-        e->type = type_void();
-        return e->type;
-    }
-    if (t->kind == TYPE_NEVER) {
-        diag_error(e->loc, "cannot bind '%s': every path through this expression "
-            "diverges (returns, breaks, or continues), so it has no value",
-            e->let_expr.let_name);
-        e->let_expr.let_type = type_error();
-        scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut,
-                  e->let_expr.let_name_loc);
-        e->type = type_void();
-        return e->type;
-    }
-    if (t->kind == TYPE_UNRESOLVED) {
-        /* The value is (or derives from) a self-recursive call made before any
-           base case anchors the return type: unconditional recursion. */
-        diag_error(e->loc, "cannot bind '%s': it depends on a recursive call made "
-            "before a base case establishes the return type", e->let_expr.let_name);
         e->let_expr.let_type = type_error();
         scope_add(ctx->scope, e->let_expr.let_name, cg, type_error(), e->let_expr.let_is_mut,
                   e->let_expr.let_name_loc);
@@ -7144,8 +7120,9 @@ static Type *check_cast(CheckCtx *ctx, Expr *e) {
     bool const_change_slice = (from->kind == TYPE_SLICE && to->kind == TYPE_SLICE &&
         type_eq_ignore_const(from, to));
     /* An identity cast (same type) is a no-op, allowed for the scalar types
-     * C can cast to (numeric, pointer, bool). Aggregate types
-     * (struct/union/slice) cannot be cast in C, so they stay rejected. */
+     * C can cast to (numeric, pointer, bool). A struct or union cannot be
+     * cast in C, so it stays rejected; a slice to the same slice type is the
+     * const-change cast above, of which the identical case is one. */
     bool same_type = type_eq(from, to) &&
         (from_num || from_ptr || from->kind == TYPE_BOOL);
     /* A pointer<->integer cast through a fixed-width int gets a targeted
@@ -7344,45 +7321,44 @@ static Type *check_interp_string(CheckCtx *ctx, Expr *e) {
         et = resolve_type(ctx, et);
 
         char conv = seg->conversion;
+        InterpConvClass cls;
+        if (!interp_conv_class(conv, &cls))   /* the lexer admits only these */
+            diag_fatal(seg->expr->loc, "internal: unknown format conversion '%c'", conv);
         bool ok = false;
-        switch (conv) {
-        case 'd': case 'i': case 'u': case 'x': case 'X': case 'o':
+        switch (cls) {
+        case CONV_INTEGER:
             ok = type_is_integer(et);
             if (!ok) diag_error(seg->expr->loc,
                 "format specifier %%%c expects integer type, got %s",
                 conv, type_name(et));
             break;
-        case 'f': case 'e': case 'E': case 'g': case 'G':
+        case CONV_FLOAT:
             ok = (et->kind == TYPE_FLOAT32 || et->kind == TYPE_FLOAT64);
             if (!ok) diag_error(seg->expr->loc,
                 "format specifier %%%c expects float type, got %s",
                 conv, type_name(et));
             break;
-        case 's':
+        case CONV_STRING:
             ok = (is_str_type(et) || is_cstr_type(et));
             if (!ok) diag_error(seg->expr->loc,
                 "format specifier %%s expects str or cstr, got %s",
                 type_name(et));
             break;
-        case 'c':
+        case CONV_CHAR:
             ok = et->kind == TYPE_UINT8;
             if (!ok) diag_error(seg->expr->loc,
                 "format specifier %%c expects char, got %s",
                 type_name(et));
             break;
-        case 'p':
+        case CONV_POINTER:
             ok = (et->kind == TYPE_POINTER || et->kind == TYPE_ANY_PTR);
             if (!ok) diag_error(seg->expr->loc,
                 "format specifier %%p expects pointer type, got %s",
                 type_name(et));
             break;
-        case 'T':
+        case CONV_TYPE_NAME:
             /* %T accepts any type and emits its compile-time name */
             ok = true;
-            break;
-        default:
-            diag_error(seg->expr->loc,
-                "unknown format specifier %%%c", conv);
             break;
         }
         /* Only once the conversion suits the operand: the modifier rules are
@@ -7414,11 +7390,11 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     switch (e->kind) {
     case EXPR_INT_LIT:
         e->type = e->int_lit.lit_type;
-        /* check_unary_prefix folds `-lit` and rejects a negated unsigned
-         * literal itself, so negative=false here. A literal that does not
+        /* check_unary_prefix folds `-lit` into a literal marked negative (and
+         * rejects a negated unsigned literal itself). A literal that does not
          * fit is poison, so nothing folds or judges its truncated value. */
         if (!check_int_literal_range(e->int_lit.value, e->type, e->loc,
-                                     e->int_lit.out_of_range, false))
+                                     e->int_lit.out_of_range, e->int_lit.negative))
             return poison(e);
         return e->type;
 
@@ -7442,16 +7418,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         return e->type;
 
     case EXPR_STRING_LIT:
-        /* The decoded byte count is the slice len, so a literal longer than
-         * the stored len width can hold is rejected here. Escapes only
-         * shrink, so the source length gates the decode. */
-        if (g_len_repr < 64 && (int64_t)e->string_lit.length > fc_len_max()) {
-            int blen = decode_str_lit(e->string_lit.value, e->string_lit.length, NULL);
-            if ((int64_t)blen > fc_len_max())
-                diag_error(e->loc,
-                    "string literal length %d exceeds --len-repr %d length capacity %lld",
-                    blen, g_len_repr, (long long)fc_len_max());
-        }
+        check_string_lit_length(e->string_lit.value, e->string_lit.length, e->loc);
         e->type = type_const_str();
         e->prov = PROV_STATIC;
         return e->type;
@@ -7910,19 +7877,10 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
          * validate_generic_body; codegen emits the literal). A standalone use
          * is itself kind evidence: a prefix var with no other occurrence is
          * pinned to const here. */
-        Symbol *fs = ctx->active_fn_sym;
-        if (fs && fs->param_kinds) {
-            for (int i = 0; i < fs->type_param_count; i++) {
-                if (fs->type_params[i] != e->type_var_ref.name) continue;
-                if (fs->param_kinds[i] == GP_UNKNOWN)
-                    fs->param_kinds[i] = GP_CONST;
-                if (fs->param_kinds[i] == GP_CONST) {
-                    e->type_var_ref.is_const_param = true;
-                    e->type = type_int32();
-                    return e->type;
-                }
-                break;
-            }
+        if (pin_fn_param_kind(ctx, e->type_var_ref.name, GP_CONST) == GP_CONST) {
+            e->type_var_ref.is_const_param = true;
+            e->type = type_int32();
+            return e->type;
         }
         /* A type variable used standalone (not as 'a.property) */
         diag_error(e->loc, "type variable %s cannot be used as a value",
@@ -8093,24 +8051,21 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
          * is always >= 0; any other signed len is guarded at construction by
          * codegen, except in a const context, where const_fold_expr rejects a
          * negative value because no runtime guard is emitted there. */
+        int64_t lit_len;
+        bool len_is_lit = slice_len_literal_value(orig_len, &lit_len);
         if (len_type_ok && type_is_integer(lt)) {
-            if (!type_is_signed(lt)) {
-                e->slice_lit.len_nonneg = true;
-            } else if (orig_len->kind == EXPR_INT_LIT && !orig_len->int_lit.out_of_range) {
-                if ((int64_t)orig_len->int_lit.value < 0)
-                    diag_error(orig_len->loc, "slice literal length cannot be negative");
-                else
+            /* A literal len is judged here; any other is guarded at
+             * construction (codegen fc_chk_len). */
+            if (len_is_lit) {
+                char *msg = static_length_error("slice literal length", lit_len, false);
+                if (msg) {
+                    diag_error(orig_len->loc, "%s", msg);
+                    free(msg);
+                } else {
                     e->slice_lit.len_nonneg = true;
-            }
-            /* Statically-known len over the stored width is a compile error;
-             * runtime lens are guarded at construction (codegen fc_chk_len). */
-            if (orig_len->kind == EXPR_INT_LIT && !orig_len->int_lit.out_of_range &&
-                (int64_t)orig_len->int_lit.value >= 0 &&
-                (int64_t)orig_len->int_lit.value > fc_len_max()) {
-                diag_error(orig_len->loc,
-                    "slice length %lld exceeds --len-repr %d length capacity %lld",
-                    (long long)(int64_t)orig_len->int_lit.value, g_len_repr,
-                    (long long)fc_len_max());
+                }
+            } else if (!type_is_signed(lt)) {
+                e->slice_lit.len_nonneg = true;
             }
         }
         Type *slice_type = type_slice(ctx->arena, elem_type);
@@ -8544,7 +8499,10 @@ static const Expr *resolve_pattern_const_path(CheckCtx *ctx, Pattern *pat) {
    PAT_VARIANT for a no-payload variant) is an error; or-pattern alternatives
    use this, since they must be binding-free. */
 static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool reject_bindings) {
-    if (type_is_error(type)) return;
+    if (type_is_error(type)) {
+        bind_pattern_poison(pat, ctx);
+        return;
+    }
     type = resolve_type(ctx, type);
     switch (pat->kind) {
     case PAT_WILDCARD:
@@ -8642,15 +8600,8 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
             diag_error(pat->loc, "string pattern on non-str type %s", type_name(type));
             return;
         }
-        /* Same stored-width bound as string-literal expressions: the pattern
-         * is emitted as an fc_str constant whose len must fit fc_len_t. */
-        if (g_len_repr < 64 && (int64_t)pat->string_lit.length > fc_len_max()) {
-            int blen = decode_str_lit(pat->string_lit.value, pat->string_lit.length, NULL);
-            if ((int64_t)blen > fc_len_max())
-                diag_error(pat->loc,
-                    "string literal length %d exceeds --len-repr %d length capacity %lld",
-                    blen, g_len_repr, (long long)fc_len_max());
-        }
+        /* The pattern is emitted as an fc_str constant. */
+        check_string_lit_length(pat->string_lit.value, pat->string_lit.length, pat->loc);
         break;
     case PAT_SOME:
         if (type->kind != TYPE_OPTION) {
@@ -10046,18 +9997,6 @@ static bool const_read_scalar(Expr *e, ConstScalar *out) {
     }
 }
 
-/* True when a slice literal's len is a (possibly implicitly-widened) integer
- * literal. check_expr already rejects a negative one, so const_fold_expr
- * skips this form to avoid a duplicate diagnostic. */
-static bool slicelit_len_is_literal(Expr *len) {
-    if (!len) return false;
-    if (len->kind == EXPR_INT_LIT) return true;
-    if (len->kind == EXPR_CAST && len->cast.operand &&
-        len->cast.operand->kind == EXPR_INT_LIT)
-        return true;
-    return false;
-}
-
 static Expr *const_make_int(CheckCtx *ctx, Type *t, uint64_t v, SrcLoc loc) {
     Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
     n->kind = EXPR_INT_LIT;
@@ -10066,6 +10005,7 @@ static Expr *const_make_int(CheckCtx *ctx, Type *t, uint64_t v, SrcLoc loc) {
     n->int_lit.value = v;
     n->int_lit.lit_type = t;
     n->int_lit.out_of_range = false;
+    n->int_lit.negative = type_is_signed(t) && (int64_t)v < 0;
     return n;
 }
 
@@ -10092,8 +10032,7 @@ static Expr *const_fold_type_property(CheckCtx *ctx, Expr *e) {
      * component (`gfx.mode.count`), where the object is itself an
      * EXPR_FIELD; reading the object's type rather than its node shape
      * folds every spelling. */
-    if (strcmp(e->field.name, "count") == 0 && e->field.object->type &&
-        e->field.object->type->kind == TYPE_ENUM) {
+    if (type_enum_count_is(e->field.object->type, e->field.name)) {
         return const_make_int(ctx, type_int32(),
             (uint64_t)e->field.object->type->enu.variant_count, e->loc);
     }
@@ -10131,27 +10070,24 @@ static Expr *try_eval_const(CheckCtx *ctx, Expr *e) {
         TokenKind op = e->unary_prefix.op;
         ConstScalar a;
         if (!const_read_scalar(e->unary_prefix.operand, &a)) return NULL;
-        if (op == TOK_BANG) {
-            if (e->type->kind != TYPE_BOOL) return NULL;
-            return const_make_bool(ctx, e->type, a.val == 0, e->loc);
-        }
-        int w = type_fixed_int_bits(e->type);
+        bool is_bool = op == TOK_BANG;
+        if (is_bool && e->type->kind != TYPE_BOOL) return NULL;
+        int w = is_bool ? 1 : type_fixed_int_bits(e->type);
         if (w == 0) return NULL;
-        bool s = type_is_signed(e->type);
         uint64_t r;
-        if (op == TOK_MINUS)      r = (uint64_t)0 - a.val;
-        else if (op == TOK_TILDE) r = ~a.val;
-        else return NULL;
-        return const_make_int(ctx, e->type, const_mask_extend(r, w, s), e->loc);
+        if (const_unary_op(op, a.val, w, !is_bool && type_is_signed(e->type), &r) != CONST_OP_OK)
+            return NULL;
+        return is_bool ? const_make_bool(ctx, e->type, r != 0, e->loc)
+                       : const_make_int(ctx, e->type, r, e->loc);
     }
     case EXPR_CAST: {
-        Type *tgt = e->cast.target;
-        int w = type_fixed_int_bits(tgt);
-        if (w == 0) return NULL;  /* non-fixed-int target: bool/char/float/isize/usize */
+        /* A non-fixed-int target (bool/char/float/isize/usize) is left for C. */
         ConstScalar a;
-        if (!const_read_scalar(e->cast.operand, &a)) return NULL;
-        bool s = type_is_signed(tgt);
-        return const_make_int(ctx, tgt, const_mask_extend(a.val, w, s), e->loc);
+        uint64_t r;
+        if (!const_read_scalar(e->cast.operand, &a) ||
+            !const_cast_value(e->cast.target, a.val, &r))
+            return NULL;
+        return const_make_int(ctx, e->cast.target, r, e->loc);
     }
     case EXPR_BINARY: {
         TokenKind op = e->binary.op;
@@ -10366,20 +10302,20 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
         Expr *l = const_fold_expr(ctx, e->slice_lit.len_expr);
         if (!p || !l) return NULL;
         /* Const-context slice literals are emitted as C file-scope initializers
-         * with no runtime guard, so a bad len must be caught here. A plain
-         * (possibly widened) integer literal was already checked in
-         * check_expr, so report only a non-literal len (`0 - 1`, a reference
-         * to a negative const) whose folded value is out of range. */
-        if (!slicelit_len_is_literal(e->slice_lit.len_expr)) {
+         * with no runtime guard, so a bad len must be caught here. A literal
+         * len (slice_len_literal_value) was already judged in check_expr, so
+         * report only another constant len (`0 - 1`, a reference to a negative
+         * const) whose folded value is out of range. */
+        int64_t lit_len;
+        if (!slice_len_literal_value(e->slice_lit.len_expr, &lit_len)) {
+            /* A len is at most a u32 (only those widen to i64), so an
+             * unsigned value fits int64_t. */
             ConstScalar cs;
-            if (const_read_scalar(l, &cs)) {
-                if (cs.is_signed && (int64_t)cs.val < 0)
-                    diag_error(e->slice_lit.len_expr->loc,
-                        "slice literal length cannot be negative");
-                else if (cs.val > (uint64_t)fc_len_max())
-                    diag_error(e->slice_lit.len_expr->loc,
-                        "slice length %llu exceeds --len-repr %d length capacity %lld",
-                        (unsigned long long)cs.val, g_len_repr, (long long)fc_len_max());
+            char *msg = const_read_scalar(l, &cs)
+                ? static_length_error("slice literal length", (int64_t)cs.val, false) : NULL;
+            if (msg) {
+                diag_error(e->slice_lit.len_expr->loc, "%s", msg);
+                free(msg);
             }
         }
         Expr *n = copy_if_changed(ctx, e, p != e->slice_lit.ptr_expr ||
@@ -10396,9 +10332,8 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
          * initializer. A provably-non-null payload emits the bare pointer, a
          * valid constant; reject anything else here (a provably-null payload
          * was already rejected by check_expr). */
-        if (e->type && e->type->kind == TYPE_OPTION && e->type->option.inner &&
-            (e->type->option.inner->kind == TYPE_POINTER ||
-             e->type->option.inner->kind == TYPE_ANY_PTR) &&
+        if (e->type && e->type->kind == TYPE_OPTION &&
+            option_inner_is_null_sentinel(e->type->option.inner) &&
             !ptr_value_provably_nonnull(v)) {
             diag_error(e->loc,
                 "some() of a possibly-null pointer is not allowed in a constant "
@@ -10591,13 +10526,11 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
        so scopes it to that body. */
     ctx->pending.recursive_ret = recursive_ret;
     ctx->pending.recursive_self = recursive_ret ? d->let.name : NULL;
-    Type *t = check_expr(ctx, d->let.init);
-    if (expr_is_type_ref(d->let.init)) {
-        diag_error(d->let.init->loc, "'%s' is a type, not a value", type_name(t));
-        t = type_error();
-    }
+    Type *t = check_let_init(ctx, d->let.init);
     ctx->pending = saved_handoff;
     ctx->is_top_level_init = saved_top;
+    if (!type_is_error(t) && !bindable_type(t, d->loc, d->let.name))
+        t = type_error();
 
     /* If we pre-registered a recursive function type, patch the return type */
     if (recursive_ret) {
@@ -10629,10 +10562,12 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
     scope_add(ctx->scope, d->let.name, cg_name, t, d->let.is_mut, d->loc);
 }
 
-/* Walk a field type as canonicalize_field_stubs does, but only fold its
- * fixed-array size expressions. Stub names are left alone: they are
- * canonicalized later, interleaved with body checking, where scope-based
- * resolution of the source spelling still works. */
+/* Fold every fixed-array size expression in a field type, wherever it sits:
+ * under pointers, options, results and slices, in function types, in nested
+ * struct and union fields, and in stub type arguments: named consts resolve
+ * in the decl's own scope, concrete sizes fold to a positive `size`, and
+ * const-param sizes keep a normalized symbolic form for per-instance folding.
+ * Stub names are left to canonicalize_field_stubs, which pass 0 runs next. */
 static void normalize_type_sizes(CheckCtx *ctx, Type *t) {
     if (!t) return;
     switch (t->kind) {
@@ -10792,33 +10727,13 @@ static void check_module_members(CheckCtx *ctx, Decl *mod_decl,
  * arrays, options and results of a value type do propagate by-value
  * containment. */
 
-/* Name of the struct/union a type embeds by value, or NULL (pointers, slices,
- * primitives, functions, and options-of-pointer carry no by-value UDT). */
+/* Name of the struct/union declaration a type embeds by value
+ * (type_byval_aggregate), or NULL. A generic instance names its template. */
 static const char *byval_type_name(Type *t) {
-    if (!t) return NULL;
-    switch (t->kind) {
-    case TYPE_STUB:        return t->stub.name;
-    case TYPE_STRUCT:      return t->struc.name;
-    case TYPE_UNION:       return t->unio.name;
-    case TYPE_FIXED_ARRAY: return byval_type_name(t->fixed_array.elem);
-    case TYPE_OPTION:      return byval_type_name(t->option.inner);
-    case TYPE_RESULT:      return byval_type_name(t->result.inner);
-    CASE_TYPE_PRIMITIVES:
-    case TYPE_POINTER:
-    case TYPE_SLICE:
-    case TYPE_FUNC:
-    case TYPE_ENUM:
-    case TYPE_ANY_PTR:
-    case TYPE_TYPE_VAR:
-    case TYPE_CONST_INT:
-    case TYPE_CONST_EXPR:
-    case TYPE_ERROR:
-    case TYPE_NEVER:
-    case TYPE_UNRESOLVED:
-    case TYPE_COUNT:
-        break;
-    }
-    return NULL;  /* pointer, slice, func, primitives */
+    Type *a = type_byval_aggregate(t);
+    if (!a) return NULL;
+    if (a->kind == TYPE_STUB) return a->stub.name;
+    return a->kind == TYPE_STRUCT ? a->struc.name : a->unio.name;
 }
 
 static void collect_aggregate_decls(Decl **decls, int count, Decl ***list, int *n, int *cap) {
@@ -11214,14 +11129,10 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
                 Symbol *mod_sym = symtab_lookup_module(symtab, d->module.name,
                     d->module.ns_prefix ? d->module.ns_prefix : ns0);
                 if (!mod_sym || !mod_sym->members) continue;
-                ctx.current_ns = mod_sym->ns_prefix;
-                ImportScope mod_import_scope = { .table = mod_sym->imports, .parent = &file_import_scope };
-                ctx.import_scope = mod_sym->imports ? &mod_import_scope
-                                 : (file_tbl ? &file_import_scope : NULL);
-                ctx.module_symtab = mod_sym->members;
+                SavedCtxScope saved;
+                enter_module_scope(&ctx, mod_sym, &saved);
                 canonicalize_module_types(&ctx, d, mod_sym->members);
-                ctx.module_symtab = NULL;
-                ctx.import_scope = NULL;
+                restore_scope(&ctx, &saved);
             } else if (d->kind == DECL_STRUCT || d->kind == DECL_UNION ||
                        d->kind == DECL_EXTERN) {
                 ctx.current_ns = ns0;
@@ -11247,24 +11158,10 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         Symbol *mod_sym = symtab_lookup_module(symtab, d->module.name,
             d->module.ns_prefix ? d->module.ns_prefix : ns_tracker);
         if (!mod_sym || !mod_sym->members) continue;
-        ctx.current_ns = mod_sym->ns_prefix;
-        SymbolTable *saved_mod = ctx.module_symtab;
-        Scope *saved_scope = ctx.scope;
-        ImportScope *saved_imports = ctx.import_scope;
-
-        /* Build import scope chain: module imports -> file imports */
-        ImportTable *file_tbl = file_imports_find(file_scopes, d->loc.filename);
-        ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
-        ImportScope mod_import_scope = { .table = mod_sym->imports, .parent = &file_import_scope };
-        ctx.import_scope = mod_sym->imports ? &mod_import_scope : (file_tbl ? &file_import_scope : NULL);
-
-        ctx.module_symtab = mod_sym->members;
-        ctx.scope = scope_new(arena, NULL);
-        ctx.scope->is_global = true;
+        SavedCtxScope saved;
+        enter_module_scope(&ctx, mod_sym, &saved);
         check_module_members(&ctx, d, mod_sym->members);
-        ctx.scope = saved_scope;
-        ctx.module_symtab = saved_mod;
-        ctx.import_scope = saved_imports;
+        restore_scope(&ctx, &saved);
     }
 
     /* Second pass: type-check top-level (non-module) decls.
@@ -11332,4 +11229,13 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
 
     /* The arena belongs to the caller, which owns the AST; the types pass2
      * synthesized are referenced from the AST and are freed with it. */
+}
+
+void front_end_free(SymbolTable *symtab, InternTable *intern, MonoTable *mono,
+                    FileImportScopes *file_scopes, Arena *arena) {
+    symtab_free(symtab);
+    file_scopes_free(file_scopes);
+    free(mono->entries);
+    free(intern->entries);   /* the hash array; the strings live in the arena */
+    arena_free(arena);
 }

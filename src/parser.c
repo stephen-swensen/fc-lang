@@ -281,10 +281,16 @@ static Token *expect(Parser *p, TokenKind kind) {
     return advance_p(p);
 }
 
-/* A keyword token: word-shaped but not an identifier. */
+/* A keyword token: word-shaped (every character a letter, digit or `_`,
+ * starting with a letter or `_`) but not an identifier. A literal that merely
+ * starts with a letter, like the c-string `c"puts"`, is not one. */
 static bool is_keyword_token(const Token *t) {
-    return t->kind != TOK_IDENT && t->length > 0 &&
-           (isalpha((unsigned char)t->start[0]) || t->start[0] == '_');
+    if (t->kind == TOK_IDENT || t->length == 0 ||
+        !(isalpha((unsigned char)t->start[0]) || t->start[0] == '_'))
+        return false;
+    for (int i = 1; i < t->length; i++)
+        if (!(isalnum((unsigned char)t->start[i]) || t->start[i] == '_')) return false;
+    return true;
 }
 
 /* A name being declared (a binding, parameter, field, variant or type). A
@@ -381,14 +387,16 @@ static const char *tok_intern(Parser *p, Token *t) {
 
 /* The C name in an extern declaration: an identifier, or any keyword, since a
  * C library may use a name FC reserves ('extern free as c_free: ...'; the
- * caller then requires the alias). */
+ * caller then requires the alias). NULL after reporting anything else, without
+ * consuming it: the caller abandons the declaration and the body loop
+ * recovers. */
 static Token *expect_extern_c_name(Parser *p) {
     TokenKind k = current(p)->kind;
     if (k == TOK_IDENT || is_keyword_token(current(p)))
         return advance_p(p);
     diag_error(loc_from_token(current(p)),
         "expected identifier in extern declaration, got %s", token_kind_name(k));
-    return current(p); /* no consume: the recovery loop syncs on this token */
+    return NULL;
 }
 
 /* ---- Pratt precedence ---- */
@@ -508,6 +516,19 @@ static bool parse_static_assert_line(Parser *p, Expr **out_cond, const char **ou
 static Expr *parse_const_arith(Parser *p, int min_prec);
 static Expr *parse_const_arith_inner(Parser *p, int min_prec);
 static Expr *parse_prefix(Parser *p);
+
+/* Can a token of kind `k` begin a const atom: is it one of parse_const_atom's
+ * cases? Also decides `t*` vs `a * b` (after `*`, a const atom never continues
+ * a pointer type) and whether `T[` opens a fixed array's size. */
+static bool starts_const_atom(TokenKind k) {
+    switch (k) {
+    case TOK_INT_LIT: case TOK_TYPE_VAR: case TOK_IDENT: case TOK_MINUS:
+    case TOK_LPAREN: case TOK_SIZEOF: case TOK_ALIGNOF:
+        return true;
+    default:
+        return false;
+    }
+}
 
 /* Check if a token kind is valid inside a type argument list <...> */
 static bool is_type_arg_token(TokenKind k) {
@@ -680,10 +701,11 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
             Token *size_tok = current(p);
             bool size_oor = false;
             int64_t size = parse_int_value(size_tok->start, size_tok->length, &size_oor);
-            if (size_oor || size <= 0) {
+            /* A value too large to read has nothing to check; pass2 judges the
+             * rest (positive, within --len-repr) with every other size. */
+            if (size_oor) {
                 diag_error(loc_from_token(size_tok),
-                           "fixed array size must be a positive integer, got %lld",
-                           (long long)size);
+                           "integer literal exceeds 64-bit unsigned range (max 18446744073709551615)");
                 size = 1;
             }
             advance_p(p); /* consume INT_LIT */
@@ -707,10 +729,7 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
          * by a const expression over const generic params, named constants or
          * literals. pass2 or instantiation folds it and checks positivity. */
         if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
-            (peek_at(p, 1)->kind == TOK_TYPE_VAR || peek_at(p, 1)->kind == TOK_LPAREN ||
-             peek_at(p, 1)->kind == TOK_MINUS || peek_at(p, 1)->kind == TOK_INT_LIT ||
-             peek_at(p, 1)->kind == TOK_IDENT || peek_at(p, 1)->kind == TOK_SIZEOF ||
-             peek_at(p, 1)->kind == TOK_ALIGNOF)) {
+            starts_const_atom(peek_at(p, 1)->kind)) {
             advance_p(p); /* consume [ */
             Expr *size_expr = parse_const_arith(p, 1);
             expect(p, TOK_RBRACKET);
@@ -1081,8 +1100,8 @@ static Type *int_lit_type(Parser *p, const Token *tok) {
     int num_end = int_num_end(start, length);
     if (num_end >= length)
         return p->in_const_expr ? type_int64() : type_int32();
-    Type *t = type_from_int_suffix(start + num_end, length - num_end);
-    return t ? t : type_int32();
+    /* The lexer admits only a suffix this names. */
+    return type_from_int_suffix(start + num_end, length - num_end);
 }
 
 /* ---- Const generic arguments ----
@@ -1184,13 +1203,6 @@ static Expr *parse_const_arith_inner(Parser *p, int min_prec) {
         left = e;
     }
     return left;
-}
-
-/* Can a token of kind `k` begin a const atom? Decides `t*` vs `a * b`: after
- * `*`, a const atom never continues a pointer type. */
-static bool starts_const_atom(TokenKind k) {
-    return k == TOK_INT_LIT || k == TOK_TYPE_VAR || k == TOK_IDENT ||
-           k == TOK_LPAREN || k == TOK_MINUS;
 }
 
 /* Lookahead over a dotted name (IDENT ('.' IDENT)*) starting at offset `off`;
@@ -1338,11 +1350,13 @@ static Expr **parse_block(Parser *p, int *count) {
 }
 
 /* True at a token that terminates an inline statement: a statement separator,
-   a block end, an `else` clause, or EOF.  Governs whether break/return carry a
-   value and where an inline `;`-sequence stops. */
+   a block end, the `)` closing a parenthesized sequence, an `else` clause, or
+   EOF.  Governs whether break/return carry a value and where an inline
+   `;`-sequence stops. */
 static bool at_stmt_terminator(Parser *p) {
     return check(p, TOK_NEWLINE) || check(p, TOK_DEDENT) ||
-           check(p, TOK_SEMICOLON) || check(p, TOK_ELSE) || at_end_p(p);
+           check(p, TOK_SEMICOLON) || check(p, TOK_RPAREN) || check(p, TOK_ELSE) ||
+           at_end_p(p);
 }
 
 /* Parse an inline body: one statement, optionally followed by more statements
@@ -1736,16 +1750,17 @@ static Expr *parse_array_lit_body(Parser *p, Type *elem_type, SrcLoc loc) {
     return e;
 }
 
-/* Can this token begin a prefix expression (parse_prefix)? Used by the
- * (IDENT!) cast disambiguation: a `!`-triggered cast attempt commits only
- * when the token after `)` starts an expression (the cast operand). */
+/* Can this token begin a prefix expression: is it one of parse_prefix's cases?
+ * Used by the (IDENT!) cast disambiguation: a `!`-triggered cast attempt
+ * commits only when the token after `)` starts an expression (the cast
+ * operand). tools/check-keywords.py checks the two lists agree. */
 static bool token_starts_prefix_expr(TokenKind k) {
     switch (k) {
     case TOK_INT_LIT: case TOK_FLOAT_LIT: case TOK_STRING_LIT:
     case TOK_CSTRING_LIT: case TOK_CHAR_LIT:
     case TOK_INTERP_START: case TOK_CINTERP_START:
     case TOK_TRUE: case TOK_FALSE: case TOK_VOID:
-    case TOK_IDENT: case TOK_TYPE_VAR:
+    case TOK_IDENT: case TOK_TYPE_VAR: case TOK_CONST: case TOK_ERROR_KW:
     case TOK_SOME: case TOK_NONE: case TOK_OK: case TOK_ERR:
     case TOK_ALLOC: case TOK_ALLOCA: case TOK_FREE:
     case TOK_SIZEOF: case TOK_ALIGNOF: case TOK_BITCAST: case TOK_ENUM_OF:
@@ -2032,22 +2047,25 @@ static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
     } /* end try_cast block */
     /* Parenthesized expression, optionally a `;`-sequence: `(a; b)` is a
        sequence expression yielding the last item's value, the others
-       evaluated for effect (same as a block).  A single item is plain
-       grouping: `(a)` is `a`.  Layout is suppressed inside brackets, so `;`
-       is the only separator and `)` bounds the sequence. */
+       evaluated for effect.  `;` is exactly a same-level newline, so the
+       items are a block's (parse_inline_seq), bounded by the `)`.  A single
+       item is plain grouping: `(a)` is `a`.  Layout is suppressed inside
+       brackets, and a `->` inside them never separates a match arm. */
     advance_p(p);
-    Expr **stmts = NULL;
-    int len = 0, cap = 0;
-    DA_APPEND(stmts, len, cap, parse_bracketed_expr(p, PREC_NONE + 1));
-    while (check(p, TOK_SEMICOLON)) {
-        while (check(p, TOK_SEMICOLON)) advance_p(p);
-        if (check(p, TOK_RPAREN)) break;
-        DA_APPEND(stmts, len, cap, parse_bracketed_expr(p, PREC_NONE + 1));
-    }
+    bool saved_arrow = p->block_arm_arrow;
+    p->block_arm_arrow = false;
+    int len;
+    Expr **stmts = parse_inline_seq(p, &len);
+    p->block_arm_arrow = saved_arrow;
     expect(p, TOK_RPAREN);
-    Expr *e = block_or_single(p, arena_copy_exprs(p, stmts, len), len, loc);
-    free(stmts);
-    return e;
+    /* A `let` scopes over the items after it; one that ends the sequence has
+     * no body, and in expression position it must spell one with `in`. */
+    Expr *last = stmts[len - 1];
+    if (last->kind == EXPR_LET || last->kind == EXPR_LET_DESTRUCT) {
+        diag_error(last->loc, "expected 'in' after let-binding in expression position");
+        stmts[len - 1] = alloc_expr_error(p, last->loc);
+    }
+    return block_or_single(p, stmts, len, loc);
 }
 
 /* An interpolated string literal: its literal text and each format segment
@@ -2124,13 +2142,12 @@ static Expr *parse_interp_string(Parser *p, Token *t, SrcLoc loc) {
 static Expr *parse_float_lit(Parser *p, Token *t, SrcLoc loc) {
     advance_p(p);
     Expr *e = alloc_expr(p, EXPR_FLOAT_LIT, loc);
-    /* Determine suffix length first so the strtod buffer excludes it */
-    int suffix_len = 0;
-    if (t->length >= 3 && t->start[t->length - 3] == 'f'
-        && (t->start[t->length - 2] == '3' || t->start[t->length - 2] == '6')
-        && (t->start[t->length - 1] == '2' || t->start[t->length - 1] == '4')) {
-        suffix_len = 3;
-    }
+    /* The suffix, if any, is the token's last three characters (the lexer
+     * admits only one type_from_float_suffix names), excluded from the strtod
+     * buffer. */
+    Type *suffix_type = t->length >= 3
+        ? type_from_float_suffix(t->start + t->length - 3, 3) : NULL;
+    int suffix_len = suffix_type ? 3 : 0;
     int num_end = t->length - suffix_len;
     /* Sized from the token, as in parse_int_value: dropping the tail of a
      * float is silently wrong rather than an error, since cutting
@@ -2162,7 +2179,7 @@ static Expr *parse_float_lit(Parser *p, Token *t, SrcLoc loc) {
      * source is underflow; subnormals are accepted silently. */
     if (isinf(v)) oor = true;
     else if (v == 0.0 && mantissa_nonzero) underflow = true;
-    bool is_f32 = (suffix_len == 3 && t->start[t->length - 2] == '3');
+    bool is_f32 = suffix_type && suffix_type->kind == TYPE_FLOAT32;
     if (is_f32 && !oor && !underflow) {
         float fv = (float)v;
         if (isinf(fv)) oor = true;
@@ -3527,40 +3544,71 @@ static bool decl_body_present(Parser *p, const char *kind, const char *name,
     return false;
 }
 
-/* The `name: type` lines of a struct body, after its INDENT and through its
- * DEDENT. An FC struct (not an extern one) may also hold static_assert lines. */
-static void parse_struct_body(Parser *p, Decl *d, bool allow_static_assert) {
-    StructField *fields = NULL;
-    int field_count = 0, field_cap = 0;
-    StaticAssert *sasserts = NULL;
-    int sassert_count = 0, sassert_cap = 0;
+/* The lines of a declaration body (a struct's fields, a union's or enum's
+ * variants, an error group's members), after its INDENT and through its
+ * DEDENT: each line by `line`, then the end-of-line check, and progress on a
+ * line so malformed that `line` consumed nothing. */
+typedef void (*BodyLineFn)(Parser *p, void *ctx);
+
+static void parse_body_lines(Parser *p, BodyLineFn line, void *ctx) {
     while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
         int guard = p->pos;
         int line_errs = diag_error_count();
-        Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
-        if (allow_static_assert && parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
-            StaticAssert sa = { .cond = sa_cond, .msg = sa_msg, .loc = sa_loc, .owner = d->struc.name };
-            DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
-        } else {
-            Token *ftok = expect_name(p);
-            StructField f = { .name = tok_intern(p, ftok), .loc = tok_loc(p, ftok) };
-            expect(p, TOK_COLON);
-            f.type = parse_type_allowing_fixed_array(p);
-            DA_APPEND(fields, field_count, field_cap, f);
-        }
+        line(p, ctx);
         end_body_line(p, line_errs);
-        recover_progress(p, guard);  /* a fully malformed line consumes nothing */
+        recover_progress(p, guard);
         skip_newlines(p);
     }
     expect(p, TOK_DEDENT);
-    d->struc.field_count = field_count;
-    d->struc.fields = arena_dup(p->arena, fields, field_count, sizeof(StructField));
-    free(fields);
-    d->struc.static_assert_count = sassert_count;
-    d->struc.static_asserts = arena_dup(p->arena, sasserts, sassert_count, sizeof(StaticAssert));
-    free(sasserts);
+}
+
+/* A static_assert line, if one starts here, appended to (*sas, *n, *cap) with
+ * `owner` naming the declaration. False when the line is something else. */
+static bool body_static_assert(Parser *p, const char *owner, StaticAssert **sas,
+                               int *n, int *cap) {
+    Expr *cond; const char *msg; SrcLoc loc;
+    if (!parse_static_assert_line(p, &cond, &msg, &loc)) return false;
+    StaticAssert sa = { .cond = cond, .msg = msg, .loc = loc, .owner = owner };
+    DA_APPEND(*sas, *n, *cap, sa);
+    return true;
+}
+
+typedef struct {
+    const char *owner;
+    bool allow_static_assert;
+    StructField *fields;
+    int field_count, field_cap;
+    StaticAssert *sas;
+    int sa_count, sa_cap;
+} StructBody;
+
+/* One `name: type` line of a struct body, or a static_assert line where the
+ * struct allows one. */
+static void struct_body_line(Parser *p, void *ctx) {
+    StructBody *b = ctx;
+    if (b->allow_static_assert &&
+        body_static_assert(p, b->owner, &b->sas, &b->sa_count, &b->sa_cap))
+        return;
+    Token *ftok = expect_name(p);
+    StructField f = { .name = tok_intern(p, ftok), .loc = tok_loc(p, ftok) };
+    expect(p, TOK_COLON);
+    f.type = parse_type_allowing_fixed_array(p);
+    DA_APPEND(b->fields, b->field_count, b->field_cap, f);
+}
+
+/* The `name: type` lines of a struct body, after its INDENT and through its
+ * DEDENT. An FC struct (not an extern one) may also hold static_assert lines. */
+static void parse_struct_body(Parser *p, Decl *d, bool allow_static_assert) {
+    StructBody b = { .owner = d->struc.name, .allow_static_assert = allow_static_assert };
+    parse_body_lines(p, struct_body_line, &b);
+    d->struc.field_count = b.field_count;
+    d->struc.fields = arena_dup(p->arena, b.fields, b.field_count, sizeof(StructField));
+    free(b.fields);
+    d->struc.static_assert_count = b.sa_count;
+    d->struc.static_asserts = arena_dup(p->arena, b.sas, b.sa_count, sizeof(StaticAssert));
+    free(b.sas);
 }
 
 static Decl *parse_struct_decl(Parser *p) {
@@ -3582,6 +3630,29 @@ static Decl *parse_struct_decl(Parser *p) {
     return d;
 }
 
+typedef struct {
+    const char *owner;
+    UnionVariant *variants;
+    int variant_count, variant_cap;
+    StaticAssert *sas;
+    int sa_count, sa_cap;
+} UnionBody;
+
+/* One `| name` or `| name(type)` line of a union body, or a static_assert. */
+static void union_body_line(Parser *p, void *ctx) {
+    UnionBody *b = ctx;
+    if (body_static_assert(p, b->owner, &b->sas, &b->sa_count, &b->sa_cap)) return;
+    expect(p, TOK_PIPE);
+    Token *vtok = expect_name(p);
+    UnionVariant v = { .name = tok_intern(p, vtok), .loc = tok_loc(p, vtok) };
+    if (check(p, TOK_LPAREN)) {
+        advance_p(p);
+        v.payload = parse_type(p);
+        expect(p, TOK_RPAREN);
+    }
+    DA_APPEND(b->variants, b->variant_count, b->variant_cap, v);
+}
+
 static Decl *parse_union_decl(Parser *p) {
     int errs0 = diag_error_count();
     SrcLoc loc = tok_loc(p, current(p));
@@ -3594,57 +3665,64 @@ static Decl *parse_union_decl(Parser *p) {
         return alloc_decl_error(p, loc);
     expect(p, TOK_INDENT);
 
-    UnionVariant *variants = NULL;
-    int variant_count = 0, variant_cap = 0;
-    StaticAssert *sasserts = NULL;
-    int sassert_count = 0, sassert_cap = 0;
-
-    while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
-        skip_newlines(p);
-        if (check(p, TOK_DEDENT)) break;
-
-        int guard = p->pos;
-        int line_errs = diag_error_count();
-        {
-            Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
-            if (parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
-                StaticAssert sa = { .cond = sa_cond, .msg = sa_msg, .loc = sa_loc, .owner = name };
-                DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
-                recover_progress(p, guard);
-                skip_newlines(p);
-                continue;
-            }
-        }
-        expect(p, TOK_PIPE);
-        Token *vtok = expect_name(p);
-        const char *vname = tok_intern(p, vtok);
-        SrcLoc vloc = tok_loc(p, vtok);
-        Type *payload = NULL;
-        if (check(p, TOK_LPAREN)) {
-            advance_p(p);
-            payload = parse_type(p);
-            expect(p, TOK_RPAREN);
-        }
-
-        UnionVariant v = { .name = vname, .payload = payload, .loc = vloc };
-        DA_APPEND(variants, variant_count, variant_cap, v);
-        end_body_line(p, line_errs);
-        recover_progress(p, guard);  /* a fully malformed variant line consumes nothing */
-        skip_newlines(p);
-    }
-    expect(p, TOK_DEDENT);
+    UnionBody b = { .owner = name };
+    parse_body_lines(p, union_body_line, &b);
 
     Decl *d = arena_alloc(p->arena, sizeof(Decl));
     d->kind = DECL_UNION;
     d->loc = loc;
     d->unio.name = name;
-    d->unio.variant_count = variant_count;
-    d->unio.variants = arena_dup(p->arena, variants, variant_count, sizeof(UnionVariant));
-    free(variants);
-    d->unio.static_assert_count = sassert_count;
-    d->unio.static_asserts = arena_dup(p->arena, sasserts, sassert_count, sizeof(StaticAssert));
-    free(sasserts);
+    d->unio.variant_count = b.variant_count;
+    d->unio.variants = arena_dup(p->arena, b.variants, b.variant_count, sizeof(UnionVariant));
+    free(b.variants);
+    d->unio.static_assert_count = b.sa_count;
+    d->unio.static_asserts = arena_dup(p->arena, b.sas, b.sa_count, sizeof(StaticAssert));
+    free(b.sas);
     return d;
+}
+
+typedef struct {
+    EnumVariant *variants;
+    int variant_count, variant_cap;
+} EnumBody;
+
+/* One `| name` or `| name = value` line of an enum body. */
+static void enum_body_line(Parser *p, void *ctx) {
+    EnumBody *b = ctx;
+    expect(p, TOK_PIPE);
+    Token *vtok = expect_name(p);
+    EnumVariant v = { .name = tok_intern(p, vtok), .loc = tok_loc(p, vtok) };
+    if (check(p, TOK_LPAREN)) {
+        diag_error(loc_from_token(current(p)),
+            "enum variants carry no payload; use a union for variants with data");
+        /* Consume the (type) so that a `= value` after it still parses. */
+        advance_p(p);
+        parse_type(p);
+        if (check(p, TOK_RPAREN)) advance_p(p);
+    }
+    if (check(p, TOK_EQ)) {
+        advance_p(p);
+        v.has_explicit = true;
+        if (check(p, TOK_MINUS)) {
+            advance_p(p);
+            v.negative = true;
+        }
+        Token *nt = expect(p, TOK_INT_LIT);
+        if (nt->kind == TOK_INT_LIT) {
+            for (int i = 0; i < nt->length; i++) {
+                if (nt->start[i] == 'i' || nt->start[i] == 'u') {
+                    diag_error(loc_from_token(nt),
+                        "enum values take no type suffix; the enum declares its repr");
+                    break;
+                }
+            }
+            bool oor = false;
+            v.value_bits = parse_int_value(nt->start, nt->length, &oor);
+            if (oor)
+                diag_error(loc_from_token(nt), "enum value out of range");
+        }
+    }
+    DA_APPEND(b->variants, b->variant_count, b->variant_cap, v);
 }
 
 /* enum <name> [of <repr>] =
@@ -3688,67 +3766,47 @@ static Decl *parse_enum_decl(Parser *p) {
         return alloc_decl_error(p, loc);
     expect(p, TOK_INDENT);
 
-    EnumVariant *variants = NULL;
-    int variant_count = 0, variant_cap = 0;
-
-    while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
-        skip_newlines(p);
-        if (check(p, TOK_DEDENT)) break;
-
-        int guard = p->pos;
-        int line_errs = diag_error_count();
-        expect(p, TOK_PIPE);
-        Token *vtok = expect_name(p);
-        const char *vname = tok_intern(p, vtok);
-        SrcLoc vloc = tok_loc(p, vtok);
-        if (check(p, TOK_LPAREN)) {
-            diag_error(loc_from_token(current(p)),
-                "enum variants carry no payload; use a union for variants with data");
-            /* Consume the (type) so recovery doesn't cascade a second error. */
-            advance_p(p);
-            parse_type(p);
-            if (check(p, TOK_RPAREN)) advance_p(p);
-        }
-
-        EnumVariant v = { .name = vname, .loc = vloc };
-        if (check(p, TOK_EQ)) {
-            advance_p(p);
-            v.has_explicit = true;
-            if (check(p, TOK_MINUS)) {
-                advance_p(p);
-                v.negative = true;
-            }
-            Token *nt = expect(p, TOK_INT_LIT);
-            if (nt->kind == TOK_INT_LIT) {
-                for (int i = 0; i < nt->length; i++) {
-                    if (nt->start[i] == 'i' || nt->start[i] == 'u') {
-                        diag_error(loc_from_token(nt),
-                            "enum values take no type suffix; the enum declares its repr");
-                        break;
-                    }
-                }
-                bool oor = false;
-                v.value_bits = parse_int_value(nt->start, nt->length, &oor);
-                if (oor)
-                    diag_error(loc_from_token(nt), "enum value out of range");
-            }
-        }
-        DA_APPEND(variants, variant_count, variant_cap, v);
-        end_body_line(p, line_errs);
-        recover_progress(p, guard);  /* a fully malformed variant line consumes nothing */
-        skip_newlines(p);
-    }
-    expect(p, TOK_DEDENT);
+    EnumBody b = { 0 };
+    parse_body_lines(p, enum_body_line, &b);
 
     Decl *d = arena_alloc(p->arena, sizeof(Decl));
     d->kind = DECL_ENUM;
     d->loc = loc;
     d->enu.name = name;
     d->enu.repr = repr;
-    d->enu.variant_count = variant_count;
-    d->enu.variants = arena_dup(p->arena, variants, variant_count, sizeof(EnumVariant));
-    free(variants);
+    d->enu.variant_count = b.variant_count;
+    d->enu.variants = arena_dup(p->arena, b.variants, b.variant_count, sizeof(EnumVariant));
+    free(b.variants);
     return d;
+}
+
+typedef struct {
+    Decl **members;
+    int count, cap;
+} ErrorBody;
+
+/* One `| name` line of an error group: a member let whose value pass1
+ * assigns. */
+static void error_body_line(Parser *p, void *ctx) {
+    ErrorBody *b = ctx;
+    expect(p, TOK_PIPE);
+    Token *mtok = expect_name(p);
+    SrcLoc mloc = tok_loc(p, mtok);
+    if (check(p, TOK_LPAREN)) {
+        diag_error(loc_from_token(current(p)),
+            "error members carry no payload; the assigned code itself is the value");
+    }
+
+    Expr *init = alloc_expr(p, EXPR_INT_LIT, mloc);
+    init->int_lit.value = 0;  /* patched by pass1's error-code assignment */
+    init->int_lit.lit_type = type_error_code();
+
+    Decl *m = arena_alloc(p->arena, sizeof(Decl));
+    m->kind = DECL_LET;
+    m->loc = mloc;
+    m->let.name = tok_intern(p, mtok);
+    m->let.init = init;
+    DA_APPEND(b->members, b->count, b->cap, m);
 }
 
 /* error <name> =
@@ -3774,48 +3832,17 @@ static Decl *parse_error_decl(Parser *p) {
         return alloc_decl_error(p, loc);
     expect(p, TOK_INDENT);
 
-    Decl **members = NULL;
-    int count = 0, cap = 0;
-
-    while (!check(p, TOK_DEDENT) && !at_end_p(p)) {
-        skip_newlines(p);
-        if (check(p, TOK_DEDENT)) break;
-
-        int guard = p->pos;
-        int line_errs = diag_error_count();
-        expect(p, TOK_PIPE);
-        Token *mtok = expect_name(p);
-        const char *mname = tok_intern(p, mtok);
-        SrcLoc mloc = tok_loc(p, mtok);
-        if (check(p, TOK_LPAREN)) {
-            diag_error(loc_from_token(current(p)),
-                "error members carry no payload; the assigned code itself is the value");
-        }
-
-        Expr *init = alloc_expr(p, EXPR_INT_LIT, mloc);
-        init->int_lit.value = 0;  /* patched by pass1's error-code assignment */
-        init->int_lit.lit_type = type_error_code();
-
-        Decl *m = arena_alloc(p->arena, sizeof(Decl));
-        m->kind = DECL_LET;
-        m->loc = mloc;
-        m->let.name = mname;
-        m->let.init = init;
-        DA_APPEND(members, count, cap, m);
-        end_body_line(p, line_errs);
-        recover_progress(p, guard);  /* a fully malformed member line consumes nothing */
-        skip_newlines(p);
-    }
-    expect(p, TOK_DEDENT);
+    ErrorBody b = { 0 };
+    parse_body_lines(p, error_body_line, &b);
 
     Decl *d = arena_alloc(p->arena, sizeof(Decl));
     d->kind = DECL_MODULE;
     d->loc = loc;
     d->module.name = name;
     d->module.is_error_group = true;
-    d->module.decl_count = count;
-    d->module.decls = arena_dup(p->arena, members, count, sizeof(Decl*));
-    free(members);
+    d->module.decl_count = b.count;
+    d->module.decls = arena_dup(p->arena, b.members, b.count, sizeof(Decl*));
+    free(b.members);
     return d;
 }
 
@@ -4262,6 +4289,7 @@ static Decl *parse_extern_decl(Parser *p) {
 
     /* extern function declaration */
     Token *name_tok = expect_extern_c_name(p);
+    if (!name_tok) return alloc_decl_error(p, loc);
     const char *name = tok_intern(p, name_tok);
     const char *alias = NULL;
     if (check(p, TOK_AS)) {
@@ -4304,9 +4332,6 @@ static Decl *parse_extern_decl(Parser *p) {
     return d;
 }
 
-/* Parse one declaration and append what it declares to `out`; a comma-list
- * import appends several. Returns the first appended, or a DECL_ERROR node
- * (not appended) after a syntax error. */
 /* The declaration keywords and their parsers. `import`, which may append
  * several declarations, and the `private` modifier are handled around this
  * table; together they are the declaration-starting set the recovery loops
@@ -4328,6 +4353,9 @@ static bool is_decl_start(TokenKind k) {
     return false;
 }
 
+/* Parse one declaration and append what it declares to `out`; a comma-list
+ * import appends several. Returns the first appended, or a DECL_ERROR node
+ * (not appended) after a syntax error. */
 static Decl *parse_decl(Parser *p, DeclList *out) {
     skip_newlines(p);
 

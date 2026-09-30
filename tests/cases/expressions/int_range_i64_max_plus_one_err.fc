@@ -1,0 +1,4 @@
+// i64.max + 1 written as a literal is out of range, not i64.min.
+let main = (args: str[]) ->
+    let x = 9223372036854775808i64
+    (i32)(x / 4294967296i64)

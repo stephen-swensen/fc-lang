@@ -1,0 +1,4 @@
+namespace shapes::
+
+struct pt =
+    x: i32

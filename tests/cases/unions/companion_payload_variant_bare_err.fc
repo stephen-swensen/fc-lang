@@ -1,0 +1,15 @@
+// A payload variant named without its payload is rejected when the union has
+// a companion module, as it is without one: it would be built with a
+// zero-filled payload.
+union shape =
+    | dot
+    | circle(i32)
+
+module shape =
+    let unit = shape.dot
+
+let main = (args: str[]) ->
+    let a = shape.circle
+    match a with
+    | circle(r) -> r
+    | dot -> 7

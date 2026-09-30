@@ -42,7 +42,8 @@ assistant.
 - Functions have no return type annotation. `->` introduces the body:
   `let f = (x: i32) -> x * 2`. `let f = (x: i32) -> i32 = ...` and
   `-> void` are both wrong.
-- Match arms line up with `match`, not indented under it:
+- Match arms line up with `match` (the house style; indented arms also
+  parse):
   ```fc
   match x with
   | some(v) -> use(v)
@@ -57,4 +58,5 @@ assistant.
   no `while`; use `loop` with `break`.
 - No compound assignment (`+=`), no `null` (use options), comments are `//`
   and `/* */` only, and indentation is spaces only.
-- All names are lowercase `snake_case`, types and modules included.
+- All names are lowercase `snake_case`, types and modules included (a
+  convention the compiler does not enforce, followed everywhere).

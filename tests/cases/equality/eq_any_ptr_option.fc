@@ -1,0 +1,18 @@
+// An any*? is a null-sentinel option, a bare void*, like any other pointer
+// option, so == compares the pointers. Regression: == on any*? called a
+// generated struct comparison that read .has_value off a void*, and the C
+// failed to compile.
+let main = (args: str[]) ->
+    let mut x = 5
+    let mut y = 6
+    let a = some((any*) &x)
+    let b = some((any*) &x)
+    let c = some((any*) &y)
+    let n = none(any*)
+    assert(a == b)
+    assert(a != c)
+    assert(a != n)
+    assert(n == none(any*))
+    let ca = some((const any*) &x)
+    assert(ca == some((const any*) &x))
+    0

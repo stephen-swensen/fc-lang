@@ -52,6 +52,15 @@ typedef struct {
                                  * Recomputed each flush; NULL until the first. */
 } LspDoc;
 
+/* Free the strings a document owns. */
+static void doc_free(LspDoc *d) {
+    free(d->uri);
+    free(d->path);
+    free(d->real);
+    free(d->text);
+    free(d->unit_key);
+}
+
 typedef struct {
     LspDoc *docs;
     int count, cap;
@@ -72,6 +81,13 @@ typedef struct {
                                  * invalidates this unit. Rebuilt by each
                                  * analyze_unit. */
     int             file_count, file_cap;
+    char          **not_reported; /* owned: canonical paths this unit merges but
+                                 * does not publish diagnostics for. A document an
+                                 * lsp.rsp does not list is analyzed with its
+                                 * directory (a `U:` unit), and the rsp's own files
+                                 * are reported only by the rsp's unit. Rebuilt by
+                                 * each analyze_unit. */
+    int             not_reported_count, not_reported_cap;
     AnalysisResult *result;     /* latest analysis; NULL until first analyze */
     AnalysisResult *last_good;  /* most recent analysis that type-checked (result
                                  * itself when fresh is good), retained so a lexer
@@ -148,7 +164,8 @@ static UnitEntry *unit_find(LspServer *S, const char *key) {
 /* The analysis that answers type-aware queries (hover, definition, completion,
  * CodeLens) for `doc`: its unit's fresh result whenever it type-checked,
  * otherwise the last one that did. The fresh result fails to type-check only
- * when the lexer aborted (a stray tab, an unterminated string); serving the
+ * when the analysis aborted, almost always on a lexical error (a stray tab, an
+ * unterminated string); serving the
  * older result keeps overlays from blanking while the user types through that
  * state. Diagnostics do not use this; they always come from the fresh
  * `result`, so squiggles stay live. The stale AST carries positions from an
@@ -177,6 +194,17 @@ static void unit_free_files(UnitEntry *u) {
     free(u->files);
     u->files = NULL;
     u->file_count = u->file_cap = 0;
+    for (int i = 0; i < u->not_reported_count; i++) free(u->not_reported[i]);
+    free(u->not_reported);
+    u->not_reported = NULL;
+    u->not_reported_count = u->not_reported_cap = 0;
+}
+
+/* Free everything a unit owns. */
+static void unit_free(UnitEntry *u) {
+    unit_free_results(u);
+    unit_free_files(u);
+    free(u->key);
 }
 
 /* Is `real` (a canonical path) one of the sources this unit last analyzed? */
@@ -301,11 +329,19 @@ static LineIndex line_index_build(Arena *a, const char *text, int len) {
 }
 
 /* Byte offset of the start of 1-based line `line1`, or -1 when the document
- * has no such line. A query answered from an older analysis (LspUnit.last_good)
- * can carry positions from a longer version of the document, so every lookup
- * of an AST position goes through here. */
+ * has no such line. A query answered from an older analysis
+ * (UnitEntry.last_good) can carry positions from a longer version of the
+ * document, so every scan of the source text at an AST position goes through
+ * here and skips a line that is gone. The position conversions below instead
+ * clamp to the last line (clamp_line0): they always answer with a position. */
 static int line_start(const LineIndex *idx, int line1) {
     return line1 >= 1 && line1 <= idx->count ? idx->starts[line1 - 1] : -1;
+}
+
+/* A 0-based line clamped to the document's lines. */
+static int clamp_line0(const LineIndex *idx, int line0) {
+    if (line0 >= idx->count) line0 = idx->count - 1;
+    return line0 < 0 ? 0 : line0;
 }
 
 static int utf8_seq_len(unsigned char c) {
@@ -319,8 +355,7 @@ static int utf8_seq_len(unsigned char c) {
 /* LSP (line0, char0 in UTF-16) -> SrcLoc (1-based line, 1-based byte col). */
 static void lsp_to_loc(const LineIndex *idx, const char *text,
                        int line0, int char0, int *out_line1, int *out_col1) {
-    if (line0 < 0) line0 = 0;
-    if (line0 >= idx->count) line0 = idx->count - 1;
+    line0 = clamp_line0(idx, line0);
     int ls = idx->starts[line0];
     int le = (line0 + 1 < idx->count) ? idx->starts[line0 + 1] : idx->len;
     *out_line1 = line0 + 1;
@@ -344,9 +379,7 @@ static void lsp_to_loc(const LineIndex *idx, const char *text,
 /* SrcLoc (1-based line, 1-based byte col) -> LSP (line0, char0 in UTF-16). */
 static void loc_to_lsp(const LineIndex *idx, const char *text,
                        int line1, int col1, int *out_line0, int *out_char0) {
-    int line0 = line1 - 1;
-    if (line0 < 0) line0 = 0;
-    if (line0 >= idx->count) line0 = idx->count - 1;
+    int line0 = clamp_line0(idx, line1 - 1);
     *out_line0 = line0;
     int byte_col = col1 - 1;
     if (byte_col < 0) byte_col = 0;
@@ -364,10 +397,7 @@ static void loc_to_lsp(const LineIndex *idx, const char *text,
 
 /* Byte offset in the document of a SrcLoc (1-based line/col). */
 static int loc_byte_offset(const LineIndex *idx, int line1, int col1) {
-    int line0 = line1 - 1;
-    if (line0 < 0) line0 = 0;
-    if (line0 >= idx->count) line0 = idx->count - 1;
-    return idx->starts[line0] + (col1 - 1);
+    return idx->starts[clamp_line0(idx, line1 - 1)] + (col1 - 1);
 }
 
 /* ======================================================================== */
@@ -757,8 +787,10 @@ static void consider_field_name(FindCtx *c, Expr *e) {
                  (int)strlen(e->field.name), e->type, e->field.name,
                  def, field_def, doc_loc, doc_is_field) &&
         !e->field.is_variant_constructor && !e->field.is_type_property &&
-        is_type_or_module_sym(def))
+        is_type_or_module_sym(def)) {
         c->type_ref_sym = def;
+        c->companion = e->field.companion_module;   /* as pass2 resolved it */
+    }
 }
 
 /* Offer each token of e that hover and go-to-definition can land on (names,
@@ -870,6 +902,7 @@ static void find_in_expr(Expr *e, void *find_ctx) {
         case EXPR_ERR:
         case EXPR_ERROR_NAME:
         case EXPR_ASSERT:
+        case EXPR_STATIC_ASSERT:
         case EXPR_ATOMIC_LOAD:
         case EXPR_ATOMIC_STORE:
             consider_builtin(c, e);   /* the keyword */
@@ -882,7 +915,16 @@ static void find_in_expr(Expr *e, void *find_ctx) {
                      NO_LOC, e->let_expr.let_name_loc, false);
             break;
         }
-        default:
+        /* Nothing of their own to hover (literals, operators, control flow),
+         * or reached through a child: only the children are searched. */
+        case EXPR_INT_LIT: case EXPR_FLOAT_LIT: case EXPR_BOOL_LIT: case EXPR_CHAR_LIT:
+        case EXPR_STRING_LIT: case EXPR_CSTRING_LIT: case EXPR_VOID_LIT:
+        case EXPR_BINARY: case EXPR_UNARY_PREFIX: case EXPR_UNARY_POSTFIX:
+        case EXPR_CALL: case EXPR_INDEX: case EXPR_SLICE: case EXPR_IF: case EXPR_MATCH:
+        case EXPR_LOOP: case EXPR_FOR: case EXPR_BREAK: case EXPR_CONTINUE:
+        case EXPR_RETURN: case EXPR_BLOCK: case EXPR_TUPLE_LIT: case EXPR_INTERP_STRING:
+        case EXPR_ASSIGN: case EXPR_LET_DESTRUCT: case EXPR_TYPE_VAR_REF: case EXPR_DEFER:
+        case EXPR_IGNORE: case EXPR_GUARD: case EXPR_ERROR:
             break;
     }
     expr_for_each_child(e, find_in_expr, c);
@@ -1016,10 +1058,9 @@ static void find_in_decls(Decl **decls, int n, FindCtx *c) {
 }
 
 /* Companion module of a type Symbol: the same-scope DECL_MODULE sharing the
- * type's source name. pass2 stamps this on ident references
- * (ident.companion_module); this recovers it for reference hits that carry
- * only the type symbol: annotations, struct-literal type names, module-member
- * type paths. */
+ * type's source name. pass2 stamps this on identifier and module-member
+ * references (companion_module); this recovers it for reference hits that
+ * carry only the type symbol: annotations and struct-literal type names. */
 static Symbol *companion_of_type_sym(AnalysisResult *r, Symbol *ts) {
     if (!ts) return NULL;
     if (ts->kind != DECL_STRUCT && ts->kind != DECL_UNION && ts->kind != DECL_ENUM)
@@ -1047,9 +1088,9 @@ static bool locate(LspServer *S, LspDoc *doc, const LineIndex *idx, int line0, i
     c.file = doc->path;
     c.symtab = &r->symtab;
     find_in_decls(r->program->decls, r->program->decl_count, &c);
-    /* A type reference that didn't come through pass2's ident path (a written
-     * annotation, a struct-literal type name, a module-member path) carries no
-     * companion; recover it so every use-site type hover merges the pair.
+    /* A type reference pass2 resolved by name without an expression (a written
+     * annotation, a struct-literal type name) carries no companion; recover it
+     * so every use-site type hover merges the pair.
      * Declaration-site names don't merge: a module only becomes a companion
      * where a reference resolves it as one, so each half's decl hover shows
      * only its own doc. */
@@ -1180,11 +1221,54 @@ static void collect_sibling_fc(const char *doc_path, char ***out, int *count, in
 #endif
 }
 
+#if !defined(_WIN32)
+/* The canonical paths of the inputs the lsp.rsp at `rsp_path` lists, appended
+ * to (*out, *n, *cap). False when the response file cannot be read or parsed. */
+static bool rsp_input_paths(const char *rsp_path, char ***out, int *n, int *cap) {
+    char *at = str_sprintf("@%s", rsp_path);
+    char *fake_argv[] = { (char *)"fcc", at };
+    char *aerr = NULL;
+    ExpandedArgs ex;
+    CompileArgs ca;
+    bool ok = args_expand(2, fake_argv, &ex, &aerr);
+    if (ok) {
+        ok = args_parse(&ex, &ca);
+        if (ok)
+            for (int i = 0; i < ca.input_count; i++)
+                DA_APPEND(*out, *n, *cap, canon_path(ca.inputs[i]));
+        args_compile_free(&ca);
+        args_expand_free(&ex);
+    }
+    free(aerr);
+    free(at);
+    return ok;
+}
+
+/* Whether the lsp.rsp at `rsp_path` lists `doc_path` among its inputs, or
+ * cannot be parsed (a broken rsp still keys its unit, which reports why). */
+static bool rsp_claims_doc(const char *rsp_path, const char *doc_path) {
+    char **inputs = NULL;
+    int n = 0, cap = 0;
+    bool claimed = !rsp_input_paths(rsp_path, &inputs, &n, &cap);
+    char *doc_real = canon_path(doc_path);
+    for (int i = 0; i < n; i++) {
+        if (strcmp(inputs[i], doc_real) == 0) claimed = true;
+        free(inputs[i]);
+    }
+    free(inputs);
+    free(doc_real);
+    return claimed;
+}
+#endif
+
 /* Identity of a document's compilation unit, so docs that resolve to the same
- * unit are analyzed together, once. Two docs share a unit iff they discover the
- * same `lsp.rsp` (its listed inputs are the unit) or, with no lsp.rsp, live in
- * the same directory (the sibling-heuristic unit). The `R:`/`D:` prefixes keep an
- * rsp path from colliding with a directory path. Caller frees.
+ * unit are analyzed together, once. A document an `lsp.rsp` lists (found by
+ * walking up from it) belongs to that rsp's unit, `R:<rsp>`. A document with no
+ * lsp.rsp belongs to its directory's unit, `D:<dir>`: it, its sibling .fc files
+ * and the stdlib. A document an lsp.rsp does not list is analyzed by the same
+ * directory rule in a unit of its own kind, `U:<dir>`, which reports nothing
+ * about the files the rsp does list (so the rsp's unit stays their only
+ * report) and says why the document is outside the rsp's unit. Caller frees.
  *
  * On Windows the rsp/sibling discovery is compiled out, so each document is its
  * own unit, keyed by its path. */
@@ -1192,20 +1276,25 @@ static char *unit_key(LspDoc *doc) {
 #if defined(_WIN32)
     return str_sprintf("F:%s", doc->path);
 #else
+    const char *kind = "D";
     char *rsp = find_lsp_rsp(doc->path);
     if (rsp) {
-        char *c = canon_path(rsp);
+        if (rsp_claims_doc(rsp, doc->path)) {
+            char *c = canon_path(rsp);
+            free(rsp);
+            char *k = str_sprintf("R:%s", c);
+            free(c);
+            return k;
+        }
         free(rsp);
-        char *k = str_sprintf("R:%s", c);
-        free(c);
-        return k;
+        kind = "U";
     }
     /* Directory of doc->path (canonicalized so symlinked spellings coincide). */
     char *dir = doc_dir(doc->path);
-    if (!dir) return str_dup(doc->path);   /* no directory: unique key */
+    if (!dir) return str_sprintf("%s:%s", kind, doc->path);   /* no directory: unique key */
     char *c = canon_path(dir);
     free(dir);
-    char *k = str_sprintf("D:%s", c);
+    char *k = str_sprintf("%s:%s", kind, c);
     free(c);
     return k;
 #endif
@@ -1230,9 +1319,7 @@ static void unit_prune(LspServer *S) {
             if (S->store.docs[d].unit_key &&
                 strcmp(S->store.docs[d].unit_key, S->units[i].key) == 0) { used = true; break; }
         if (used) { i++; continue; }
-        unit_free_results(&S->units[i]);
-        unit_free_files(&S->units[i]);
-        free(S->units[i].key);
+        unit_free(&S->units[i]);
         S->units[i] = S->units[--S->unit_count];
     }
 }
@@ -1418,8 +1505,18 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
     /* Membership is rebuilt from this run's sources (see the record below). */
     unit_free_files(u);
 
-    UnitSources us = { .len_repr = 64 };
-    if (!gather_rsp_sources(S, doc, &us))
+    UnitSources us = { .len_repr = FC_LEN_REPR_DEFAULT };
+    bool unlisted = strncmp(u->key, "U:", 2) == 0;
+    char *unlisting_rsp = NULL;
+#if !defined(_WIN32)
+    if (unlisted) {
+        unlisting_rsp = find_lsp_rsp(doc->path);
+        if (unlisting_rsp)
+            rsp_input_paths(unlisting_rsp, &u->not_reported, &u->not_reported_count,
+                            &u->not_reported_cap);
+    }
+#endif
+    if (unlisted || !gather_rsp_sources(S, doc, &us))
         gather_heuristic_sources(S, doc, &us);
 
     /* Record the unit's member set (canonical, so any spelling of a file matches):
@@ -1434,6 +1531,24 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
     u->result = analyze(doc->text, doc->text_len, doc->path, us.extra, us.n, us.flags,
                         us.flag_count, us.len_repr, &S->lex_cache);
 
+    /* An lsp.rsp above the unit's documents does not list them: say so on each
+     * one, since they are analyzed with their directory rather than as the rsp
+     * compiles its program. */
+    if (unlisting_rsp) {
+        for (int i = 0; i < S->store.count; i++) {
+            LspDoc *od = &S->store.docs[i];
+            if (!od->unit_key || strcmp(od->unit_key, u->key) != 0) continue;
+            Diagnostic d;
+            d.loc = (SrcLoc){ .filename = od == doc ? u->result->filename : od->path,
+                              .line = 1, .col = 1 };
+            d.message = arena_sprintf(&u->result->arena,
+                "not listed in %s, so it is analyzed with the .fc files beside it and "
+                "the standard library, as a file with no lsp.rsp is", unlisting_rsp);
+            DA_APPEND(u->result->diags, u->result->diag_count, u->result->diag_cap, d);
+        }
+        free(unlisting_rsp);
+    }
+
     /* lsp.rsp existed but couldn't be used: attach one file-level diagnostic so
      * the editor explains the fallback instead of silently differing. */
     if (us.rsp_err) {
@@ -1446,7 +1561,7 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
 
     /* Retain the last analysis that type-checked. When the fresh one is good it
      * becomes the new last_good (and the previous good copy is freed); when it
-     * is degraded (a lexer abort, so nothing was type-checked) the prior good
+     * is degraded (an abort, so nothing was type-checked) the prior good
      * one is kept so type-aware queries keep answering. prev and last_good may
      * alias, hence the !=-guarded frees. */
     if (u->result->typed) {
@@ -1480,12 +1595,21 @@ static void publish_project_diagnostics(LspServer *S) {
     AggDiag *agg = NULL;
     int an = 0, acap = 0;
     for (int ui = 0; ui < S->unit_count; ui++) {
-        AnalysisResult *r = S->units[ui].result;
+        UnitEntry *u = &S->units[ui];
+        AnalysisResult *r = u->result;
         if (!r) continue;
         for (int i = 0; i < r->diag_count; i++) {
             /* A NULL filename defaults to that analysis's primary document. */
             const char *file = r->diags[i].loc.filename ? r->diags[i].loc.filename
                                                         : r->filename;
+            if (u->not_reported_count > 0) {
+                char *real = canon_path(file);
+                bool skip = false;
+                for (int k = 0; k < u->not_reported_count && !skip; k++)
+                    skip = strcmp(u->not_reported[k], real) == 0;
+                free(real);
+                if (skip) continue;
+            }
             if (!store_find_by_path(&S->store, file)) {   /* not open: drop if stdlib */
                 bool is_std = false;
                 for (int k = 0; k < S->stdlib_count; k++)
@@ -1650,8 +1774,8 @@ static void flush_dirty(LspServer *S) {
 
     /* Then every other existing unit that lists a dirty file among its sources
      * (see the comment above this function). Indexed, not pointer-held: the pass
-     * above may have grown S->units. A unit only exists while some open doc keys
-     * it, so a primary is always found. */
+     * above may have grown S->units. A unit whose last document moved to another
+     * unit this flush has no primary; it is skipped here and pruned below. */
     for (int ui = 0; ui < S->unit_count; ui++) {
         const char *key = S->units[ui].key;
         if (key_in(done, dn, key)) continue;
@@ -1746,8 +1870,7 @@ static void handle_did_close(LspServer *S, JsonValue *params) {
     bool removed = false;
     for (int i = 0; i < S->store.count; i++) {
         if (strcmp(S->store.docs[i].uri, uri) == 0) {
-            LspDoc *d = &S->store.docs[i];
-            free(d->uri); free(d->path); free(d->real); free(d->text); free(d->unit_key);
+            doc_free(&S->store.docs[i]);
             S->store.docs[i] = S->store.docs[--S->store.count];
             removed = true;
             break;
@@ -2251,17 +2374,14 @@ static bool add_variant_members(Arena *a, JsonValue *arr, Type *t) {
         return true;
     }
     if (t->kind != TYPE_ENUM) return false;
-    bool has_count_variant = false;
-    for (int i = 0; i < t->enu.variant_count; i++) {
+    for (int i = 0; i < t->enu.variant_count; i++)
         add_item(a, arr, t->enu.variants[i].name, CIK_ENUMMEMBER, NULL);
-        if (strcmp(t->enu.variants[i].name, "count") == 0)
-            has_count_variant = true;
-    }
-    if (!has_count_variant)
-        add_item(a, arr, "count", CIK_FIELD, "i32");
+    if (type_enum_count_is(t, ENUM_COUNT_PROPERTY))
+        add_item(a, arr, ENUM_COUNT_PROPERTY, CIK_FIELD, "i32");
     return true;
 }
 
+/* The completion item kind for a symbol, declared or imported. */
 static int sym_kind_to_cik(const Symbol *s) {
     switch (s->kind) {
         case DECL_MODULE: return CIK_MODULE;
@@ -2276,7 +2396,7 @@ static int sym_kind_to_cik(const Symbol *s) {
         case DECL_ERROR:
             break;
     }
-        return CIK_VARIABLE;
+    return CIK_VARIABLE;
 }
 
 /* pass1 registers every struct, union and enum type a second time under its
@@ -2529,22 +2649,6 @@ static bool nameset_add(NameSet *s, const char *name) {
     return true;
 }
 
-static int import_kind_to_cik(DeclKind k) {
-    switch (k) {
-        case DECL_MODULE: return CIK_MODULE;
-        case DECL_STRUCT: return CIK_STRUCT;
-        case DECL_UNION:  return CIK_ENUM;
-        case DECL_ENUM:   return CIK_ENUM;
-        case DECL_LET:
-        case DECL_IMPORT:
-        case DECL_EXTERN:
-        case DECL_NAMESPACE:
-        case DECL_ERROR:
-            break;
-    }
-        return CIK_VARIABLE;
-}
-
 /* Find the module Symbol for a module Decl within `scope` (the global symtab, or
  * a parent module's member table). Match by decl pointer to sidestep name/ns
  * ambiguity. */
@@ -2562,7 +2666,7 @@ static void emit_imports(Arena *a, JsonValue *items, NameSet *seen,
     for (int i = 0; i < imp->count; i++) {
         ImportRef *ref = &imp->entries[i];
         if (!nameset_add(seen, ref->local_name)) continue;
-        add_item(a, items, ref->local_name, import_kind_to_cik(ref->kind), NULL);
+        add_item(a, items, ref->local_name, sym_kind_to_cik(ref->sym), NULL);
     }
 }
 
@@ -3358,19 +3462,9 @@ int lsp_main(void) {
     }
 
     /* Cleanup */
-    for (int i = 0; i < S.store.count; i++) {
-        free(S.store.docs[i].uri);
-        free(S.store.docs[i].path);
-        free(S.store.docs[i].real);
-        free(S.store.docs[i].text);
-        free(S.store.docs[i].unit_key);
-    }
+    for (int i = 0; i < S.store.count; i++) doc_free(&S.store.docs[i]);
     free(S.store.docs);
-    for (int i = 0; i < S.unit_count; i++) {
-        unit_free_results(&S.units[i]);
-        unit_free_files(&S.units[i]);
-        free(S.units[i].key);
-    }
+    for (int i = 0; i < S.unit_count; i++) unit_free(&S.units[i]);
     free(S.units);
     for (int i = 0; i < S.stdlib_count; i++) {
         free((void *)S.stdlib[i].filename);

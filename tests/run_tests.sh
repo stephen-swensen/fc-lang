@@ -7,7 +7,9 @@
 # e.g. -O2), FCC_EXTRA_ARGS (extra fcc options for every test), FILTER (awk
 # pattern over category/test_name), JOBS (parallel jobs, default nproc),
 # KEEP=1 (keep the work directory with every test's C file and output), FCC
-# (the compiler to test, default the one `make` builds).
+# (the compiler to test, default the one `make` builds), FC_TEST_MEM_CAP_KB
+# (the memory cap on fcc in KB, default 3 GB; 0 lifts it). Run it from the
+# repository root.
 #
 # `run_tests.sh --list` prints the selected tests instead of running them, one
 # per line: name|fcc arguments|error file|expected_exit file|stderr_contains
@@ -70,6 +72,11 @@ run_one_test() {
     local c_file="$TMPDIR/${slug}.c"
     local bin_file="$TMPDIR/${slug}"
     local out="$TMPDIR/results/$slug"
+
+    if [ -z "$fc_args" ]; then
+        echo "FAIL  $test_display (the test directory has no .fc file)" > "$out"
+        return
+    fi
 
     # Compile C -> binary with the test's own directory on the include path, so
     # a test can carry local .h files.
@@ -205,7 +212,12 @@ list_tests() {
             [ -d "$test_subdir" ] || continue
             test_name=$(basename "$test_subdir")
             fc_args=$(find "$test_subdir" -name "*.fc" | sort | tr '\n' ' ')
-            [ -n "$fc_args" ] || continue
+            # A directory with no .fc file is reported (run_one_test fails
+            # it), not silently dropped.
+            if [ -z "$fc_args" ]; then
+                echo "$category/$test_name||||"
+                continue
+            fi
 
             # skip_windows: the --backtraces tests rely on execinfo backtrace(),
             # which is glibc/macOS only. skip_o2 opts a test out of the -O2 runs
@@ -250,7 +262,7 @@ test_list="$TMPDIR/test_list"
 list_tests | awk -F'|' -v pat="${FILTER:-}" 'pat == "" || $1 ~ pat' > "$test_list"
 
 if [ -n "$LIST_ONLY" ]; then
-    awk -F'|' '$6 == "" { print $1 "|" $2 "|" $3 "|" $4 "|" $5 }' "$test_list"
+    awk -F'|' '$6 == "" && $2 != "" { print $1 "|" $2 "|" $3 "|" $4 "|" $5 }' "$test_list"
     exit 0
 fi
 

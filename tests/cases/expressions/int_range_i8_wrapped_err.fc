@@ -1,0 +1,5 @@
+// A literal is out of range when its written value is, even if its bit
+// pattern is a negative value's: 18446744073709551615 is not -1.
+let main = (args: str[]) ->
+    let x = 18446744073709551615i8
+    (i32)x

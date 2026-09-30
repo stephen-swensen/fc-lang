@@ -1,0 +1,11 @@
+// A generic negation instantiated at an enum is judged as the same negation of
+// an enum value in concrete code: enums are not numeric.
+enum dir =
+    | north
+    | south
+
+let neg = (a: 'a) -> -a
+
+let main = (args: str[]) ->
+    let d = neg(dir.north)
+    0

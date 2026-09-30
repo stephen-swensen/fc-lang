@@ -1,0 +1,7 @@
+// Integer division in a generic body emits the divide-by-zero abort, which
+// prints to stderr, so the C file must include <stdio.h> even when nothing
+// else in the program needs it. (No assert here: it would pull stdio in.)
+let div = (a: 'a, b: 'a) -> a / b
+let rem = (a: 'a, b: 'a) -> a % b
+
+let main = (args: str[]) -> div(6, 3) + rem(7, 4) - 5

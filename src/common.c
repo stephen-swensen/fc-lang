@@ -4,7 +4,7 @@
 
 /* ---- Slice length representation (--len-repr) ---- */
 
-int g_len_repr = 64;
+int g_len_repr = FC_LEN_REPR_DEFAULT;
 
 int64_t fc_len_max(void) {
     switch (g_len_repr) {
@@ -23,6 +23,78 @@ int hex_digit_val(char c) {
     return -1;
 }
 
+int simple_escape_byte(char c) {
+    switch (c) {
+    case 'n':  return '\n';
+    case 't':  return '\t';
+    case 'r':  return '\r';
+    case '0':  return '\0';
+    case '\\': return '\\';
+    case '"':  return '"';
+    case '\'': return '\'';
+    default:   return -1;
+    }
+}
+
+bool interp_conv_class(char conv, InterpConvClass *out) {
+    static const struct { char c; InterpConvClass cls; } CONVERSIONS[] = {
+        { 'd', CONV_INTEGER }, { 'i', CONV_INTEGER }, { 'u', CONV_INTEGER },
+        { 'x', CONV_INTEGER }, { 'X', CONV_INTEGER }, { 'o', CONV_INTEGER },
+        { 'f', CONV_FLOAT },   { 'e', CONV_FLOAT },   { 'E', CONV_FLOAT },
+        { 'g', CONV_FLOAT },   { 'G', CONV_FLOAT },
+        { 's', CONV_STRING },  { 'c', CONV_CHAR },    { 'p', CONV_POINTER },
+        { 'T', CONV_TYPE_NAME },
+    };
+    for (size_t i = 0; i < sizeof CONVERSIONS / sizeof CONVERSIONS[0]; i++)
+        if (CONVERSIONS[i].c == conv) {
+            if (out) *out = CONVERSIONS[i].cls;
+            return true;
+        }
+    return false;
+}
+
+/* A digit run as a field value, saturating one past INTERP_MAX_FIELD. */
+static const char *scan_field(const char *s, int64_t *out) {
+    const int64_t sat = (int64_t)INTERP_MAX_FIELD + 1;
+    for (; *s >= '0' && *s <= '9'; s++) {
+        if (*out < sat) *out = *out * 10 + (*s - '0');
+        if (*out > sat) *out = sat;
+    }
+    return s;
+}
+
+/* A leading `0` is the zero flag, not a width digit: C puts the flags ahead of
+ * the width, so `%08d` is flag `0` and width 8, and `%00d` is the flag written
+ * twice. */
+int interp_spec_scan(const char *text, InterpSpec *out) {
+    memset(out, 0, sizeof *out);
+    out->precision = -1;
+    const char *s = text;
+    for (;; s++) {
+        bool *slot;
+        switch (*s) {
+        case '-': slot = &out->minus; break;
+        case '+': slot = &out->plus;  break;
+        case ' ': slot = &out->space; break;
+        case '#': slot = &out->hash;  break;
+        case '0': slot = &out->zero;  break;
+        default:  slot = NULL;        break;
+        }
+        if (!slot) break;
+        if (*slot && !out->repeated) out->repeated = *s;
+        *slot = true;
+    }
+    s = scan_field(s, &out->width);
+    out->prec_at = (int)(s - text);
+    if (*s == '.') {
+        out->precision = 0;
+        s = scan_field(s + 1, &out->precision);
+    }
+    if (!interp_conv_class(*s, NULL)) return 0;
+    out->conversion = *s;
+    return (int)(s - text) + 1;
+}
+
 /* Decode string-literal source text into raw bytes. The lexer has already
  * rejected malformed escapes, so every input decodes. Writes to `out` when
  * non-NULL and always returns the byte count, so the same routine sizes a
@@ -36,21 +108,13 @@ int decode_str_lit(const char *s, int slen, unsigned char *out) {
             i++;
         } else if (s[i] == '\\' && i + 1 < slen) {
             i++;
-            switch (s[i]) {
-            case 'n': b = '\n'; break;
-            case 't': b = '\t'; break;
-            case 'r': b = '\r'; break;
-            case '0': b = '\0'; break;
-            case 'x':
-                if (i + 2 < slen) {
-                    b = (unsigned char)((hex_digit_val(s[i + 1]) << 4) |
-                                        hex_digit_val(s[i + 2]));
-                    i += 2;
-                } else {
-                    b = 'x';
-                }
-                break;
-            default: b = (unsigned char)s[i]; break;  /* \\ \" \' */
+            if (s[i] == 'x' && i + 2 < slen) {
+                b = (unsigned char)((hex_digit_val(s[i + 1]) << 4) |
+                                    hex_digit_val(s[i + 2]));
+                i += 2;
+            } else {
+                int v = simple_escape_byte(s[i]);
+                b = (unsigned char)(v >= 0 ? v : s[i]);   /* the lexer admits no other */
             }
         } else {
             b = (unsigned char)s[i];

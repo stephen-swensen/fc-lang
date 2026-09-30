@@ -1,0 +1,7 @@
+// Under --len-repr 16 a constant slice's literal length must fit the stored
+// width, written with a cast or without one.
+module m =
+    let big = u8[] { ptr = (u8*) 0xA0000usize, len = (i64) 70000 }
+
+let main = (args: str[]) ->
+    (i32) m.big.len

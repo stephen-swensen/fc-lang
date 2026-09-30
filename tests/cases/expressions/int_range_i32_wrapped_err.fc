@@ -1,0 +1,5 @@
+// An unsuffixed literal is an i32, and one whose bit pattern is a negative
+// i32's is still out of range.
+let main = (args: str[]) ->
+    let x = 18446744073709551615
+    x

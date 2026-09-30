@@ -1,0 +1,9 @@
+// An extern declaration's C name is an identifier or a keyword. A c-string
+// literal is neither, even though its token starts with a letter; it must not
+// be written into the C as a function name.
+module c from "stdio.h" =
+    extern c"puts" as say: (const cstr) -> i32
+
+let main = (args: str[]) ->
+    let _ = c.say(c"hi")
+    0

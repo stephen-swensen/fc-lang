@@ -1,0 +1,12 @@
+// A struct whose fixed-array field holds stack addresses points into the
+// stack itself, so returning it is rejected.
+struct s =
+    ptrs: i32*[1]
+
+let leak = () ->
+    let mut x = 42
+    s { ptrs = i32*[1] { &x } }
+
+let main = (args: str[]) ->
+    let _r = leak()
+    0

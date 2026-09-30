@@ -12,7 +12,7 @@ This is disclosed up front because FC is also intended as a demonstration of wha
 
 ## Key Features
 
-- **C11 target** — generates self-contained C11 plus a few GNU extensions (statement expressions, `__builtin_*`) for GCC and Clang; the runtime dependency is a handful of libc functions (allocation, `mem*`, `strlen`, `snprintf`, and `fprintf`/`abort` for runtime failures)
+- **C11 target** — generates self-contained C11 plus a few GNU extensions (statement expressions, `__attribute__`, `__builtin_*`) for GCC and Clang; the runtime dependency is a handful of libc functions (allocation, `mem*`, `strlen`, `snprintf`, and `fprintf`/`abort` for runtime failures)
 - **Indentation-based syntax** — offside rule, spaces only
 - **Type inference** — directional (bottom-up, inside-out), no global unification
 - **Monomorphized generics** — zero runtime cost, including const parameters (`wide<256>`) that parameterize layout
@@ -147,7 +147,7 @@ The `1.0.0-rc.7` prefix is hand-maintained in the `VERSION` file at the repo roo
 ## Testing
 
 ```sh
-make check                          # everything CI runs: source checks, the suite with gcc and clang, the language server tests
+make check                          # source checks, the suite with gcc and clang, the language server tests
 make test-gcc                       # the suite with gcc only (also test-clang)
 make test-gcc FILTER=closures       # only tests whose category/name matches a pattern
 ```

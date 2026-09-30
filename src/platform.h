@@ -9,7 +9,7 @@
  * their host triple). Values:
  *
  *   os   = linux | macos | windows | freebsd
- *   arch = x86_64 | aarch64 | arm | riscv64 | wasm32
+ *   arch = x86_64 | aarch64 | arm | riscv64 | riscv32 | wasm32
  *   env  = gnu  (the only documented value; native MSVC is unsupported)
  *
  * An axis that cannot be determined is left unset. `--flag name=value`

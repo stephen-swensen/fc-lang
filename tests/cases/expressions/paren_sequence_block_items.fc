@@ -1,0 +1,16 @@
+// A parenthesized ;-sequence takes a block's items, since ; is exactly a
+// same-level newline: ignore, a let over the rest, break with a value.
+let f = () -> 5
+
+let g = (n: i32) ->
+    let x = (ignore f(); 1)
+    let y = (let z = n * 2; z + 1)
+    let w = loop
+        (break n + x + y)
+    w
+
+let main = (args: str[]) ->
+    assert(g(3) == 3 + 1 + 7)
+    assert((1; 2; 3) == 3)
+    assert((4) == 4)
+    0

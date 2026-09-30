@@ -1,0 +1,16 @@
+// A slice of stack pointers read out of a generic struct literal cannot be
+// heap-copied, as it cannot out of a concrete one.
+struct gbox =
+    v: 'a
+    n: i32
+
+let leak = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    let b = gbox { v = ptrs, n = 1 }
+    let w = b.v
+    alloc(w)!
+
+let main = (args: str[]) ->
+    let _p = leak()
+    0

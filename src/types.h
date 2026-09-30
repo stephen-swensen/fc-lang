@@ -31,7 +31,12 @@ typedef enum {
     TYPE_FIXED_ARRAY, /* fixed-size inline array: T[N] */
     TYPE_CONST_INT,  /* a resolved compile-time integer used as a generic argument (wide<256>) */
     TYPE_CONST_EXPR, /* a symbolic const-generic expression over const params (wide<'n * 2>);
-                        folds to TYPE_CONST_INT at substitution time */
+                        folds to TYPE_CONST_INT at substitution time. Its tree holds
+                        only integer and bool literals, const-parameter references,
+                        and the prefix, binary and cast nodes const_expr_node_ok
+                        admits (pass2 normalizes to exactly these); the readers in
+                        types.c (const_expr_eq, const_expr_print, const_expr_subst,
+                        const_expr_eval) each handle every one */
     TYPE_STUB,       /* unresolved type reference: name only, resolved by pass1/pass2 */
     TYPE_ERROR,      /* poison type for error recovery */
     TYPE_NEVER,      /* bottom type: return/break/continue; absorbed by any branch sibling */
@@ -237,6 +242,13 @@ Type *type_builtin_member_type(Arena *a, Type *t, const char *name);
  * other type, including isize/usize, whose width is the target's. */
 int type_fixed_int_bits(Type *t);
 
+/* Whether `E.name` names enum type `t`'s variant-count property, an i32
+ * constant: `count`, unless a variant is declared with that name, which then
+ * takes it. The one statement of the rule, for type checking, constant folding
+ * and editor completion. */
+#define ENUM_COUNT_PROPERTY "count"
+bool type_enum_count_is(Type *t, const char *name);
+
 /* The static properties of the numeric types (i32.min, f64.nan, 'a.bits), by
  * index, for listing them. */
 int type_property_count(void);
@@ -253,8 +265,8 @@ typedef enum { PROP_HEADER_NONE, PROP_HEADER_FLOAT, PROP_HEADER_MATH } PropHeade
 PropHeader type_property_header(Type *t, const char *prop);
 
 /* An instantiation spelled the way the user writes it, "uwide<100>", for a
- * diagnostic. `name` may be a mangled C name: everything through its last
- * "__" is dropped (a user name never contains "__"). Caller frees. */
+ * diagnostic. `name` may be a mangled C name, reduced to its last component
+ * by mangled_source_name. Caller frees. */
 char *type_inst_display(const char *name, Type **args, int count);
 
 /* The structural nesting depth of a type argument: the axis along which a
@@ -275,10 +287,14 @@ Type *type_common_numeric(Type *a, Type *b);
 /* The underlying integer type of an enum (its declared repr); identity for all other types. */
 Type *type_enum_underlying(Type *t);
 
-/* Map a type suffix string (e.g., "i8", "u64") to a type, or NULL */
+/* The type a numeric literal's suffix names: an integer suffix ("i8" ...
+ * "usize"; an empty one is i32) or a float suffix ("f32", "f64"), or NULL for
+ * anything else. The lexer rejects a literal whose suffix these do not name,
+ * and the parser types the literal by them. */
 Type *type_from_int_suffix(const char *suffix, int len);
+Type *type_from_float_suffix(const char *suffix, int len);
 
-/* Map a type name string (e.g., "int32", "bool", "str") to a type, or NULL */
+/* Map a type name string (e.g., "i32", "bool", "str") to a type, or NULL */
 Type *type_from_name(const char *s, int len);
 /* The built-in type names type_from_name recognizes, for tools that list
  * them (editor completion). */
@@ -320,6 +336,23 @@ ConstOpStatus const_binary_op(TokenKind op, uint64_t l, uint64_t r, int width,
  * ||), evaluated at its operands' type rather than at its own. */
 bool const_op_yields_bool(TokenKind op);
 
+/* `op v` for a prefix operator on a constant: `-` and `~` on a `width`-bit
+ * value of the given signedness (wrapping), `!` on a truth value (0 or 1).
+ * CONST_OP_UNSUPPORTED for any other operator. */
+ConstOpStatus const_unary_op(TokenKind op, uint64_t v, int width, bool is_signed,
+                             uint64_t *out);
+
+/* Whether a constant expression may use `op`: exactly the operators
+ * const_binary_op and const_unary_op evaluate, so every evaluator and the
+ * checks on what a const expression may contain share one list. */
+bool const_binary_op_supported(TokenKind op);
+bool const_unary_op_supported(TokenKind op);
+
+/* `v` converted to the fixed-width integer type `target` (truncated, then
+ * sign- or zero-extended to 64 bits). False when `target` is not a
+ * fixed-width integer type, the only cast a constant expression may make. */
+bool const_cast_value(Type *target, uint64_t v, uint64_t *out);
+
 /* Evaluate a const-arg carrier (TYPE_CONST_INT / TYPE_CONST_EXPR / a const
  * param TYPE_TYPE_VAR) under name-to-Type bindings where const params bind to
  * TYPE_CONST_INT. Context-free evaluation in the i64 domain of const arguments
@@ -346,6 +379,17 @@ const char *const_eval_take_error(SrcLoc *loc);
  * so a site that substitutes only for a message drains the slot afterwards
  * exactly when it was empty before, leaving another site's error in place. */
 bool const_eval_error_pending(void);
+
+/* The struct, union or stub type that `t` embeds by value, looking through
+ * fixed arrays, options and results; NULL when it embeds none (a pointer,
+ * slice, function, scalar or enum). A struct or union holding such a value is
+ * laid out after that type, and may not contain itself this way. */
+Type *type_byval_aggregate(Type *t);
+
+/* Whether an option over `inner` is null-sentinel: the inner type is a
+ * pointer (`T*?`, `cstr?`, `any*?`), so the option is that bare pointer, with
+ * NULL for none. Every other option is a { value, has_value } struct. */
+bool option_inner_is_null_sentinel(const Type *inner);
 
 /* Does this type need a generated eq function (as opposed to C native ==)? */
 bool type_needs_eq_func(Type *t);
@@ -381,6 +425,14 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
  * Returns a malloc'd string that the caller must free. */
 char *mangle_type_name(Type *t);
 
+/* The template name a generic struct, union or stub instance is spelled from:
+ * the defining symbol's canonical name when the node records its symbol
+ * (resolved_sym), a stub's recorded base when monomorphization has renamed it
+ * in place, else the node's own name. Every place that names an instance
+ * (mangle_type_name, the monomorphizer's discovery, codegen) takes the base
+ * from here, so a registered instance and a reference to it agree. */
+const char *instance_base_name(Type *t);
+
 /* The interned C name of a generic instantiation: `base` "__" and each
  * argument's mangling, length-prefixed (box<i32> from base "fc__box" is
  * "fc__box__3_i32"). */
@@ -389,7 +441,8 @@ const char *mangle_generic_name(InternTable *intern,
 
 /* The canonical interned name of a tuple struct, from its element types
  * ({i32, str} is "fc_tuple2__3_i323_str"). Structurally identical tuples share
- * the name, so type_eq (which compares struc.name) is structural for them. */
+ * the name, so two spellings of one tuple type emit one C struct. (type_eq
+ * compares tuples field by field.) */
 const char *tuple_canonical_name(InternTable *intern, StructField *fields, int n);
 
 /* Construct a synthesized tuple struct type from element types (fields e0..eN-1).

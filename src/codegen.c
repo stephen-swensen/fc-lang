@@ -6,6 +6,7 @@
 #include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
+#include <ctype.h>
 #include <assert.h>
 
 /* Substitution context for monomorphized emission */
@@ -20,7 +21,6 @@ static SubstCtx *g_subst = NULL;
  * the feature-detection block that owns the rest of the g_* flags. */
 static bool g_backtraces;
 static bool g_uses_error_name;   /* any error_name(...) in emitted code */
-static bool g_errname_emitted;   /* the fc_errname table/lookup were emitted */
 /* Suffix appended to every lifted-lambda name while emitting a monomorphized
  * generic instance.  Lambdas inside generic bodies are emitted once per
  * instantiation (a capture/param/return may be typed by the enclosing type
@@ -97,8 +97,8 @@ static const char *path_cat(const char *base, const char *sep, const char *tail)
  * cannot: `V` contains no `__` (the lexer forbids it) and `U` always starts
  * with `fc__`, so if two splits of one string agreed, the shorter variant would
  * have to be the longer one minus a trailing `_`, and then its separator would
- * read `_f` rather than `__`. (`mangled_tail` in pass1.c guards against the
- * same hazard.) */
+ * read `_f` rather than `__`. (`mangled_source_name` in common.c meets the
+ * same hazard when it splits a mangled name.) */
 static const char *union_tag_type(const char *uname) {
     return intern_sprintf(g_intern, "fc_tag_%s", uname);
 }
@@ -133,24 +133,28 @@ static void internal_error(SrcLoc loc, const char *fmt, ...) {
 static Decl **g_file_globals = NULL;
 static int g_file_global_count = 0;
 
-/* True while emitting a module-member initializer at C file scope.  Flips
- * EXPR_ARRAY_LIT and EXPR_STRUCT_LIT-with-fixed-array-fields onto an
- * aggregate-initializer emission path instead of the default statement-
- * expression path, which C11 rejects at file scope. */
+/* True while emitting a module constant's initializer at C file scope, where
+ * C allows only constant expressions. Slice literals and struct literals with
+ * fixed-array fields take an aggregate-initializer path instead of a statement
+ * expression, and the runtime guards and operand sequencing that need
+ * statements (a slice literal's length checks, the null and zero-code checks
+ * of `some` and `err`) are left out: pass2 has proved them unnecessary for a
+ * constant. */
 static bool g_const_context = false;
 
 /* Lexical guard context, toggled by EXPR_GUARD (guarded/unguarded). When true,
- * the three value-precondition guards (float-to-int saturation, integer
- * divide/modulo, slice bounds) emit their bare C operation with no runtime
- * check. A child marker fully overrides its parent, so EXPR_GUARD saves and
+ * the value-precondition guards (float-to-int saturation, integer
+ * divide/modulo by zero, slice indexing and subslice bounds) emit their bare C
+ * operation with no runtime check. A child marker fully overrides its parent, so EXPR_GUARD saves and
  * restores this around its body; function/lambda bodies reset it to false so a
  * marker never leaks across a call boundary. */
 static bool g_guards_suppressed = false;
 
 /* Lexical overflow context, toggled by EXPR_GUARD on the overflow axis
  * (checked/unchecked). When true, integer `+ - *`, signed `/` at INT_MIN/-1,
- * signed negation, and lossy integer narrowing casts abort on overflow instead
- * of wrapping/truncating. Default false (unchecked: wrap, the FC default).
+ * signed negation, lossy integer narrowing casts, and the truncating string
+ * forms (a `(cstr[N])` cast, a `%.Ns` interpolation segment) abort instead of
+ * wrapping or truncating. Default false (unchecked: wrap, the FC default).
  * Independent of g_guards_suppressed: the two axes are orthogonal. Saved and
  * restored around each marker's body; reset to false at function/lambda
  * boundaries so a marker never leaks across a call. */
@@ -201,10 +205,11 @@ static bool name_addressed(const char *codegen_name) {
     return false;
 }
 
-/* Function-entry backing arrays for stack slice literals and constant-size
- * interpolation buffers.  Each entry is the slice-literal or interp-string node;
- * a fixed C array is emitted at function top and the node's use site references
- * it by name (via codegen_backing_name).  Unlike a per-evaluation alloca, the
+/* Function-entry backing slots for stack temporaries of a known size: slice
+ * literals, constant-size interpolation buffers, `(cstr[N])` cast buffers and
+ * capturing closures' contexts. Each entry is the node; its slot is declared
+ * at function top and the use site references it by name (its
+ * codegen_backing_name, or codegen_ctx_backing_name for a closure).  Unlike a per-evaluation alloca, the
  * slot is reused across loop iterations, so stack use stays bounded.  The
  * backing has function lifetime, which is the lifetime escape analysis assumes
  * for a stack slice or str.  Collected fresh per function body. */
@@ -305,6 +310,19 @@ static void emit_str_lit_body(const char *s, int slen, FILE *out) {
 static const char *lambda_c_name(Expr *lam) {
     if (!g_lambda_suffix) return lam->func.lifted_name;
     return arena_sprintf(g_arena, "%s__%s", lam->func.lifted_name, g_lambda_suffix);
+}
+
+/* The C function a context-free function value (fn_value_is_context_free)
+ * names; its trampoline is `fc_ctramp_` followed by this name. */
+static const char *trampoline_target(Expr *e) {
+    switch (e->kind) {
+    case EXPR_IDENT: return e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
+    case EXPR_FIELD: return e->field.codegen_name;
+    case EXPR_FUNC:  return lambda_c_name(e);
+    default:
+        internal_error(e->loc, "no trampoline for this function value");
+        return "";
+    }
 }
 
 static bool is_hoisted(const char *codegen_name) {
@@ -491,6 +509,31 @@ static void collect_hoisted_bindings(Expr *e) {
     expr_for_each_child(e, collect_hoisted_child, NULL);
 }
 
+/* The payload type of variant `variant` of union type `u`, or NULL when the
+ * variant carries none (or `u` is not a union). A generic instance's variants
+ * are read from its concrete type in the mono table, which holds them
+ * resolved (the type an expression carries may still name a payload by
+ * stub), and a type variable in the payload is substituted when an instance
+ * body is being emitted. */
+static Type *union_variant_payload(Type *u, const char *variant) {
+    if (u) u = resolve_struct_stub(u);
+    if (!u || u->kind != TYPE_UNION) return NULL;
+    if (g_mono) {
+        MonoInstance *mi = mono_find(g_mono, u->unio.name);
+        if (mi && mi->concrete_type && mi->concrete_type->kind == TYPE_UNION)
+            u = mi->concrete_type;
+    }
+    for (int v = 0; v < u->unio.variant_count; v++) {
+        if (u->unio.variants[v].name != variant) continue;
+        Type *payload = u->unio.variants[v].payload;
+        if (payload && g_subst)
+            payload = type_substitute(g_arena, payload, g_subst->var_names,
+                                      g_subst->concrete, g_subst->count);
+        return payload;
+    }
+    return NULL;
+}
+
 /* Collect hoisted bindings from destructuring pattern */
 static void collect_hoisted_pat(Pattern *pat, Type *type, bool is_mut) {
     if (!pat || !type) return;
@@ -522,14 +565,9 @@ static void collect_hoisted_pat(Pattern *pat, Type *type, bool is_mut) {
             collect_hoisted_pat(pat->some_pat.inner, type_int32(), is_mut);
         break;
     case PAT_VARIANT:
-        if (pat->variant.payload && type->kind == TYPE_UNION) {
-            for (int v = 0; v < type->unio.variant_count; v++) {
-                if (type->unio.variants[v].name == pat->variant.variant) {
-                    collect_hoisted_pat(pat->variant.payload, type->unio.variants[v].payload, is_mut);
-                    break;
-                }
-            }
-        }
+        if (pat->variant.payload)
+            collect_hoisted_pat(pat->variant.payload,
+                                union_variant_payload(type, pat->variant.variant), is_mut);
         break;
     default:
         break;
@@ -693,13 +731,20 @@ static bool slice_is_str_under_subst(Type *t) {
     return elem && elem->kind == TYPE_UINT8;
 }
 
-/* Does the option inner type use null-sentinel optimization (bare pointer, NULL = none)? */
+/* Whether an option type, under the active substitution, is a bare pointer
+ * with NULL for none (option_inner_is_null_sentinel). */
 static bool is_null_sentinel(Type *opt_type) {
     opt_type = subst_resolve(opt_type);
     if (!opt_type || opt_type->kind != TYPE_OPTION) return false;
-    Type *inner = subst_resolve(opt_type->option.inner);
-    return inner && (inner->kind == TYPE_POINTER ||
-                     inner->kind == TYPE_ANY_PTR);
+    return option_inner_is_null_sentinel(subst_resolve(opt_type->option.inner));
+}
+
+/* type_needs_eq_func under the active substitution, where a generic option's
+ * inner type decides whether it is a null-sentinel pointer (compared with C's
+ * ==) or a struct with a generated eq function. */
+static bool needs_eq_func(Type *t) {
+    t = subst_resolve(t);
+    return !is_null_sentinel(t) && type_needs_eq_func(t);
 }
 
 /* Concrete element count of a fixed array at emit time: the folded size, or
@@ -765,24 +810,11 @@ static int zero_agg_depth(Type *t) {
 }
 
 /* Extra brace levels for the zero in a (T){0}-style compound literal: the
- * outer braces already exist, so this is the aggregate depth of T's first
- * member. */
+ * outer braces already exist, so one fewer than T's aggregate depth. */
 static int zero_brace_extra(Type *t) {
-    t = subst_resolve(t);
-    if (t && t->kind == TYPE_STUB) t = resolve_struct_stub(t);
-    if (!t) return 0;
-    switch (t->kind) {
-    case TYPE_STRUCT:
-        return t->struc.field_count > 0
-            ? zero_agg_depth(t->struc.fields[0].type) : 0;
-    case TYPE_FIXED_ARRAY: return zero_agg_depth(t->fixed_array.elem);
-    case TYPE_OPTION:
-        /* value-first repr: the payload is the first member */
-        return is_null_sentinel(t) ? 0 : zero_agg_depth(t->option.inner);
-    default: return 0;  /* union (tag first), slice/result/fn (scalar first), ... */
-    }
+    int depth = zero_agg_depth(t);
+    return depth > 0 ? depth - 1 : 0;
 }
-
 
 static void emit_indent(FILE *out) {
     for (int i = 0; i < g_indent_level; i++) fprintf(out, "    ");
@@ -960,6 +992,28 @@ static void emit_slice_elem_ident(Type *elem, FILE *out) {
     emit_type_ident(elem, out);
 }
 
+/* The C spelling of a scalar type kind (an integer, float, bool or void), or
+ * NULL for any other kind. */
+static const char *c_scalar_name(TypeKind k) {
+    switch (k) {
+    case TYPE_INT8:    return "int8_t";
+    case TYPE_INT16:   return "int16_t";
+    case TYPE_INT32:   return "int32_t";
+    case TYPE_INT64:   return "int64_t";
+    case TYPE_UINT8:   return "uint8_t";
+    case TYPE_UINT16:  return "uint16_t";
+    case TYPE_UINT32:  return "uint32_t";
+    case TYPE_UINT64:  return "uint64_t";
+    case TYPE_ISIZE:   return "ptrdiff_t";
+    case TYPE_USIZE:   return "size_t";
+    case TYPE_FLOAT32: return "float";
+    case TYPE_FLOAT64: return "double";
+    case TYPE_BOOL:    return "bool";
+    case TYPE_VOID:    return "void";
+    default:           return NULL;
+    }
+}
+
 static void emit_type(Type *t, FILE *out) {
     /* A type variable of the instance being emitted is its binding. */
     Type *bound = subst_resolve(t);
@@ -968,22 +1022,13 @@ static void emit_type(Type *t, FILE *out) {
         return;
     }
     switch (t->kind) {
-    case TYPE_INT8:    fprintf(out, "int8_t");    break;
-    case TYPE_INT16:   fprintf(out, "int16_t");   break;
-    case TYPE_INT32:   fprintf(out, "int32_t");   break;
-    case TYPE_INT64:   fprintf(out, "int64_t");   break;
-    case TYPE_UINT8:   fprintf(out, "uint8_t");   break;
-    case TYPE_UINT16:  fprintf(out, "uint16_t");  break;
-    case TYPE_UINT32:  fprintf(out, "uint32_t");  break;
-    case TYPE_UINT64:  fprintf(out, "uint64_t");  break;
-    case TYPE_ISIZE:   fprintf(out, "ptrdiff_t"); break;
-    case TYPE_USIZE:   fprintf(out, "size_t");    break;
-    case TYPE_FLOAT32: fprintf(out, "float");     break;
-    case TYPE_FLOAT64: fprintf(out, "double");    break;
-    case TYPE_BOOL:    fprintf(out, "bool");      break;
-    case TYPE_VOID:    fprintf(out, "void");      break;
-    case TYPE_NEVER:   fprintf(out, "void");      break; /* defensive: never materialized */
-    case TYPE_UNRESOLVED: fprintf(out, "void");   break; /* defensive: patched before codegen */
+    CASE_TYPE_PRIMITIVES:
+        fprintf(out, "%s", c_scalar_name(t->kind));
+        break;
+    case TYPE_NEVER:        /* defensive: never materialized */
+    case TYPE_UNRESOLVED:   /* defensive: patched before codegen */
+        fprintf(out, "void");
+        break;
     case TYPE_POINTER:
         /* East const: the qualifier binds to the pointee, which may itself be
          * a pointer. Spelled west, `const int32_t**` reads in C as "pointer to
@@ -1005,10 +1050,8 @@ static void emit_type(Type *t, FILE *out) {
         break;
     case TYPE_OPTION: {
         Type *inner = subst_resolve(t->option.inner);
-        if (inner && (inner->kind == TYPE_POINTER ||
-            inner->kind == TYPE_ANY_PTR)) {
-            /* Pointer-like inner: a plain pointer, NULL = none */
-            emit_type(inner, out);
+        if (is_null_sentinel(t)) {
+            emit_type(inner, out);   /* a plain pointer, NULL = none */
         } else {
             fprintf(out, "fc_option_");
             if (inner) emit_type_ident(inner, out);
@@ -1078,7 +1121,10 @@ static void emit_type(Type *t, FILE *out) {
     }
 }
 
-/* Emit a C type name suitable for use in identifiers (slice/option typedef names) */
+/* A C type name usable inside an identifier (the slice, option, result and
+ * function typedef names). A kind whose C type is one identifier is spelled
+ * as emit_type spells it; pointers, extern structs, options and fixed arrays
+ * have a spelling of their own. */
 static void emit_type_ident(Type *t, FILE *out) {
     Type *bound = subst_resolve(t);
     if (bound != t) {
@@ -1086,47 +1132,7 @@ static void emit_type_ident(Type *t, FILE *out) {
         return;
     }
     switch (t->kind) {
-    case TYPE_INT8:    fprintf(out, "int8_t");    break;
-    case TYPE_INT16:   fprintf(out, "int16_t");   break;
-    case TYPE_INT32:   fprintf(out, "int32_t");   break;
-    case TYPE_INT64:   fprintf(out, "int64_t");   break;
-    case TYPE_UINT8:   fprintf(out, "uint8_t");   break;
-    case TYPE_UINT16:  fprintf(out, "uint16_t");  break;
-    case TYPE_UINT32:  fprintf(out, "uint32_t");  break;
-    case TYPE_UINT64:  fprintf(out, "uint64_t");  break;
-    case TYPE_ISIZE:   fprintf(out, "ptrdiff_t"); break;
-    case TYPE_USIZE:   fprintf(out, "size_t");    break;
-    case TYPE_FLOAT32: fprintf(out, "float");     break;
-    case TYPE_FLOAT64: fprintf(out, "double");    break;
-    case TYPE_BOOL:    fprintf(out, "bool");      break;
     case TYPE_ANY_PTR: fprintf(out, t->is_const ? "void_cptr" : "void_ptr");  break;
-    case TYPE_STRUCT:
-        if (t->struc.is_tuple) {
-            if (g_subst && type_contains_type_var(t))
-                fprintf(out, "%s", tuple_name_under_subst(t));
-            else
-                fprintf(out, "%s", t->struc.name ? t->struc.name
-                    : tuple_canonical_name(g_intern, t->struc.fields, t->struc.field_count));
-        }
-        else if (t->struc.c_name)
-            fprintf(out, "%s", t->struc.c_name);
-        else
-            fprintf(out, "%s", aggregate_c_name(t));
-        break;
-    case TYPE_UNION:
-        fprintf(out, "%s", aggregate_c_name(t));
-        break;
-    case TYPE_ENUM:
-        fprintf(out, "%s", t->enu.name);
-        break;
-    case TYPE_SLICE:
-        if (slice_is_str_under_subst(t)) {
-            fprintf(out, "fc_str");
-        } else {
-            fprintf(out, "fc_slice_");
-            emit_slice_elem_ident(t->slice.elem, out);
-        }
-        break;
     case TYPE_POINTER:
         /* const is part of the ident: a read-only pointer has a different C
          * type (`T const*`) from a writable one, so an option, result or
@@ -1135,39 +1141,32 @@ static void emit_type_ident(Type *t, FILE *out) {
         emit_type_ident(t->pointer.pointee, out);
         fprintf(out, t->is_const ? "_cptr" : "_ptr");
         break;
-    case TYPE_FUNC:
-        fprintf(out, "fc_fn_");
-        emit_fn_type_suffix(t, out);
+    case TYPE_STRUCT:
+        if (t->struc.c_name && !t->struc.is_tuple)
+            fprintf(out, "%s", t->struc.c_name);   /* without `struct ` */
+        else
+            emit_type(t, out);
         break;
     case TYPE_OPTION:
+        /* Named as a struct option even when it is a null-sentinel pointer */
         fprintf(out, "fc_option_");
         if (t->option.inner) emit_type_ident(t->option.inner, out);
-        else fprintf(out, "void");
-        break;
-    case TYPE_RESULT:
-        fprintf(out, "fc_result_");
-        if (t->result.inner) emit_type_ident(t->result.inner, out);
         else fprintf(out, "void");
         break;
     case TYPE_FIXED_ARRAY:
         fprintf(out, "fixarr%lld_", (long long)fixarr_size(t));
         emit_type_ident(t->fixed_array.elem, out);
         break;
-    case TYPE_VOID:
-        fprintf(out, "void");
-        break;
-    case TYPE_STUB: {
-        Type *resolved = resolve_struct_stub(t);
-        if (resolved != t) {
-            emit_type_ident(resolved, out);
-        } else {
-            fprintf(out, "%s", t->stub.name);
-        }
-        break;
-    }
+    CASE_TYPE_PRIMITIVES:
     case TYPE_NEVER:
     case TYPE_UNRESOLVED:
-        fprintf(out, "void");      /* as emit_type spells them */
+    case TYPE_SLICE:
+    case TYPE_UNION:
+    case TYPE_ENUM:
+    case TYPE_FUNC:
+    case TYPE_RESULT:
+    case TYPE_STUB:
+        emit_type(t, out);
         break;
     case TYPE_TYPE_VAR:
     case TYPE_CONST_INT:
@@ -1221,11 +1220,20 @@ static void emit_eq_func_name(Type *t, FILE *out);
 
 /* Conservative "may produce an observable side effect" test: a call,
  * assignment, allocation, free, or atomic op anywhere in the tree.  Pure reads,
- * literals, and lambda values return false; control-flow operands default to
- * true (they may contain anything). */
+ * literals, and lambda values return false; control flow and statements count
+ * as effects (they may contain anything). */
+static bool expr_has_side_effects(Expr *e);
+
+static bool has_effects_child(Expr *child, void *ctx) {
+    (void)ctx;
+    return expr_has_side_effects(child);
+}
+
 static bool expr_has_side_effects(Expr *e) {
     if (!e) return false;
     switch (e->kind) {
+    /* Nothing evaluated: leaves, and a lambda value, whose body runs only
+     * when it is called. */
     case EXPR_INT_LIT: case EXPR_FLOAT_LIT: case EXPR_BOOL_LIT:
     case EXPR_CHAR_LIT: case EXPR_STRING_LIT: case EXPR_CSTRING_LIT:
     case EXPR_VOID_LIT: case EXPR_IDENT: case EXPR_SIZEOF:
@@ -1234,58 +1242,29 @@ static bool expr_has_side_effects(Expr *e) {
         return false;
     case EXPR_CALL: case EXPR_ASSIGN: case EXPR_ALLOC: case EXPR_FREE:
     case EXPR_ATOMIC_LOAD: case EXPR_ATOMIC_STORE:
+    case EXPR_ERR:   /* may abort via the zero-code guard */
         return true;
-    case EXPR_BINARY:
-        return expr_has_side_effects(e->binary.left) ||
-               expr_has_side_effects(e->binary.right);
-    case EXPR_UNARY_PREFIX:  return expr_has_side_effects(e->unary_prefix.operand);
+    /* Control flow and statements may contain anything. */
+    case EXPR_IF: case EXPR_MATCH: case EXPR_LOOP: case EXPR_FOR:
+    case EXPR_BREAK: case EXPR_CONTINUE: case EXPR_RETURN: case EXPR_BLOCK:
+    case EXPR_LET: case EXPR_LET_DESTRUCT: case EXPR_ASSERT:
+    case EXPR_STATIC_ASSERT: case EXPR_DEFER: case EXPR_IGNORE: case EXPR_ERROR:
+        return true;
     case EXPR_UNARY_POSTFIX:
         /* x? may return early from the enclosing function; treat it as an
          * effect so argument-evaluation sequencing stays left-to-right. */
         if (e->unary_postfix.op == TOK_QUESTION) return true;
-        return expr_has_side_effects(e->unary_postfix.operand);
-    case EXPR_FIELD: case EXPR_DEREF_FIELD:
-        return expr_has_side_effects(e->field.object);
-    case EXPR_INDEX:
-        return expr_has_side_effects(e->index.object) ||
-               expr_has_side_effects(e->index.index);
-    case EXPR_SLICE:
-        return expr_has_side_effects(e->slice.object) ||
-               expr_has_side_effects(e->slice.lo) ||
-               expr_has_side_effects(e->slice.hi);
-    case EXPR_CAST: return expr_has_side_effects(e->cast.operand);
-    case EXPR_BITCAST: return expr_has_side_effects(e->bitcast_expr.operand);
-    case EXPR_ENUM_OF: return expr_has_side_effects(e->enum_of_expr.operand);
-    case EXPR_GUARD: return expr_has_side_effects(e->guard.body);
-    case EXPR_SOME: return expr_has_side_effects(e->some_expr.value);
-    case EXPR_OK:   return expr_has_side_effects(e->ok_expr.value);
-    case EXPR_ERR:  return true;   /* may abort via the zero-code guard */
-    case EXPR_ERROR_NAME: return expr_has_side_effects(e->error_name_expr.code);
-    case EXPR_INTERP_STRING:
-        for (int i = 0; i < e->interp_string.segment_count; i++)
-            if (!e->interp_string.segments[i].is_literal &&
-                expr_has_side_effects(e->interp_string.segments[i].expr))
-                return true;
-        return false;
-    case EXPR_STRUCT_LIT:
-        for (int i = 0; i < e->struct_lit.field_count; i++)
-            if (expr_has_side_effects(e->struct_lit.fields[i].value)) return true;
-        return false;
-    case EXPR_TUPLE_LIT:
-        for (int i = 0; i < e->tuple_lit.elem_count; i++)
-            if (expr_has_side_effects(e->tuple_lit.elems[i])) return true;
-        return false;
-    case EXPR_ARRAY_LIT:
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            if (expr_has_side_effects(e->array_lit.elems[i])) return true;
-        return false;
+        return expr_any_child(e, has_effects_child, NULL);
+    /* Operations with no effect of their own: an effect in an operand. */
+    case EXPR_BINARY: case EXPR_UNARY_PREFIX: case EXPR_FIELD:
+    case EXPR_DEREF_FIELD: case EXPR_INDEX: case EXPR_SLICE: case EXPR_CAST:
+    case EXPR_BITCAST: case EXPR_ENUM_OF: case EXPR_GUARD: case EXPR_SOME:
+    case EXPR_OK: case EXPR_ERROR_NAME: case EXPR_INTERP_STRING:
+    case EXPR_STRUCT_LIT: case EXPR_TUPLE_LIT: case EXPR_ARRAY_LIT:
     case EXPR_SLICE_LIT:
-        return expr_has_side_effects(e->slice_lit.ptr_expr) ||
-               expr_has_side_effects(e->slice_lit.len_expr);
-    default:
-        /* if/match/loop/for/block/break/return/... may contain effects */
-        return true;
+        return expr_any_child(e, has_effects_child, NULL);
     }
+    return true;
 }
 
 /* True for operands that read no mutable state and have no side effects, so
@@ -1366,10 +1345,23 @@ static bool expr_structurally_equal(Expr *a, Expr *b) {
     case EXPR_CAST:
         return type_eq(a->cast.target, b->cast.target) &&
                expr_structurally_equal(a->cast.operand, b->cast.operand);
-    default:
-        /* calls, allocations, control flow, aggregates: never equated */
+    /* Calls, allocations, control flow, aggregates and the rest: never
+     * equated. */
+    case EXPR_STRING_LIT: case EXPR_CSTRING_LIT: case EXPR_VOID_LIT:
+    case EXPR_UNARY_POSTFIX: case EXPR_CALL: case EXPR_SLICE: case EXPR_IF:
+    case EXPR_MATCH: case EXPR_LOOP: case EXPR_FOR: case EXPR_BREAK:
+    case EXPR_CONTINUE: case EXPR_RETURN: case EXPR_BLOCK: case EXPR_FUNC:
+    case EXPR_STRUCT_LIT: case EXPR_TUPLE_LIT: case EXPR_ARRAY_LIT:
+    case EXPR_SLICE_LIT: case EXPR_ALLOC: case EXPR_FREE: case EXPR_SIZEOF:
+    case EXPR_ALIGNOF: case EXPR_BITCAST: case EXPR_ENUM_OF: case EXPR_DEFAULT:
+    case EXPR_INTERP_STRING: case EXPR_ASSIGN: case EXPR_SOME: case EXPR_OK:
+    case EXPR_ERR: case EXPR_ERROR_NAME: case EXPR_LET: case EXPR_LET_DESTRUCT:
+    case EXPR_TYPE_VAR_REF: case EXPR_ASSERT: case EXPR_STATIC_ASSERT:
+    case EXPR_DEFER: case EXPR_IGNORE: case EXPR_ATOMIC_LOAD:
+    case EXPR_ATOMIC_STORE: case EXPR_GUARD: case EXPR_ERROR:
         return false;
     }
+    return false;
 }
 
 /* A comparison whose two operands emit identical C (see
@@ -1381,7 +1373,7 @@ static bool binary_is_self_compare(Expr *e) {
     case TOK_GT:   case TOK_LTEQ:   case TOK_GTEQ: break;
     default: return false;
     }
-    if (type_needs_eq_func(e->binary.left->type)) return false;
+    if (needs_eq_func(e->binary.left->type)) return false;
     return expr_structurally_equal(e->binary.left, e->binary.right);
 }
 
@@ -1460,14 +1452,42 @@ static void emit_if_open(Expr *cond, FILE *out) {
     fprintf(out, own ? " {\n" : ") {\n");
 }
 
+/* Whether an integer `/` or `%` emits its guard (see emit_int_divmod): the
+ * zero check unless `unguarded` drops it (*need_zero), and the signed
+ * MIN / -1 case (*need_minus1). The guard evaluates both operands into
+ * temporaries, left to right. False for any other division. */
+static bool int_divmod_guards(Expr *e, bool *need_zero, bool *need_minus1) {
+    Type *rt = subst_resolve(e->type);
+    bool zero = false, minus1 = false;
+    if ((e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) &&
+        rt && type_is_integer(rt)) {
+        zero = !(g_guards_suppressed && facts_guard_governs(e, subst_resolve));
+        minus1 = type_is_signed(rt);
+    }
+    if (need_zero) *need_zero = zero;
+    if (need_minus1) *need_minus1 = minus1;
+    return zero || minus1;
+}
+
+/* Whether a binary expression's operands are hoisted into temporaries so they
+ * evaluate left to right, which C leaves unspecified: when an operand has
+ * side effects, or a comparison compares a value with itself
+ * (binary_is_self_compare). Never for && and ||, which are already left to
+ * right and evaluate their right operand only conditionally, nor in a
+ * constant context, where nothing has side effects, nor for an integer
+ * division whose guard already evaluates its operands in order. */
+static bool binary_needs_seq(Expr *e) {
+    int op = e->binary.op;
+    if (op == TOK_AMPAMP || op == TOK_PIPEPIPE || g_const_context) return false;
+    if (int_divmod_guards(e, NULL, NULL)) return false;
+    Expr **slots[2] = { &e->binary.left, &e->binary.right };
+    return seq_needed(slots, 2) || binary_is_self_compare(e);
+}
+
 static bool emit_self_parens(Expr *e) {
     if (e->kind != EXPR_BINARY) return false;
     if (e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) return false;
-    Expr **slots[2] = { &e->binary.left, &e->binary.right };
-    bool seq = e->binary.op != TOK_AMPAMP && e->binary.op != TOK_PIPEPIPE &&
-               !g_const_context &&
-               (seq_needed(slots, 2) || binary_is_self_compare(e));
-    return !seq;
+    return !binary_needs_seq(e);
 }
 
 /* Emit a function call argument for an extern call, inserting casts at the
@@ -1476,17 +1496,10 @@ static bool emit_self_parens(Expr *e) {
  * but void** does not). */
 static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
     if (param_type && param_type->kind == TYPE_FUNC) {
-        /* Function at the C boundary: pass its C-compatible trampoline */
-        if (e->kind == EXPR_IDENT && !e->ident.is_local) {
-            const char *name = e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
-            fprintf(out, "fc_ctramp_%s", name);
-            return;
-        }
-        if (e->kind == EXPR_FUNC && e->func.capture_count == 0 && e->func.lifted_name) {
-            fprintf(out, "fc_ctramp_%s", lambda_c_name(e));
-            return;
-        }
-        /* pass2 rejects any other function value passed to an extern */
+        /* Function at the C boundary: pass its C-compatible trampoline. pass2
+         * rejects any other function value passed to an extern. */
+        fprintf(out, "fc_ctramp_%s", trampoline_target(e));
+        return;
     }
     if (param_type && is_cstr_type(param_type)) {
         if (param_type->is_const)
@@ -1742,13 +1755,7 @@ static void emit_pat_predicate(Pattern *pat, const char *expr, Type *type, bool 
         if (pat->variant.payload) {
             const char *payload_expr = path_cat(expr, "." FC_PAYLOAD_MEMBER ".",
                 c_safe_ident(g_intern, pat->variant.variant));
-            Type *payload_type = NULL;
-            for (int v = 0; v < type->unio.variant_count; v++) {
-                if (type->unio.variants[v].name == pat->variant.variant) {
-                    payload_type = type->unio.variants[v].payload;
-                    break;
-                }
-            }
+            Type *payload_type = union_variant_payload(type, pat->variant.variant);
             if (payload_type)
                 emit_pat_predicate(pat->variant.payload, payload_expr, payload_type, first, out);
         }
@@ -1870,27 +1877,7 @@ static void emit_pat_bindings(Pattern *pat, const char *expr, Type *type, FILE *
     }
     case PAT_VARIANT: {
         if (pat->variant.payload) {
-            /* Get variant payload type from the mono table's concrete_type if available,
-             * since the pass2 expression type may have unsubstituted type variables
-             * in variant payloads (pass2 renames but doesn't substitute them). */
-            Type *source_union = type;
-            if (type->kind == TYPE_UNION && g_mono) {
-                MonoInstance *mi = mono_find(g_mono, type->unio.name);
-                if (mi && mi->concrete_type && mi->concrete_type->kind == TYPE_UNION)
-                    source_union = mi->concrete_type;
-            }
-            Type *payload_type = NULL;
-            for (int v = 0; v < source_union->unio.variant_count; v++) {
-                if (source_union->unio.variants[v].name == pat->variant.variant) {
-                    payload_type = source_union->unio.variants[v].payload;
-                    break;
-                }
-            }
-            /* Substitute type variables when inside a monomorphized context */
-            if (payload_type && g_subst) {
-                payload_type = type_substitute(g_arena, payload_type,
-                    g_subst->var_names, g_subst->concrete, g_subst->count);
-            }
+            Type *payload_type = union_variant_payload(type, pat->variant.variant);
             if (payload_type) {
                 const char *payload_expr = path_cat(expr, "." FC_PAYLOAD_MEMBER ".",
                     c_safe_ident(g_intern, pat->variant.variant));
@@ -2219,7 +2206,7 @@ static const char *unsigned_counterpart(Type *t) {
  * value (200u8 + 100u8 observes as 300, not 44) and narrow signed multiply hits
  * signed-overflow UB (-1i16 * -1i16 promotes to int and 65535*65535 overflows).
  * Such results must be routed through `unsigned` and/or truncated back to the
- * FC type. Types at least as wide as int (int32+/uint32+) don't need this. */
+ * FC type. Types at least as wide as int (i32 and wider) don't need this. */
 static bool type_is_subint(Type *t) {
     return t->kind == TYPE_INT8  || t->kind == TYPE_UINT8 ||
            t->kind == TYPE_INT16 || t->kind == TYPE_UINT16;
@@ -2267,12 +2254,12 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
     }
 
     /* Under `checked`, a precision-bounded %s segment aborts instead of
-     * clipping, since the clip is data loss on the overflow axis. pass2's
-     * expr_node_is_governed_overflow (EXPR_INTERP_STRING arm) must agree.
+     * clipping, since the clip is data loss on the overflow axis
+     * (facts_overflow_governs).
      * A str segment reads its fat-pointer length; a cstr segment probes the
      * first prec+1 bytes for the NUL (a bounded scan, no full strlen on the
      * hot path) and pays the strlen only in the aborting branch. */
-    if (g_overflow_checked) {
+    if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
         for (int i = 0, k = 0; i < seg_count; i++) {
             if (segs[i].is_literal || segs[i].conversion == 'T') continue;
             int prec = interp_seg_trunc_prec(&segs[i]);
@@ -2383,24 +2370,11 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
             bool is_str_arg2 = (segs[i].conversion == 's' &&
                                segs[i].expr->type && is_str_type(segs[i].expr->type));
             if (is_str_arg2) {
-                fprintf(out, "%%");
-                const char *sp = segs[i].text;
-                int splen = segs[i].text_length;
-                int j = 0;
-                while (j < splen - 1 && (sp[j] == '-' || sp[j] == '+' ||
-                       sp[j] == '0' || sp[j] == '#' || sp[j] == ' ')) {
-                    fputc(sp[j], out);
-                    j++;
-                }
-                while (j < splen - 1 && sp[j] >= '0' && sp[j] <= '9') {
-                    fputc(sp[j], out);
-                    j++;
-                }
-                if (j < splen - 1 && sp[j] == '.') {
-                    j++;
-                    while (j < splen - 1 && sp[j] >= '0' && sp[j] <= '9') j++;
-                }
-                fprintf(out, ".*s");
+                /* The spec's flags and width, then `.*s`: a str passes its
+                 * length (capped at any written precision) as the precision. */
+                InterpSpec sp;
+                interp_seg_spec(&segs[i], &sp);
+                fprintf(out, "%%%.*s.*s", sp.prec_at, segs[i].text);
             } else {
                 Type *t = segs[i].expr->type;
                 char conv = segs[i].conversion;
@@ -2450,8 +2424,9 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
         Type *t = segs[i].expr->type;
         bool is_str_arg2 = (conv == 's' && t && is_str_type(t));
         if (is_str_arg2) {
-            int64_t prec_w = 0, prec_p = -1;
-            parse_format_width_prec(segs[i].text, &prec_w, &prec_p);
+            InterpSpec sp;
+            interp_seg_spec(&segs[i], &sp);
+            int64_t prec_p = sp.precision;
             if (prec_p >= 0) {
                 /* Compare in int64 to avoid truncating before the min; the
                  * fc_to_int branch is only taken when len < prec_p, so the
@@ -2474,14 +2449,14 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
                      * 2-digit budget). Then widen to unsigned long long so the
                      * `ll` length modifier is correct on every target: a plain
                      * (unsigned int) is only 16 bits where C's `int` is, which
-                     * would truncate a uint32 value. */
+                     * would truncate a u32 value. */
                     fprintf(out, "(unsigned long long)(%s)", unsigned_counterpart(t));
                 } else if (conv == 'c') {
                     /* %c (uint8 operand) takes an int argument, no modifier. */
                     fprintf(out, "(int)");
                 } else {
                     /* Signed decimal: widen to long long (matches the `ll`
-                     * modifier) so int32 is not truncated on a 16-bit-`int`
+                     * modifier) so an i32 is not truncated on a 16-bit-`int`
                      * target, where int32_t is `long`, not `int`. */
                     fprintf(out, "(long long)");
                 }
@@ -2716,11 +2691,11 @@ static void emit_binary_operand(Expr *operand, bool is_xor, FILE *out) {
  * int's width, then truncate back to the FC type:
  *   (int16_t)(uint16_t)((unsigned)(uint16_t)a * (unsigned)(uint16_t)b)
  *
- * Signed result types at least as wide as int (int32/int64/isize) cast
+ * Signed result types at least as wide as int (i32/i64/isize) cast
  * through the unsigned counterpart so overflow wraps instead of being UB:
  *   (int32_t)((uint32_t)a + (uint32_t)b)
  *
- * Unsigned result types at least as wide as int (uint32/uint64/usize) are
+ * Unsigned result types at least as wide as int (u32/u64/usize) are
  * already modular in C: returns false, and the caller emits the plain
  * operator. */
 static bool emit_int_arith(Expr *e, int op, Type *rt, FILE *out) {
@@ -2729,7 +2704,7 @@ static bool emit_int_arith(Expr *e, int op, Type *rt, FILE *out) {
      * __builtin_<op>_overflow computes in infinite precision and reports
      * whether the result fits _r's type (rt), which is correct for any `int`
      * width, 16-bit included. */
-    if (g_overflow_checked) {
+    if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
         const char *bi = op == TOK_PLUS ? "add" : op == TOK_MINUS ? "sub" : "mul";
         int tid = g_temp_counter++;
         fprintf(out, "({ ");
@@ -2825,10 +2800,8 @@ static void emit_shift(Expr *e, int op, Type *rt, FILE *out) {
  *  unsigned divide under `unguarded` needs neither: returns false, and the
  *  caller emits the bare operator. */
 static bool emit_int_divmod(Expr *e, int op, Type *rt, FILE *out) {
-    bool is_signed = type_is_signed(rt);
-    bool need_zero  = !g_guards_suppressed;   /* guard axis owns divisor==0 */
-    bool need_minus1 = is_signed;             /* signed min/-1: always handled */
-    if (need_zero || need_minus1) {
+    bool need_zero, need_minus1;
+    if (int_divmod_guards(e, &need_zero, &need_minus1)) {
         int tid = g_temp_counter++;
         const char *opc = op == TOK_SLASH ? "/" : "%";
         /* dividend then divisor, left-to-right, each once. */
@@ -2856,7 +2829,7 @@ static bool emit_int_divmod(Expr *e, int op, Type *rt, FILE *out) {
             fprintf(out, ")0 : (");
             emit_type(rt, out);
             fprintf(out, ")(_nv%d %% _dv%d); })", tid, tid);
-        } else if (g_overflow_checked) {
+        } else if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
             /* checked signed divide: min / -1 overflows, so abort */
             fprintf(out, "if (_dv%d == -1 && _nv%d == %s) fc_overflow(",
                     tid, tid, type_property_c(rt, "min"));
@@ -2882,7 +2855,7 @@ static void emit_binary_op(Expr *e, FILE *out) {
     /* Structural equality on complex types */
     if ((e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ) && e->binary.left->type) {
         Type *cmp_type = subst_resolve(e->binary.left->type);
-        if (type_needs_eq_func(cmp_type)) {
+        if (needs_eq_func(cmp_type)) {
             if (e->binary.op == TOK_BANGEQ) fprintf(out, "(!"); else fprintf(out, "(");
             emit_eq_func_name(cmp_type, out);
             fprintf(out, "(");
@@ -2975,17 +2948,10 @@ static void emit_binary(Expr *e, FILE *out) {
         unwidened[0] = widen_for_instance(&e->binary.left, common);
         unwidened[1] = widen_for_instance(&e->binary.right, common);
     }
-    /* Force left-to-right operand evaluation when an operand has side
-     * effects (C leaves binary-operand order unspecified).  /, %, &&, ||
-     * are excluded: division self-sequences its temps below, and &&/|| are
-     * already left-to-right and must not have their right operand hoisted
-     * (it is conditionally evaluated). */
+    /* Force left-to-right operand evaluation (binary_needs_seq). */
     Expr **_bslots[2] = { &e->binary.left, &e->binary.right };
     Expr _bscratch[2]; Expr *_bsaved[2];
-    bool _bseq = e->binary.op != TOK_SLASH && e->binary.op != TOK_PERCENT &&
-                 e->binary.op != TOK_AMPAMP && e->binary.op != TOK_PIPEPIPE &&
-                 !g_const_context &&
-                 (seq_needed(_bslots, 2) || binary_is_self_compare(e));
+    bool _bseq = binary_needs_seq(e);
     if (_bseq) { fprintf(out, "({ "); seq_hoist(_bslots, 2, _bscratch, _bsaved, out); }
     emit_binary_op(e, out);
     if (_bseq) { fprintf(out, "; })"); seq_restore(_bslots, 2, _bsaved); }
@@ -3725,8 +3691,6 @@ static void emit_call(Expr *e, FILE *out) {
         if (unwidened[i]) e->call.args[i] = unwidened[i];
 }
 
-/* A field access: a type property, extern constant, module member, variant
- * constructor, or a value field (a fixed-array field is viewed as a slice). */
 /* A fixed-array field read as the slice that views it (`s.data` is a
  * `T[]` over the field's storage). `access` is "." for a struct value and
  * "->" through a pointer. The emitted slice type drops const; FC enforces
@@ -3745,6 +3709,8 @@ static void emit_fixed_array_view(Expr *e, const char *access, FILE *out) {
             (long long)fixarr_size(fat));
 }
 
+/* A field access: a type property, extern constant, module member, variant
+ * constructor, or a value field (a fixed-array field is viewed as a slice). */
 static void emit_field(Expr *e, FILE *out) {
     /* Module member access: emit mangled name directly */
     if (e->field.codegen_name) {
@@ -3871,8 +3837,7 @@ static void emit_unary_postfix(Expr *e, FILE *out) {
             /* Under --backtraces the error-name table is present, so print
              * the qualified name alongside the code; lean builds print
              * the number only. */
-            bool named = g_backtraces && g_errname_emitted &&
-                         error_code_count() > 0;
+            bool named = g_backtraces && error_code_count() > 0;
             if (named)
                 fprintf(out, "const fc_errname *_nm%d = fc_error_lookup(_uw%d.err); ",
                         tid, tid);
@@ -3968,10 +3933,9 @@ static void emit_cast(Expr *e, FILE *out) {
             const char *bk = e->cast.codegen_backing_name;
             fprintf(out, "({ fc_str _sc%d = ", tid);
             emit_expr(e->cast.operand, out);
-            if (g_overflow_checked) {
+            if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
                 /* `checked`: the clip is data loss on the overflow axis, so
-                 * abort instead of truncating. pass2's
-                 * expr_node_is_governed_overflow (cstr[N] arm) must agree. */
+                 * abort instead of truncating. */
                 fprintf(out, "; if (_sc%d.len > %d) fc_trunc(", tid, n - 1);
                 emit_loc_args(e->loc, out);
                 fprintf(out, ", \"(cstr[%d]) cast\", (long long)_sc%d.len, %d)", n, tid, n - 1);
@@ -4008,23 +3972,18 @@ static void emit_cast(Expr *e, FILE *out) {
             fprintf(out, "; (fc_str){ .ptr = %s_cp%d, .len = (int64_t)strlen((const char*)_cp%d) }; })",
                     src_const ? "(uint8_t*)" : "", tid, tid);
         }
-    } else if (!g_guards_suppressed && e->cast.operand->type &&
-               type_is_float(e->cast.operand->type) &&
+    } else if (!(g_guards_suppressed && facts_guard_governs(e, subst_resolve)) &&
+               e->cast.operand->type && type_is_float(e->cast.operand->type) &&
                float_to_int_info(e->cast.target->kind, &f2i_info)) {
         /* float -> int: saturating conversion (NaN->0, clamp to range, else
          * truncate toward zero). A raw C cast here is UB out of range.
          * An enclosing `unguarded` opts out and falls through to the bare
          * cast below. */
         float_to_int_emit(&f2i_info, e->cast.operand, out);
-    } else if (g_overflow_checked && e->cast.operand->type &&
-               type_is_integer(type_enum_underlying(e->cast.operand->type)) &&
-               type_is_integer(e->cast.target) &&
-               !type_can_widen(type_enum_underlying(e->cast.operand->type),
-                               e->cast.target)) {
+    } else if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
         /* checked: an integer narrowing cast that can lose information aborts
-         * out of range, instead of the bare (truncating) C cast below.
-         * An enum operand narrows as its repr does, which is also how
-         * pass2's expr_node_is_governed_overflow judges it. */
+         * out of range, instead of the bare (truncating) C cast below. An
+         * enum operand narrows as its repr does. */
         emit_checked_int_narrow(type_enum_underlying(e->cast.operand->type),
                                 e->cast.target,
                                 e->cast.operand, e->loc, out);
@@ -4320,8 +4279,7 @@ static void emit_unary_prefix(Expr *e, FILE *out) {
     Type *rt = subst_resolve(e->type);
     /* Signed negation. `checked`: only INT_MIN overflows (-INT_MIN is
      * unrepresentable), detected with __builtin_sub_overflow(0, x). */
-    if (e->unary_prefix.op == TOK_MINUS && rt && type_is_signed(rt) &&
-        g_overflow_checked) {
+    if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
         int tid = g_temp_counter++;
         fprintf(out, "({ ");
         emit_type(rt, out);
@@ -4359,26 +4317,10 @@ static void emit_unary_prefix(Expr *e, FILE *out) {
     /* &f on a top-level function or non-capturing lambda: emit the raw
      * C-boundary trampoline instead of the address of a fat-pointer literal.
      * This is the C-interop escape hatch documented in the spec. */
-    if (e->unary_prefix.op == TOK_AMP) {
-        Expr *operand = e->unary_prefix.operand;
-        if (operand->kind == EXPR_IDENT && !operand->ident.is_local &&
-            operand->type && operand->type->kind == TYPE_FUNC) {
-            const char *name = operand->ident.codegen_name
-                ? operand->ident.codegen_name : operand->ident.name;
-            fprintf(out, "fc_ctramp_%s", name);
-            return;
-        }
-        if (operand->kind == EXPR_FIELD && operand->field.codegen_name &&
-            operand->type && operand->type->kind == TYPE_FUNC) {
-            fprintf(out, "fc_ctramp_%s", operand->field.codegen_name);
-            return;
-        }
-        if (operand->kind == EXPR_FUNC && operand->func.capture_count == 0 &&
-            operand->func.lifted_name && operand->type &&
-            operand->type->kind == TYPE_FUNC) {
-            fprintf(out, "fc_ctramp_%s", lambda_c_name(operand));
-            return;
-        }
+    if (e->unary_prefix.op == TOK_AMP &&
+        fn_value_is_context_free(e->unary_prefix.operand)) {
+        fprintf(out, "fc_ctramp_%s", trampoline_target(e->unary_prefix.operand));
+        return;
     }
     const char *op_str;
     switch (e->unary_prefix.op) {
@@ -4627,7 +4569,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_expr(e->index.object, out);
             fprintf(out, "; int64_t _i%d = (int64_t)", tid);
             emit_expr(e->index.index, out);
-            if (g_guards_suppressed) {
+            if (g_guards_suppressed && facts_guard_governs(e, subst_resolve)) {
                 /* unguarded: bare access, no bounds check (UB out of range). */
                 fprintf(out, "; _s%d.ptr + _i%d; }))", tid, tid);
             } else {
@@ -4685,7 +4627,7 @@ static void emit_expr(Expr *e, FILE *out) {
         } else {
             fprintf(out, "_s%d.len", tid);
         }
-        if (g_guards_suppressed) {
+        if (g_guards_suppressed && facts_guard_governs(e, subst_resolve)) {
             /* unguarded: no bounds check (UB on reversed/past-end range). */
             fprintf(out, "; ");
         } else {
@@ -5232,16 +5174,12 @@ static bool is_func_decl(Decl *d) {
 }
 
 static bool is_generic_decl(Decl *d) {
-    if (d->kind == DECL_STRUCT) return d->struc.is_generic;
-    if (d->kind == DECL_UNION) return d->unio.is_generic;
-    if (d->kind == DECL_LET && d->let.init && d->let.init->kind == EXPR_FUNC) {
-        /* Check if any param contains type vars */
-        Expr *fn = d->let.init;
-        if (fn->func.explicit_type_var_count > 0) return true;
-        for (int i = 0; i < fn->func.param_count; i++)
-            if (type_contains_type_var(fn->func.params[i].type)) return true;
+    switch (d->kind) {
+    case DECL_STRUCT: return d->struc.is_generic;
+    case DECL_UNION:  return d->unio.is_generic;
+    case DECL_LET:    return d->let.is_generic;
+    default:          return false;
     }
-    return false;
 }
 
 /* The program entry point: a file-scope `let main`. A module member spelled
@@ -5479,9 +5417,16 @@ static bool type_ident_eq(Type *a, Type *b) {
             if (!type_ident_eq(a->func.param_types[i], b->func.param_types[i])) return false;
         return type_ident_eq(a->func.return_type, b->func.return_type);
     }
-    default:
-        return type_eq_ignore_const(a, b);
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_STRUCT: case TYPE_UNION: case TYPE_ENUM: case TYPE_STUB:
+    case TYPE_TYPE_VAR: case TYPE_CONST_INT: case TYPE_CONST_EXPR:
+    case TYPE_ERROR: case TYPE_NEVER: case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        /* No const qualifier reaches these idents: named types compare
+         * nominally, the rest by kind or value. */
+        break;
     }
+    return type_eq_ignore_const(a, b);
 }
 
 static bool typeset_contains(TypeSet *ts, Type *t) {
@@ -5520,13 +5465,13 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
         collect_types_in_type(t->slice.elem, slices, options, fns);
         typeset_add(slices, t);
     } else if (t->kind == TYPE_OPTION) {
-        /* Canonicalize a stub inner (box<int32>?) to its monomorphized struct so
+        /* Canonicalize a stub inner (box<i32>?) to its monomorphized struct so
          * the stored option's inner carries the mangled name. Two things depend
          * on this: (1) the def-ordering interleave matches the option to its inner
          * def by name, and (2) an option collected from a concrete field type
          * (inner = base-name stub) dedupes against the same option collected from
          * a some()/value expression (inner = resolved struct); otherwise both
-         * emit `fc_option_box__5_int32`, a duplicate typedef. */
+         * emit `fc_option_fc__box__3_i32`, a duplicate typedef. */
         Type *inner = t->option.inner;
         if (inner && inner->kind == TYPE_STUB) {
             Type *resolved = resolve_struct_stub(inner);
@@ -5537,10 +5482,9 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
         }
         /* Recurse into the inner type first so dependencies are emitted before this type */
         collect_types_in_type(inner, slices, options, fns);
-        /* Only non-pointer options need typedefs */
-        if (!inner || inner->kind != TYPE_POINTER) {
+        /* A null-sentinel option is a plain pointer, with no typedef */
+        if (!is_null_sentinel(t))
             typeset_add(options, t);
-        }
     } else if (t->kind == TYPE_RESULT) {
         /* Same stub canonicalization + inner-first recursion as options; every
          * result needs a typedef (no pointer-sentinel exemption). */
@@ -5602,8 +5546,7 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
  * TYPE_STUB with type arguments), whether or not monomorphization has already
  * renamed it in place (see Type.stub.base_name). */
 static const char *stub_instance_name(Type *t) {
-    return mangle_generic_name(g_intern,
-        t->stub.base_name ? t->stub.base_name : t->stub.name,
+    return mangle_generic_name(g_intern, instance_base_name(t),
         t->stub.type_args, t->stub.type_arg_count);
 }
 
@@ -5611,7 +5554,7 @@ static const char *stub_instance_name(Type *t) {
 static Type *resolve_struct_stub(Type *t) {
     if (!g_symtab) return t;
     if (t->kind == TYPE_STUB) {
-        /* A concrete generic instance (e.g. box<int32>) used as a by-value field
+        /* A concrete generic instance (e.g. box<i32>) used as a by-value field
          * resolves to its monomorphized instance, not the generic template (the
          * template is never emitted as a complete type). */
         if (t->stub.type_arg_count > 0 && !type_contains_type_var(t)) {
@@ -5654,7 +5597,7 @@ static void collect_eq_types(Type *t, TypeSet *eqs) {
         collect_eq_types(t->fixed_array.elem, eqs);
         return;
     }
-    if (!type_needs_eq_func(t)) return;
+    if (!needs_eq_func(t)) return;
     t = resolve_struct_stub(t);
     /* Strip const for eq function collection: constness doesn't affect equality */
     if (t->is_const) {
@@ -5960,38 +5903,14 @@ static void collect_trampolines_expr(Expr *e, void *set) {
         for (int i = 0; i < e->call.arg_count; i++) {
             Type *pt = (call_ft && call_ft->kind == TYPE_FUNC && i < call_ft->func.param_count)
                 ? call_ft->func.param_types[i] : NULL;
-            if (!pt || pt->kind != TYPE_FUNC) continue;
             Expr *arg = e->call.args[i];
-            if (arg->kind == EXPR_IDENT && !arg->ident.is_local && arg->type &&
-                arg->type->kind == TYPE_FUNC) {
-                /* Top-level function passed at extern boundary */
-                const char *fname = arg->ident.codegen_name
-                    ? arg->ident.codegen_name : arg->ident.name;
-                trampolineset_add(ts, fname, arg->type);
-            } else if (arg->kind == EXPR_FUNC && arg->func.capture_count == 0 &&
-                       arg->func.lifted_name && arg->type &&
-                       arg->type->kind == TYPE_FUNC) {
-                /* Non-capturing lambda passed at extern boundary */
-                trampolineset_add(ts, lambda_c_name(arg), arg->type);
-            }
+            if (pt && pt->kind == TYPE_FUNC && fn_value_is_context_free(arg))
+                trampolineset_add(ts, trampoline_target(arg), arg->type);
         }
     } else if (e->kind == EXPR_UNARY_PREFIX && e->unary_prefix.op == TOK_AMP) {
-        /* &f on a top-level function or non-capturing lambda yields a raw C
-         * function pointer. */
         Expr *operand = e->unary_prefix.operand;
-        if (operand->kind == EXPR_IDENT && !operand->ident.is_local &&
-            operand->type && operand->type->kind == TYPE_FUNC) {
-            const char *name = operand->ident.codegen_name
-                ? operand->ident.codegen_name : operand->ident.name;
-            trampolineset_add(ts, name, operand->type);
-        } else if (operand->kind == EXPR_FIELD && operand->field.codegen_name &&
-                   operand->type && operand->type->kind == TYPE_FUNC) {
-            trampolineset_add(ts, operand->field.codegen_name, operand->type);
-        } else if (operand->kind == EXPR_FUNC && operand->func.capture_count == 0 &&
-                   operand->func.lifted_name && operand->type &&
-                   operand->type->kind == TYPE_FUNC) {
-            trampolineset_add(ts, lambda_c_name(operand), operand->type);
-        }
+        if (fn_value_is_context_free(operand))
+            trampolineset_add(ts, trampoline_target(operand), operand->type);
     }
     expr_for_each_child(e, collect_trampolines_expr, set);
 }
@@ -6031,7 +5950,7 @@ static void emit_eq_forward(Type *t, FILE *out) {
    a_expr/b_expr are "a"/"b" (or "a.field"/"b.field"). */
 static void emit_value_eq(Type *t, const char *a_expr, const char *b_expr, FILE *out) {
     if (t->kind == TYPE_STUB) t = resolve_struct_stub(t);
-    if (type_needs_eq_func(t)) {
+    if (needs_eq_func(t)) {
         emit_eq_func_name(t, out);
         fprintf(out, "(%s, %s)", a_expr, b_expr);
     } else {
@@ -6112,7 +6031,7 @@ static void emit_eq_func(Type *t, FILE *out) {
                     const char *fname = c_safe_ident(g_intern, t->struc.fields[i].name);
                     if (ft->kind == TYPE_FIXED_ARRAY) {
                         Type *elem = ft->fixed_array.elem;
-                        if (!type_needs_eq_func(elem) && !type_is_float(elem)) {
+                        if (!needs_eq_func(elem) && !type_is_float(elem)) {
                             fprintf(out, "memcmp(a.%s, b.%s, sizeof(a.%s)) == 0",
                                     fname, fname, fname);
                         } else {
@@ -6120,7 +6039,7 @@ static void emit_eq_func(Type *t, FILE *out) {
                             fprintf(out, "({ bool _eq = true; "
                                     "for (int _k = 0; _k < %lld; _k++) if (!",
                                     (long long)fixarr_size(ft));
-                            if (type_needs_eq_func(elem)) {
+                            if (needs_eq_func(elem)) {
                                 emit_eq_func_name(elem, out);
                                 fprintf(out, "(a.%s[_k], b.%s[_k])", fname, fname);
                             } else {
@@ -6175,14 +6094,14 @@ static void emit_eq_func(Type *t, FILE *out) {
         fprintf(out, "    if (a.len != b.len) return false;\n");
         fprintf(out, "    if (a.len == 0) return true;\n");
         /* Use memcmp for non-float primitives that don't need eq funcs */
-        if (!type_needs_eq_func(elem) && !type_is_float(elem)) {
+        if (!needs_eq_func(elem) && !type_is_float(elem)) {
             fprintf(out, "    return memcmp(a.ptr, b.ptr, fc_to_size(a.len) * sizeof(");
             emit_type(elem, out);
             fprintf(out, ")) == 0;\n");
         } else {
             fprintf(out, "    for (fc_len_t _i = 0; _i < a.len; _i++)\n");
             fprintf(out, "        if (!");
-            if (type_needs_eq_func(elem)) {
+            if (needs_eq_func(elem)) {
                 emit_eq_func_name(elem, out);
                 fprintf(out, "(a.ptr[_i], b.ptr[_i])");
             } else {
@@ -6331,48 +6250,22 @@ static void flatten_decls(Decl **decls, int decl_count, Decl ***out, int *count,
     }
 }
 
-/* Find a struct/union name referenced by value in a type (not through
- * pointer/slice/func). Like monomorph.c's find_by_value_dep, but for
- * decl-level types (which may still contain stubs), and it also looks
- * through options. */
+/* The C name of the struct/union a type holds by value (type_byval_aggregate).
+ * Works on decl-level types, which may still contain stubs; a concrete
+ * generic instance names the instance. */
 static const char *find_by_value_dep_name(Type *type) {
-    if (!type) return NULL;
-    switch (type->kind) {
-    case TYPE_STRUCT: return type->struc.name;
-    case TYPE_UNION:  return type->unio.name;
-    case TYPE_STUB:
+    Type *a = type_byval_aggregate(type);
+    if (!a) return NULL;
+    switch (a->kind) {
+    case TYPE_STRUCT: return a->struc.name;
+    case TYPE_UNION:  return a->unio.name;
+    default:
         /* A concrete generic-instance field depends on its monomorphized
          * instance, so it is emitted after that instance. */
-        if (type->stub.type_arg_count > 0 && !type_contains_type_var(type))
-            return stub_instance_name(type);
-        return type->stub.name;
-    case TYPE_FIXED_ARRAY: return find_by_value_dep_name(type->fixed_array.elem);
-    case TYPE_OPTION:
-        /* A by-value option-of-struct/union/stub embeds its inner aggregate, so
-         * the enclosing def must be ordered after the inner's def (the option
-         * body, fc_option_<inner>, is emitted in the interleave right after
-         * the inner def). Option-of-pointer/scalar/fn carries no by-value
-         * aggregate dependency (inner recurses to NULL). */
-        return find_by_value_dep_name(type->option.inner);
-    case TYPE_RESULT:
-        /* A result always embeds its payload by value: same interleave rule */
-        return find_by_value_dep_name(type->result.inner);
-    CASE_TYPE_PRIMITIVES:
-    case TYPE_POINTER:
-    case TYPE_SLICE:
-    case TYPE_FUNC:
-    case TYPE_ENUM:
-    case TYPE_ANY_PTR:
-    case TYPE_TYPE_VAR:
-    case TYPE_CONST_INT:
-    case TYPE_CONST_EXPR:
-    case TYPE_ERROR:
-    case TYPE_NEVER:
-    case TYPE_UNRESOLVED:
-    case TYPE_COUNT:
-        break;
+        if (a->stub.type_arg_count > 0 && !type_contains_type_var(a))
+            return stub_instance_name(a);
+        return a->stub.name;
     }
-    return NULL;
 }
 
 enum { DECL_TOPO_UNVISITED = 0, DECL_TOPO_VISITING = 1, DECL_TOPO_DONE = 2 };
@@ -6484,9 +6377,10 @@ static void collect_defines(Decl *d, CDefine **defs, int *count, int *cap) {
 static bool g_needs_stdio;
 static bool g_needs_math;
 static bool g_needs_float;
-static bool g_needs_errno;   /* an errno-protocol extern call is reachable */
-/* g_backtraces / g_uses_error_name / g_errname_emitted are declared at the
- * top of the file because the result-unwrap emitter reads them. */
+static bool g_needs_errno;
+/* Set by codegen_emit from the emitted body (scan_body_needs) before the
+ * preamble and runtime support are written. g_backtraces and
+ * g_uses_error_name are declared at the top of the file. */
 
 /* Symbol map populated during codegen when g_backtraces is set; emitted as
  * _fc_symtab[] in the preamble so fc_dump_backtrace() can render FC-level names. */
@@ -6536,178 +6430,148 @@ static const char *fmt_mono_display(Arena *arena, const char *template_name,
     return arena_sprintf(arena, "%s>", disp);
 }
 
-static void detect_features_expr(Expr *e);
+/* The runtime failure helpers: each prints a diagnostic to stderr and aborts,
+ * so they need <stdio.h>. Cold and noreturn so the hot path stays clean: the C
+ * compiler can schedule them out of line, keep no caller state live across the
+ * call, and vectorize or reorder loads around the checked accesses. Static and
+ * unused-attributed, so a program that calls none of them pays nothing. The
+ * table is the one list of them: emit_runtime_support writes their text and
+ * registers them as skipped frames for --backtraces, and scan_body_needs
+ * recognizes calls to them. */
+static const struct { const char *name; const char *text; } STDIO_HELPERS[] = {
+    { "fc_oob",
+        "__attribute__((cold, noreturn, unused))\n"
+        "static void fc_oob(const char *file, int line, long long idx, unsigned long long len) {\n"
+        "    fprintf(stderr, \"%s:%d: slice index out of range: index=%lld len=%llu\\n\",\n"
+        "            file, line, idx, len);\n"
+        "    FC_ABORT();\n"
+        "}\n" },
+    { "fc_oob_u",
+        "__attribute__((cold, noreturn, unused))\n"
+        "static void fc_oob_u(const char *file, int line, unsigned long long idx, unsigned long long len) {\n"
+        "    fprintf(stderr, \"%s:%d: slice index out of range: index=%llu len=%llu\\n\",\n"
+        "            file, line, idx, len);\n"
+        "    FC_ABORT();\n"
+        "}\n" },
+    { "fc_oob_sub",
+        "__attribute__((cold, noreturn, unused))\n"
+        "static void fc_oob_sub(const char *file, int line, long long lo, long long hi, long long len) {\n"
+        "    fprintf(stderr, \"%s:%d: subslice out of range: lo=%lld hi=%lld len=%lld\\n\",\n"
+        "            file, line, lo, hi, len);\n"
+        "    FC_ABORT();\n"
+        "}\n" },
+    { "fc_neg_len",
+        "__attribute__((cold, noreturn, unused))\n"
+        "static void fc_neg_len(const char *file, int line, long long len) {\n"
+        "    fprintf(stderr, \"%s:%d: slice literal length is negative: len=%lld\\n\",\n"
+        "            file, line, len);\n"
+        "    FC_ABORT();\n"
+        "}\n" },
+    { "fc_len_cap",
+        "__attribute__((cold, noreturn, unused))\n"
+        "static void fc_len_cap(const char *file, int line, long long len) {\n"
+        "    fprintf(stderr, \"%s:%d: slice length %lld exceeds length capacity %lld\\n\",\n"
+        "            file, line, len, (long long)FC_LEN_MAX);\n"
+        "    FC_ABORT();\n"
+        "}\n" },
+    { "fc_chk_len",
+        "__attribute__((unused))\n"
+        "static inline fc_len_t fc_chk_len(const char *file, int line, int64_t n) {\n"
+        "    if (__builtin_expect(n < 0, 0)) fc_neg_len(file, line, (long long)n);\n"
+        "    if (__builtin_expect(n > FC_LEN_MAX, 0)) fc_len_cap(file, line, (long long)n);\n"
+        "    return (fc_len_t)n;\n"
+        "}\n" },
+    { "fc_null_some",
+        "__attribute__((cold, noreturn, unused))\n"
+        "static void fc_null_some(const char *file, int line) {\n"
+        "    fprintf(stderr, \"%s:%d: some() of a null pointer (pointer options use null as the none sentinel)\\n\", file, line);\n"
+        "    FC_ABORT();\n"
+        "}\n" },
+    { "fc_zero_err",
+        "__attribute__((cold, noreturn, unused))\n"
+        "static void fc_zero_err(const char *file, int line) {\n"
+        "    fprintf(stderr, \"%s:%d: err() with code 0 (0 is the ok tag; error codes must be non-zero)\\n\", file, line);\n"
+        "    FC_ABORT();\n"
+        "}\n" },
+    { "fc_overflow",
+        "__attribute__((cold, noreturn, unused))\n"
+        "static void fc_overflow(const char *file, int line, const char *what) {\n"
+        "    fprintf(stderr, \"%s:%d: integer overflow in %s\\n\", file, line, what);\n"
+        "    FC_ABORT();\n"
+        "}\n" },
+    { "fc_trunc",
+        "__attribute__((cold, noreturn, unused))\n"
+        "static void fc_trunc(const char *file, int line, const char *what, long long len, long long max) {\n"
+        "    fprintf(stderr, \"%s:%d: string truncation in %s: len=%lld max=%lld\\n\",\n"
+        "            file, line, what, len, max);\n"
+        "    FC_ABORT();\n"
+        "}\n" },
+};
 
-static void detect_features_child(Expr *child, void *ctx) {
-    (void)ctx;
-    detect_features_expr(child);
+/* The needs of the emitted body, read off its text: every identifier outside
+ * string and character literals and comments, and not a member name after `.`
+ * or `->`. <stdio.h> for the stdio names the compiler writes and any runtime
+ * failure helper (STDIO_HELPERS), <math.h> for NAN and INFINITY, <float.h> for the
+ * FLT_ and DBL_ limits, <errno.h> for errno, and the error-name table for
+ * fc_error_lookup. Reading what was written keeps the preamble exact with no
+ * emitter having to report what it wrote. A name that matches by coincidence
+ * (an extern of the same name) only adds a header. */
+typedef struct {
+    bool stdio, math, flt, err_no, error_names;
+} BodyNeeds;
+
+static bool ident_is(const char *s, int n, const char *word) {
+    return (int)strlen(word) == n && memcmp(s, word, (size_t)n) == 0;
 }
 
-/* Record which headers and runtime helpers the emitted C needs: <stdio.h> for
- * every runtime abort message, <math.h>/<float.h> for float properties, and
- * <errno.h> for errno-protocol externs. */
-static void detect_features_expr(Expr *e) {
-    if (!e) return;
-    if (g_needs_stdio && g_needs_math && g_needs_float && g_needs_errno)
-        return; /* all found */
-
-    switch (e->kind) {
-    case EXPR_STATIC_ASSERT:
-        return;   /* proven at compile time; emits nothing */
-    case EXPR_ARRAY_LIT:
-        /* The size is folded at compile time and never evaluated at run time. */
-        for (int i = 0; i < e->array_lit.elem_count; i++)
-            detect_features_expr(e->array_lit.elems[i]);
-        return;
-    case EXPR_INTERP_STRING:
-        g_needs_stdio = true;
-        break;
-    case EXPR_FIELD:
-    case EXPR_DEREF_FIELD:
-        /* A float type property is spelled with a float.h or math.h macro. A
-         * type variable's could be a float's, so it counts as one. */
-        if (e->field.is_type_property || e->field.object->kind == EXPR_TYPE_VAR_REF) {
-            Type *owner = e->field.is_type_property && e->field.object->kind == EXPR_IDENT
-                ? type_from_name(e->field.object->ident.name,
-                                 (int)strlen(e->field.object->ident.name))
-                : type_float64();
-            PropHeader h = owner ? type_property_header(owner, e->field.name) : PROP_HEADER_NONE;
-            if (h == PROP_HEADER_MATH) g_needs_math = true;
-            if (h == PROP_HEADER_FLOAT) g_needs_float = true;
-        }
-        break;
-    case EXPR_BINARY:
-        /* Integer div/mod emits a by-zero abort with stderr message */
-        if ((e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) &&
-            e->type && type_is_integer(e->type))
-            g_needs_stdio = true;
-        break;
-    case EXPR_UNARY_POSTFIX:
-        if (e->unary_postfix.op == TOK_BANG)
-            g_needs_stdio = true;
-        break;
-    case EXPR_CALL:
-        /* A protocol extern call (from <protocol>) may need <errno.h> and,
-         * for the out-of-band code sources (errno / GetLastError / WSA),
-         * emits the err(T,0) guard (fc_zero_err -> stderr). */
-        if (e->call.resolved_callee &&
-            e->call.resolved_callee->kind == DECL_EXTERN &&
-            e->call.resolved_callee->decl) {
-            switch (e->call.resolved_callee->decl->ext.protocol) {
-            case EXT_PROTO_ERRNO_NEG1:
-            case EXT_PROTO_ERRNO_NULL:
-                g_needs_errno = true;
-                g_needs_stdio = true;
-                break;
-            case EXT_PROTO_LASTERR_0:
-            case EXT_PROTO_LASTERR_NULL:
-            case EXT_PROTO_LASTERR_NEG1:
-            case EXT_PROTO_WSA_NEG1:
-                g_needs_stdio = true;
-                break;
-            default: break;
-            }
-        }
-        break;
-    case EXPR_GUARD:
-        /* A `checked` body emits fc_overflow (stderr) on overflow. pass2 rejects a
-         * checked marker with no governed op, so any that survives will emit one. */
-        if (e->guard.is_overflow_axis && e->guard.enable)
-            g_needs_stdio = true;
-        break;
-    case EXPR_ASSIGN:
-        /* Assignment to fixed-array field emits an overflow abort with stderr */
-        if ((e->assign.target->kind == EXPR_FIELD ||
-             e->assign.target->kind == EXPR_DEREF_FIELD) &&
-            e->assign.target->field.fixed_array_type)
-            g_needs_stdio = true;
-        break;
-    case EXPR_SOME: {
-        /* A null-sentinel some(p) over a not-provably-non-null pointer emits a
-         * null-pointer abort via stderr (fc_null_some). A type variable may
-         * monomorphize to a pointer, so treat it as possibly guarded too; at
-         * worst this pulls in stdio.h for a program that does not need it. */
-        Type *inner = e->type && e->type->kind == TYPE_OPTION
-                          ? e->type->option.inner : NULL;
-        if (inner && (inner->kind == TYPE_POINTER || inner->kind == TYPE_ANY_PTR ||
-                      inner->kind == TYPE_TYPE_VAR) &&
-            !ptr_value_provably_nonnull(e->some_expr.value))
-            g_needs_stdio = true;
-        break;
-    }
-    case EXPR_ERR:
-        /* A not-provably-nonzero code emits the zero-code abort (fc_zero_err) */
-        if (!int_value_provably_nonzero(e->err_expr.code))
-            g_needs_stdio = true;
-        break;
-    case EXPR_ERROR_NAME:
-        g_uses_error_name = true;
-        break;
-    case EXPR_ASSERT:
-        g_needs_stdio = true;
-        break;
-    case EXPR_INDEX:
-        /* Slice indexing emits a bounds-check abort with stderr message */
-        if (e->index.object->type && e->index.object->type->kind == TYPE_SLICE)
-            g_needs_stdio = true;
-        break;
-    case EXPR_SLICE:
-        /* Subslice emits a bounds-check abort with stderr message */
-        g_needs_stdio = true;
-        break;
-    case EXPR_STRUCT_LIT:
-        /* Struct literal with fixed-array field emits an overflow abort with stderr */
-        if (e->type && e->type->kind == TYPE_STRUCT) {
-            for (int f = 0; f < e->type->struc.field_count; f++) {
-                if (e->type->struc.fields[f].type->kind == TYPE_FIXED_ARRAY) {
-                    g_needs_stdio = true;
-                    break;
-                }
-            }
-        }
-        break;
-    case EXPR_SLICE_LIT:
-        /* A runtime-len slice literal emits a negative-length abort via stderr
-         * (fc_neg_len). Provably non-negative lens skip the guard. */
-        if (!e->slice_lit.len_nonneg)
-            g_needs_stdio = true;
-        break;
-    case EXPR_IDENT:
-        if (e->ident.is_std_stream) g_needs_stdio = true;
-        break;
-    default:
-        break;
-    }
-    expr_for_each_child(e, detect_features_child, NULL);
+static void note_ident_need(BodyNeeds *needs, const char *s, int n) {
+    /* The stdio names the compiler itself writes: abort messages, the
+     * interpolation formatter and the three streams. An extern of the C
+     * library brings its own header (its module's `from` clause). */
+    static const char *const stdio_names[] = {
+        "stderr", "stdout", "stdin", "fprintf", "snprintf",
+    };
+    for (size_t i = 0; i < sizeof stdio_names / sizeof stdio_names[0]; i++)
+        if (ident_is(s, n, stdio_names[i])) { needs->stdio = true; return; }
+    for (size_t i = 0; i < sizeof STDIO_HELPERS / sizeof STDIO_HELPERS[0]; i++)
+        if (ident_is(s, n, STDIO_HELPERS[i].name)) { needs->stdio = true; return; }
+    if (ident_is(s, n, "NAN") || ident_is(s, n, "INFINITY")) needs->math = true;
+    else if (n > 4 && (memcmp(s, "FLT_", 4) == 0 || memcmp(s, "DBL_", 4) == 0)) needs->flt = true;
+    else if (ident_is(s, n, "errno")) needs->err_no = true;
+    else if (ident_is(s, n, "fc_error_lookup")) needs->error_names = true;
 }
 
-static void detect_features_decl(Decl *d) {
-    if (!d) return;
-    switch (d->kind) {
-    case DECL_LET: {
-        Expr *fn = d->let.init;
-        if (fn && fn->kind == EXPR_FUNC) {
-            for (int i = 0; i < fn->func.body_count; i++)
-                detect_features_expr(fn->func.body[i]);
-        } else if (fn) {
-            detect_features_expr(fn);
+static BodyNeeds scan_body_needs(const char *text, size_t len) {
+    BodyNeeds needs = {0};
+    size_t i = 0;
+    bool after_member = false;   /* the previous token was `.` or `->` */
+    while (i < len) {
+        char c = text[i];
+        if (c == '"' || c == '\'') {                      /* a literal */
+            for (i++; i < len && text[i] != c; i++)
+                if (text[i] == '\\') i++;
+            i++;
+            after_member = false;
+        } else if (c == '/' && i + 1 < len && text[i + 1] == '*') {
+            const char *end = strstr(text + i + 2, "*/");
+            i = end ? (size_t)(end - text) + 2 : len;
+        } else if (c == '/' && i + 1 < len && text[i + 1] == '/') {
+            while (i < len && text[i] != '\n') i++;
+        } else if (isalpha((unsigned char)c) || c == '_') {
+            size_t start = i;
+            while (i < len && (isalnum((unsigned char)text[i]) || text[i] == '_')) i++;
+            if (!after_member) note_ident_need(&needs, text + start, (int)(i - start));
+            after_member = false;
+        } else {
+            if (c == '.') after_member = true;
+            else if (c == '-' && i + 1 < len && text[i + 1] == '>') { after_member = true; i++; }
+            else if (!isspace((unsigned char)c)) after_member = false;
+            i++;
         }
-        break;
     }
-    case DECL_MODULE:
-        for (int i = 0; i < d->module.decl_count; i++)
-            detect_features_decl(d->module.decls[i]);
-        break;
-    case DECL_STRUCT:
-    case DECL_UNION:
-    case DECL_ENUM:
-    case DECL_IMPORT:
-    case DECL_EXTERN:
-    case DECL_NAMESPACE:
-    case DECL_ERROR:
-        break;
-    }
+    return needs;
 }
+
 
 
 static void collect_all_decls(Program *prog, Decl ***out_decls, int *out_count) {
@@ -6968,83 +6832,12 @@ static void emit_runtime_support(FILE *out) {
         fprintf(out, "#define FC_ABORT() abort()\n");
     }
 
-    /* Out-of-bounds failure helpers.  Cold+noreturn so the hot path stays
-     * clean: the compiler can schedule these out of line, skip keeping
-     * caller state live across the call, and is free to vectorize/reorder
-     * loads around checked accesses.  Static so unused copies get DCE'd. */
     if (g_needs_stdio) {
-        fprintf(out,
-            "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_oob(const char *file, int line, long long idx, unsigned long long len) {\n"
-            "    fprintf(stderr, \"%%s:%%d: slice index out of range: index=%%lld len=%%llu\\n\",\n"
-            "            file, line, idx, len);\n"
-            "    FC_ABORT();\n"
-            "}\n"
-            "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_oob_u(const char *file, int line, unsigned long long idx, unsigned long long len) {\n"
-            "    fprintf(stderr, \"%%s:%%d: slice index out of range: index=%%llu len=%%llu\\n\",\n"
-            "            file, line, idx, len);\n"
-            "    FC_ABORT();\n"
-            "}\n"
-            "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_oob_sub(const char *file, int line, long long lo, long long hi, long long len) {\n"
-            "    fprintf(stderr, \"%%s:%%d: subslice out of range: lo=%%lld hi=%%lld len=%%lld\\n\",\n"
-            "            file, line, lo, hi, len);\n"
-            "    FC_ABORT();\n"
-            "}\n"
-            "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_neg_len(const char *file, int line, long long len) {\n"
-            "    fprintf(stderr, \"%%s:%%d: slice literal length is negative: len=%%lld\\n\",\n"
-            "            file, line, len);\n"
-            "    FC_ABORT();\n"
-            "}\n"
-            "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_len_cap(const char *file, int line, long long len) {\n"
-            "    fprintf(stderr, \"%%s:%%d: slice length %%lld exceeds length capacity %%lld\\n\",\n"
-            "            file, line, len, (long long)FC_LEN_MAX);\n"
-            "    FC_ABORT();\n"
-            "}\n"
-            "__attribute__((unused))\n"
-            "static inline fc_len_t fc_chk_len(const char *file, int line, int64_t n) {\n"
-            "    if (__builtin_expect(n < 0, 0)) fc_neg_len(file, line, (long long)n);\n"
-            "    if (__builtin_expect(n > FC_LEN_MAX, 0)) fc_len_cap(file, line, (long long)n);\n"
-            "    return (fc_len_t)n;\n"
-            "}\n"
-            "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_null_some(const char *file, int line) {\n"
-            "    fprintf(stderr, \"%%s:%%d: some() of a null pointer "
-            "(pointer options use null as the none sentinel)\\n\", file, line);\n"
-            "    FC_ABORT();\n"
-            "}\n"
-            "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_zero_err(const char *file, int line) {\n"
-            "    fprintf(stderr, \"%%s:%%d: err() with code 0 "
-            "(0 is the ok tag; error codes must be non-zero)\\n\", file, line);\n"
-            "    FC_ABORT();\n"
-            "}\n"
-            "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_overflow(const char *file, int line, const char *what) {\n"
-            "    fprintf(stderr, \"%%s:%%d: integer overflow in %%s\\n\", file, line, what);\n"
-            "    FC_ABORT();\n"
-            "}\n"
-            "__attribute__((cold, noreturn, unused))\n"
-            "static void fc_trunc(const char *file, int line, const char *what, long long len, long long max) {\n"
-            "    fprintf(stderr, \"%%s:%%d: string truncation in %%s: len=%%lld max=%%lld\\n\",\n"
-            "            file, line, what, len, max);\n"
-            "    FC_ABORT();\n"
-            "}\n");
-        /* Register the helpers as skip-entries so their frames don't pollute
-         * the user-visible backtrace when a bounds check fires. */
-        symmap_add("fc_oob", NULL, "<runtime>", 0);
-        symmap_add("fc_oob_u", NULL, "<runtime>", 0);
-        symmap_add("fc_oob_sub", NULL, "<runtime>", 0);
-        symmap_add("fc_neg_len", NULL, "<runtime>", 0);
-        symmap_add("fc_len_cap", NULL, "<runtime>", 0);
-        symmap_add("fc_chk_len", NULL, "<runtime>", 0);
-        symmap_add("fc_null_some", NULL, "<runtime>", 0);
-        symmap_add("fc_zero_err", NULL, "<runtime>", 0);
-        symmap_add("fc_overflow", NULL, "<runtime>", 0);
-        symmap_add("fc_trunc", NULL, "<runtime>", 0);
+        for (size_t i = 0; i < sizeof STDIO_HELPERS / sizeof STDIO_HELPERS[0]; i++) {
+            fputs(STDIO_HELPERS[i].text, out);
+            /* A skipped frame in the backtrace when a check fires. */
+            symmap_add(STDIO_HELPERS[i].name, NULL, "<runtime>", 0);
+        }
     }
 
     /* Declared-error name table + O(1) lookup: backs error_name() and, under
@@ -7078,7 +6871,6 @@ static void emit_runtime_support(FILE *out) {
                 "__attribute__((unused))\n"
                 "static const fc_errname *fc_error_lookup(int32_t e) { (void)e; return 0; }\n");
         }
-        g_errname_emitted = true;
     }
 }
 
@@ -7701,8 +7493,13 @@ static void emit_backtrace_table(FILE *out) {
     fprintf(out, "#endif\n");
     fprintf(out, "typedef struct { void *fn_addr; const char *fc_name; const char *file; int line; } fc_sym_entry;\n");
     fprintf(out, "static fc_sym_entry _fc_symtab[] = {\n");
+    /* Runtime helpers (no FC name) first, then FC functions, each in the order
+     * registered. The table is sorted at startup, so the order is only the
+     * text's. */
+    for (int pass = 0; pass < 2; pass++)
     for (int i = 0; i < g_symmap_count; i++) {
         FcSymEntry *e = &g_symmap[i];
+        if ((e->fc_name == NULL) != (pass == 0)) continue;
         fprintf(out, "    { (void*)&%s, ", e->c_name);
         if (e->fc_name) {
             fprintf(out, "\"");
@@ -7795,30 +7592,12 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     int all_count;
     collect_all_decls(prog, &all_decls, &all_count);
 
-    /* Detect which feature-gated headers are needed. A narrow --len-repr
-     * forces stdio: slice-construction capacity guards (fc_chk_len /
-     * fc_len_cap) print a diagnostic before aborting, and they attach to
-     * paths spread across the emitter (raw-parts literals, cstr to str, argv,
-     * interpolation, runtime-sized alloca); gating each one separately would
-     * be easy to get wrong for no practical gain on the targets that use it. */
-    g_needs_stdio = g_len_repr < 64;
-    g_needs_math = false;
-    g_needs_float = false;
-    g_needs_errno = false;
-    g_uses_error_name = false;
-    g_errname_emitted = false;
-    for (int i = 0; i < all_count; i++)
-        detect_features_decl(all_decls[i]);
-    /* Also scan monomorphized template bodies */
-    for (int mi = 0; mi < mono->count; mi++) {
-        if (mono->entries[mi].decl_kind == DECL_LET && mono->entries[mi].template_decl)
-            detect_features_decl(mono->entries[mi].template_decl);
-    }
-
-    emit_preamble(out, defines, define_count, from_libs, from_lib_count);
-    free(from_libs);
-    free(defines);
-    emit_runtime_support(out);
+    /* The body (types, prototypes, globals, functions) is written first, into
+     * the output file itself, and read back: the preamble's headers and the
+     * runtime helpers are then chosen by what the body actually uses
+     * (scan_body_needs), and the file is rewritten from its start as preamble,
+     * runtime support, body. The rewrite is at least as long as the body, so
+     * it covers every byte written before. */
     emit_types(out, all_decls, all_count, mono);
     collect_file_globals(all_decls, all_count);
     emit_prototypes(out, all_decls, all_count, mono);
@@ -7826,6 +7605,26 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     collect_code(&code, all_decls, all_count, mono);
     emit_globals(out, all_decls, all_count);
     emit_functions(out, all_decls, all_count, mono, &code);
+
+    fflush(out);
+    long body_len = ftell(out);
+    char *body = xmalloc(body_len > 0 ? (size_t)body_len : 1);
+    rewind(out);
+    size_t got = body_len > 0 ? fread(body, 1, (size_t)body_len, out) : 0;
+    rewind(out);
+    BodyNeeds needs = scan_body_needs(body, got);
+    g_needs_stdio = needs.stdio;
+    g_needs_math = needs.math;
+    g_needs_float = needs.flt;
+    g_needs_errno = needs.err_no;
+    g_uses_error_name = needs.error_names;
+
+    emit_preamble(out, defines, define_count, from_libs, from_lib_count);
+    free(from_libs);
+    free(defines);
+    emit_runtime_support(out);
+    fwrite(body, 1, got, out);
+    free(body);
     if (g_backtraces) emit_backtrace_table(out);
 
     symmap_reset();

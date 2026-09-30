@@ -103,15 +103,14 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         SrcLoc loc = {0};
         if (tmpl) {
             loc = tmpl->loc;
-            /* DECL_LET keeps its source name; struct/union Decl names are mangled
-             * by pass1, so those fall back to the mangled name (rare path: the
-             * direct-self type case is already caught at the definition site). */
+            /* DECL_LET keeps its source name; pass1 mangles a struct or union
+             * Decl's name, so the source name is its last component. */
             if (tmpl->kind == DECL_LET && tmpl->let.name)
                 disp = tmpl->let.name;
             else if (tmpl->kind == DECL_STRUCT)
-                disp = tmpl->struc.name;
+                disp = mangled_source_name(tmpl->struc.name);
             else if (tmpl->kind == DECL_UNION)
-                disp = tmpl->unio.name;
+                disp = mangled_source_name(tmpl->unio.name);
         }
         if (tmpl_count >= MONO_MAX_PER_TEMPLATE)
             diag_error(loc,
@@ -447,6 +446,40 @@ static void discover_in_expr(Expr *e, void *ctx) {
     }
 }
 
+/* A generic struct or union reached as a type: when it is a concrete instance
+ * not yet registered, register the instances its arguments name (reachable only
+ * here: the field walk descends the definition, not the arguments), then its
+ * own, under the name every reference gives it (instance_base_name). Then walk
+ * its fields or payloads. A node straight from resolve_type (a sizeof, default
+ * or alloc operand) may carry no resolved_sym; the name lookup that finds its
+ * template records it on the node, so the name comes from the template's
+ * canonical name here too. */
+static void discover_aggregate(Type *type, MonoTable *t, Arena *a,
+                               InternTable *intern, SymbolTable *symtab) {
+    bool is_struct = type->kind == TYPE_STRUCT;
+    Type **args = is_struct ? type->struc.type_args : type->unio.type_args;
+    int nargs = is_struct ? type->struc.type_arg_count : type->unio.type_arg_count;
+    const char *name = is_struct ? type->struc.name : type->unio.name;
+    if (nargs > 0 && !type_contains_type_var(type) && !mono_find(t, name)) {
+        Symbol **rsym = is_struct ? &type->struc.resolved_sym : &type->unio.resolved_sym;
+        if (!*rsym && symtab)
+            *rsym = symtab_lookup_kind(symtab, name, is_struct ? DECL_STRUCT : DECL_UNION);
+        for (int i = 0; i < nargs; i++)
+            discover_nested_types(args[i], t, a, intern, symtab);
+        const char *base = instance_base_name(type);
+        Symbol *sym = *rsym;
+        if (!mono_find(t, mangle_generic_name(intern, base, args, nargs)) &&
+            sym && sym->is_generic && sym->decl && sym->type)
+            mono_instantiate(t, a, intern, sym, base, args, nargs);
+    }
+    if (is_struct)
+        for (int i = 0; i < type->struc.field_count; i++)
+            discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
+    else
+        for (int i = 0; i < type->unio.variant_count; i++)
+            discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
+}
+
 /* Recursively walk a type tree and register any concrete generic struct/union
  * references that don't have a MonoInstance yet. This handles structs referenced
  * only as field types (never directly constructed via struct literals). */
@@ -466,8 +499,9 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
         return;
     case TYPE_STRUCT:
         /* Tuple appearing only as a field type of another mono entry: register it
-         * so its typedef/eq/default emit. type_args is empty, so it bypasses the
-         * generic-struct path below. Recurse fields first to name nested elements. */
+         * so its typedef/eq/default emit. type_args is empty, so it takes no
+         * part in discover_aggregate. Recurse fields first to name nested
+         * elements. */
         if (type->struc.is_tuple) {
             for (int i = 0; i < type->struc.field_count; i++)
                 discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
@@ -486,68 +520,15 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             }
             return;
         }
-        if (type->struc.type_arg_count > 0 && !type_contains_type_var(type)) {
-            if (mono_find(t, type->struc.name)) {
-                for (int i = 0; i < type->struc.field_count; i++)
-                    discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
-                return;
-            }
-            /* Use resolved_sym from pass1/pass2 for the canonical name. A type
-             * coming straight from resolve_type (e.g. a sizeof/default/alloc
-             * operand) may carry no resolved_sym; fall back to a name lookup,
-             * as the STUB branch below does. */
-            Symbol *sym = type->struc.resolved_sym;
-            if (!sym && symtab)
-                sym = symtab_lookup_kind(symtab, type->struc.name, DECL_STRUCT);
-            /* Register the arguments too: an argument may itself be a generic
-             * instance (box<box<i32>>) whose definition must be emitted. The
-             * arguments are reachable only here: the field walk below descends
-             * the definition, not the args. (The mangled name is spelled from
-             * structure, so the args need no renaming before this type is
-             * named.) */
-            for (int i = 0; i < type->struc.type_arg_count; i++)
-                discover_nested_types(type->struc.type_args[i], t, a, intern, symtab);
-            const char *canon = (sym && sym->type) ? sym->type->struc.name : type->struc.name;
-            const char *mangled = mangle_generic_name(intern,
-                canon, type->struc.type_args, type->struc.type_arg_count);
-            if (!mono_find(t, mangled)) {
-                if (sym && sym->is_generic && sym->decl)
-                    mono_instantiate(t, a, intern, sym, sym->type->struc.name,
-                                     type->struc.type_args, type->struc.type_arg_count);
-            }
-        }
-        for (int i = 0; i < type->struc.field_count; i++)
-            discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
+        discover_aggregate(type, t, a, intern, symtab);
         return;
     case TYPE_UNION:
-        if (type->unio.type_arg_count > 0 && !type_contains_type_var(type)) {
-            if (mono_find(t, type->unio.name)) {
-                for (int i = 0; i < type->unio.variant_count; i++)
-                    discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
-                return;
-            }
-            Symbol *sym = type->unio.resolved_sym;
-            if (!sym && symtab)
-                sym = symtab_lookup_kind(symtab, type->unio.name, DECL_UNION);
-            /* Register the arguments too; see the struct arm. */
-            for (int i = 0; i < type->unio.type_arg_count; i++)
-                discover_nested_types(type->unio.type_args[i], t, a, intern, symtab);
-            const char *canon = (sym && sym->type) ? sym->type->unio.name : type->unio.name;
-            const char *mangled = mangle_generic_name(intern,
-                canon, type->unio.type_args, type->unio.type_arg_count);
-            if (!mono_find(t, mangled)) {
-                if (sym && sym->is_generic && sym->decl)
-                    mono_instantiate(t, a, intern, sym, sym->type->unio.name,
-                                     type->unio.type_args, type->unio.type_arg_count);
-            }
-        }
-        for (int i = 0; i < type->unio.variant_count; i++)
-            discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
+        discover_aggregate(type, t, a, intern, symtab);
         return;
     case TYPE_STUB:
         if (type->stub.type_arg_count > 0 && !type_contains_type_var(type)) {
             if (mono_find(t, type->stub.name)) return;
-            const char *base_name = type->stub.name;
+            const char *base_name = instance_base_name(type);
             const char *mangled = mangle_generic_name(intern,
                 base_name, type->stub.type_args, type->stub.type_arg_count);
             if (!mono_find(t, mangled) && symtab) {
@@ -578,8 +559,8 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
  * emit a dangling C typedef name), report an infinite-instantiation error once.
  * A missing instance is the sign of a truncated infinite family: mutually or
  * indirectly non-uniform recursive types, which the definition-site self-check
- * (pass1) and the depth cap miss when the discovery fixpoint stops itself (via
- * a name collision) below the depth limit instead of growing without bound.
+ * (pass1) misses and the depth cap would catch only if discovery reached the
+ * family's every member; this reports it however discovery stopped.
  * Recurses through wrapper constructors, but not into a referenced instance's
  * own fields (those are checked when its own table entry is visited), so this
  * terminates. */
@@ -687,8 +668,9 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
     /* Completeness backstop: reject any concrete type that references an
      * unregistered generic instance (a truncated infinite family; see
      * check_dangling_instance), so an incomplete table is never handed to
-     * codegen. */
-    bool dangling_reported = false;
+     * codegen. After an error, registration has stopped (mono_register), so
+     * missing instances are expected and that error already stops codegen. */
+    bool dangling_reported = diag_error_count() > 0;
     for (int i = 0; i < t->count && !dangling_reported; i++) {
         MonoInstance *inst = &t->entries[i];
         if (!inst->concrete_type) continue;

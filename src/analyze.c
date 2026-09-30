@@ -221,8 +221,9 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
            queries (hover, definition, lenses) keep working on the well-formed
            parts of the file rather than going blank because of one bad line or a
            duplicate name in a merged sibling. pass2 poisons what it cannot type
-           with TYPE_ERROR and types parse-error nodes silently. A lex error
-           still aborts the whole analysis (the else branch). */
+           with TYPE_ERROR and types parse-error nodes silently. A fatal error
+           (a lex error, or an internal error) still aborts the whole analysis
+           (the else branch). */
         pass2_check(r->program, &r->symtab, &r->intern, &r->mono, &r->file_scopes,
                     &r->arena);
         pass2_ran = true;
@@ -234,8 +235,9 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
         if (r->lex_output) { free(r->lex_output); r->lex_output = NULL; }
     }
 
-    /* pass2 did not run only when the lexer hit an error (a tab, an
-     * unterminated string or comment, inconsistent indentation, an #if error).
+    /* pass2 did not run only when a fatal error aborted the analysis: almost
+     * always a lexical error (a tab, an unterminated string or comment,
+     * inconsistent indentation, an #if error), or an internal compiler error.
      * Every node's type is then NULL, so the server answers hover, definition
      * and CodeLens from the last analysis that type-checked, if any, and if the
      * abort was in a merged sibling nothing on the open document says why. Add
@@ -280,11 +282,9 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
     return r;
 }
 
-/* Reclaim everything an analysis allocated. The arena holds the AST, interned
- * strings, pass1's referenced Type nodes and generic type_params arrays, and
- * pass2's self-recursion placeholder. The malloc'd side tables (token arrays,
- * the nested symtab/import trees, mono entries, diags, source) are freed
- * explicitly. */
+/* Reclaim everything an analysis allocated: the token arrays, diagnostics and
+ * source copy it owns, then the front end's tables and arena
+ * (front_end_free). */
 void analysis_free(AnalysisResult *r) {
     if (!r) return;
     for (int i = 0; i < r->token_array_count; i++) free(r->token_arrays[i]);
@@ -292,13 +292,8 @@ void analysis_free(AnalysisResult *r) {
     free(r->lex_input);
     free(r->lex_output);
 
-    symtab_free(&r->symtab);
-    file_scopes_free(&r->file_scopes);
-    free(r->mono.entries);
-
     free(r->diags);
     free(r->source);
-    free(r->intern.entries);   /* hash array is malloc'd; strings live in arena */
-    arena_free(&r->arena);
+    front_end_free(&r->symtab, &r->intern, &r->mono, &r->file_scopes, &r->arena);
     free(r);
 }

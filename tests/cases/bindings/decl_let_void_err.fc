@@ -1,0 +1,8 @@
+// A module or file-level `let` cannot bind a void value, as a local one
+// cannot: there is no value to store, and the C would declare a void variable.
+module m =
+    let x = void()
+
+let y = void()
+
+let main = (args: str[]) -> 0

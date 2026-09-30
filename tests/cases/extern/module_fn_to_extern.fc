@@ -1,0 +1,22 @@
+// A function reached through its module is passed to an extern's function
+// parameter like one named directly or through an import: each crosses as its
+// trampoline. Regression: `cmp.asc` was rejected as "cannot pass function
+// value to extern" although `&cmp.asc` and an imported `asc` were accepted.
+import desc from cmp
+
+module libc from "stdlib.h" =
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> i32) -> void
+
+module cmp =
+    let asc = (a: const any*, b: const any*) -> *((const i32*) a) - *((const i32*) b)
+    let desc = (a: const any*, b: const any*) -> *((const i32*) b) - *((const i32*) a)
+
+let main = (args: str[]) ->
+    let mut nums = i32[4] { 3, 1, 4, 2 }
+    libc.qsort(nums.ptr, 4usize, (usize) sizeof(i32), cmp.asc)
+    assert(nums[0] == 1 && nums[3] == 4)
+    libc.qsort(nums.ptr, 4usize, (usize) sizeof(i32), desc)
+    assert(nums[0] == 4 && nums[3] == 1)
+    // The module-qualified and the direct spelling share one trampoline.
+    assert(&cmp.asc == &cmp.asc)
+    0

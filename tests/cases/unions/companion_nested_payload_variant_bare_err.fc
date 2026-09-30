@@ -1,0 +1,12 @@
+// The payload check holds for a companion pair nested in a module, reached as
+// outer.shape.circle.
+module outer =
+    union shape =
+        | dot
+        | circle(i32)
+    module shape =
+        let unit = 1
+
+let main = (args: str[]) ->
+    let x = outer.shape.circle
+    0

@@ -1,0 +1,8 @@
+// sizeof inside const arithmetic in a generic argument is reported as not a
+// compile-time constant, as a bare sizeof argument is, rather than the argument
+// list falling apart into a comparison.
+let f = <'n>() -> 0
+
+let g = <'m>() -> f<'m * sizeof(i32)>()
+
+let main = (args: str[]) -> g<2>()

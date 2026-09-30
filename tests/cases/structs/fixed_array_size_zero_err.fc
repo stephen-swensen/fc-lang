@@ -1,0 +1,6 @@
+// A fixed array must have at least one element; a size of 0 is rejected by
+// the same rule as a size written as a constant expression.
+struct s =
+    data: i32[0]
+
+let main = (args: str[]) -> 0

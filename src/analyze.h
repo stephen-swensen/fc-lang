@@ -11,7 +11,8 @@
  *
  * Unlike the CLI path in main.c, analyze():
  *   - captures diagnostics as structured records instead of printing to stderr,
- *   - never calls exit(): a lexer diag_fatal is caught via longjmp and
+ *   - never calls exit(): a fatal error (every lexical error, and an
+ *     internal compiler error in pass1 or pass2) is caught via longjmp and
  *     recorded, with `aborted` set,
  *   - runs pass2 even when parsing or pass1 reported errors,
  *   - stops after pass2 (no mono discovery or codegen; queries only need the
@@ -29,8 +30,10 @@ typedef struct Diagnostic {
 } Diagnostic;
 
 /* An extra already-in-memory source merged into the analysis (e.g. a stdlib
- * file so `import ... from std::...` resolves). text must be NUL-terminated and
- * remain valid for the lifetime of the returned result. */
+ * file so `import ... from std::...` resolves). text must be NUL-terminated.
+ * With a lex cache, analyze() lexes a copy the cache owns, so the text need
+ * only last through the call; without one, the result's AST points into it
+ * and it must outlive the result. */
 typedef struct AnalysisSource {
     const char *filename;   /* stable for the analysis */
     const char *text;       /* NUL-terminated */
@@ -46,8 +49,9 @@ typedef struct AnalysisSource {
  * primary edited buffer is always lexed fresh. Passing a NULL cache to
  * analyze() re-lexes everything.
  *
- * One slot per feed path bounds memory to the unit's file count; a content or
- * flag change replaces the slot. The owned `text` keeps the cached tokens' (and
+ * One slot per feed path: a content or flag change replaces the slot, so the
+ * cache grows with the number of distinct feed files the session has seen, not
+ * with edits. The owned `text` keeps the cached tokens' (and
  * the parsed AST's literal) `start` pointers valid across analyses. */
 typedef struct LexCacheEntry {
     char       *path;        /* slot key: the feed source's filename (owned) */
@@ -78,13 +82,14 @@ typedef struct AnalysisResult {
     Diagnostic      *diags;        /* malloc'd dynamic array */
     int              diag_count, diag_cap;
 
-    bool             aborted;      /* a lexer diag_fatal longjmp'd out of the analysis */
+    bool             aborted;      /* a fatal error (lexical or internal) longjmp'd
+                                    * out of the analysis */
     bool             typed;        /* pass2 ran: the well-formed parts of the AST carry
                                     * their inferred types. pass2 runs past recoverable
                                     * parse/pass1 errors, so this is true for ordinary
                                     * mid-typing states (a broken line leaves
                                     * EXPR_ERROR/poison nodes the queries skip). It is
-                                    * false only after a lexer abort (see `aborted`),
+                                    * false only after an abort (see `aborted`),
                                     * where the AST has no type info; the server then
                                     * falls back to the last good analysis for
                                     * type-aware queries. */

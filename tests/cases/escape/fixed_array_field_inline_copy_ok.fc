@@ -1,0 +1,24 @@
+// A fixed-array field holds a copy of its initializer's elements, so a struct
+// initialized from a stack slice literal does not point into the stack: it
+// can be returned and heap-copied alongside a pointer field.
+struct s =
+    buf: u8[4]
+    p: i32*
+
+let mk = (q: i32*) ->
+    s { buf = u8[4] { 1u8, 2u8, 3u8, 4u8 }, p = q }
+
+let mk_str = (q: i32*) ->
+    s { buf = "abcd", p = q }
+
+let mk_heap = (q: i32*) ->
+    alloc(s { buf = u8[4] { 1u8, 2u8, 3u8, 4u8 }, p = q })!
+
+let main = (args: str[]) ->
+    let mut x = 1
+    let v = mk(&x)
+    let t = mk_str(&x)
+    let h = mk_heap(&x)
+    defer free(h)
+    assert(v.buf[0] == 1u8 && t.buf[1] == 98u8 && h.buf[3] == 4u8)
+    0

@@ -1,5 +1,6 @@
 #include "lexer.h"
 #include "diag.h"
+#include "types.h"   /* type_from_int_suffix/type_from_float_suffix: the valid suffixes */
 #include <ctype.h>
 #include <stdio.h>
 
@@ -234,22 +235,28 @@ static bool scan_exponent(Lexer *l, char marker) {
     return true;
 }
 
+/* A literal's type suffix, if any, and its token. A suffix is the run of
+ * letters and digits after the number that starts with `lead` (`i`/`u` for an
+ * integer, `f` for a float); it must be one `suffix_type` names. */
+static Token finish_suffixed(Lexer *l, const char *lead, TokenKind kind,
+                             Type *(*suffix_type)(const char *, int)) {
+    if (peek(l) && strchr(lead, peek(l)) && isalnum((unsigned char)peek_next(l))) {
+        const char *suffix = l->current;
+        while (isalnum((unsigned char)peek(l))) advance(l);
+        if (!suffix_type(suffix, (int)(l->current - suffix)))
+            return error_token(l, "invalid suffix on numeric literal");
+    }
+    return make_token(l, kind);
+}
+
 /* An integer literal's type suffix (i8 ... usize), if any, and its token. */
 static Token finish_int(Lexer *l) {
-    if ((peek(l) == 'i' || peek(l) == 'u') && isalnum((unsigned char)peek_next(l))) {
-        advance(l);
-        while (isalnum((unsigned char)peek(l))) advance(l);
-    }
-    return make_token(l, TOK_INT_LIT);
+    return finish_suffixed(l, "iu", TOK_INT_LIT, type_from_int_suffix);
 }
 
 /* A float literal's f32/f64 suffix, if any, and its token. */
 static Token finish_float(Lexer *l) {
-    if (peek(l) == 'f' && (peek_next(l) == '3' || peek_next(l) == '6')) {
-        advance(l); advance(l);
-        if (peek(l) == '2' || peek(l) == '4') advance(l);
-    }
-    return make_token(l, TOK_FLOAT_LIT);
+    return finish_suffixed(l, "f", TOK_FLOAT_LIT, type_from_float_suffix);
 }
 
 static Token scan_number_body(Lexer *l) {
@@ -327,45 +334,23 @@ static Token scan_number(Lexer *l) {
     return t;
 }
 
-/* Check if position p (pointing past '%') looks like a format spec followed by '{'.
- * Returns length of the spec (not including '%' or '{'), or 0 if no match.
- * Format spec: optional flags (-+0# space), optional width (digits), optional .precision,
- * then a required conversion char (d,i,u,x,X,o,f,e,E,g,G,s,c,p, or T for the
- * compile-time type name). */
+/* Check if position p (pointing past '%') is a format spec followed by '{'
+ * (interp_spec_scan reads the spec). Returns the spec's length (not including
+ * the '%' or the '{'), or 0 when there is none. */
 static int check_interp_spec(const char *p) {
-    const char *s = p;
-    /* optional flags */
-    while (*s == '-' || *s == '+' || *s == '0' || *s == '#' || *s == ' ') s++;
-    /* optional width */
-    while (*s >= '0' && *s <= '9') s++;
-    /* optional precision */
-    if (*s == '.') {
-        s++;
-        while (*s >= '0' && *s <= '9') s++;
-    }
-    /* required conversion character */
-    const char *convs = "diuxXofeEgGscpT";
-    const char *conv = s;
-    bool found = false;
-    for (const char *c = convs; *c; c++) {
-        if (*conv == *c) { found = true; break; }
-    }
-    if (!found) return 0;
-    s++;
-    /* must be followed by { */
-    if (*s != '{') return 0;
-    return (int)(s - p);
+    InterpSpec spec;
+    int n = interp_spec_scan(p, &spec);
+    return n > 0 && p[n] == '{' ? n : 0;
 }
 
 /* Consume one escape sequence, the current character being the one after its
  * backslash. Returns NULL, or the message for an invalid escape. The set is
- * the one decode_str_lit (common.c) decodes: \n \t \r \0 \\ \" \' and \xNN
- * with exactly two hex digits, which the byte counts built on the decoder
- * assume. */
+ * the one decode_str_lit (common.c) decodes: the single-character escapes of
+ * simple_escape_byte, and \xNN with exactly two hex digits, which the byte
+ * counts built on the decoder assume. */
 static const char *scan_escape(Lexer *l) {
     char esc = peek(l);
-    if (esc == 'n' || esc == 't' || esc == 'r' || esc == '\\' ||
-        esc == '"' || esc == '\'' || esc == '0') {
+    if (simple_escape_byte(esc) >= 0) {
         advance(l);
         return NULL;
     }

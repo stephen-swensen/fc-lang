@@ -1,0 +1,16 @@
+namespace shapes::
+
+struct pt =
+    x: i32
+    y: i32
+
+module pt =
+    let origin = () -> pt { x = 0, y = 0 }
+
+union shade =
+    | none_at_all
+    | grey(u8)
+
+enum dir =
+    | north
+    | south

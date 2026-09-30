@@ -1,0 +1,5 @@
+// A float suffix must be f32 or f64: `f62` is neither, and the literal is
+// rejected rather than read as an f64.
+let main = (args: str[]) ->
+    let b = 2.5f62
+    0

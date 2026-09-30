@@ -1,0 +1,10 @@
+// Tokens left over after a static_assert line in a union body are reported,
+// as they are after a variant line or a struct body's static_assert line.
+// Regression: the union body skipped the end-of-line check after a
+// static_assert, so `junk` was read as the start of the next line.
+union u =
+    | x(i32)
+    static_assert(true, "m") junk
+    | y
+
+let main = (args: str[]) -> 0

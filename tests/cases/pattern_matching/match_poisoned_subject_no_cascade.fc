@@ -1,0 +1,9 @@
+// A match on a subject that failed to check binds its pattern names as poison:
+// the arms' uses of them add no "undefined name" errors, and a repeated name is
+// not taken for a duplicate binding.
+let main = (args: str[]) ->
+    let a = nope
+    match a with
+    | { x = red, y = red } -> 1
+    | some(v) -> v
+    | _ -> 0

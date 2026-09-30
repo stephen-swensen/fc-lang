@@ -37,9 +37,11 @@ standard library's own files.
 
 For projects spanning multiple directories, drop an `lsp.rsp` file at the project
 root. The server discovers it by walking up from the file you're editing and
-treats it as authoritative — the analysis then uses exactly the inputs it lists
-(instead of guessing via the sibling/stdlib heuristic), so cross-directory
-imports resolve correctly. It is an ordinary compiler response file: each line
+treats it as authoritative — a file it lists is analyzed with exactly the
+inputs it lists (instead of guessing via the sibling/stdlib heuristic), so
+cross-directory imports resolve correctly. A file under it that it does not
+list is analyzed as if there were no `lsp.rsp`, and gets a note saying so.
+It is an ordinary compiler response file: each line
 holds command-line arguments (input paths, globs, `--flag`s), paths are relative
 to the `lsp.rsp` itself, `#`/`//` begin comments, and `@other.rsp` pulls in
 another file. The very same file works on the CLI as `fcc @lsp.rsp`. Example:
@@ -84,7 +86,8 @@ starts it again.
   absolute build path (e.g. `.../build/linux/fcc`) if `fcc` is not on `PATH`.
 - `fc.stdlibPath` (default empty) — directory holding the stdlib `.fc` files;
   sets `FCC_STDLIB_DIR` for the server. Leave empty to use the installed
-  location (or a repo-relative `./stdlib`).
+  location (or, failing that, a `stdlib` directory under the server's working
+  directory).
 - `fc.typeDisplay` (default `"inline"`) — how each `let`'s inferred type is
   shown: `"inline"` (after the name, as an inlay hint), `"codelens"` (on the line
   above), or `"off"`. The server always provides both; this selects which the

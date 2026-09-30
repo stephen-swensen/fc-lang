@@ -1,1 +1,1 @@
-import alias 'str' is a built-in type name and cannot name a module
+import alias 'str' is a built-in type name and cannot name a type or module

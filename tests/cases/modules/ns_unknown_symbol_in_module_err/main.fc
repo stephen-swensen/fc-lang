@@ -1,0 +1,6 @@
+// A module-level namespace import of a name the namespace does not declare
+// reports it as an unknown symbol, as a file-level one does.
+module m =
+    import nope from shapes::
+
+let main = (args: str[]) -> 0

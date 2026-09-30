@@ -1,0 +1,25 @@
+// A module body imports a struct (with its companion module), a union under
+// an alias, and an enum from another namespace, as a file can.
+module m =
+    import pt from shapes::
+    import shade as tone from shapes::
+    import dir from shapes::
+
+    let sum = (p: pt) -> p.x + p.y
+    let start = () -> pt.origin()
+    let level = (t: tone) ->
+        match t with
+        | grey(g) -> (i32)g
+        | none_at_all -> 0
+    let grey7 = () -> level(tone.grey(7u8))
+    let is_north = (d: dir) ->
+        match d with
+        | north -> true
+        | south -> false
+    let first = () -> is_north(dir.north)
+
+let main = (args: str[]) ->
+    assert(m.sum(m.start()) == 0)
+    assert(m.grey7() == 7)
+    assert(m.first())
+    0

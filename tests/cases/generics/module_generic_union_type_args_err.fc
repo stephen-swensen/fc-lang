@@ -1,0 +1,10 @@
+// A generic union reached through a module path needs its type arguments
+// written to build a no-payload variant, as it does when named directly.
+module m =
+    union maybe =
+        | nothing
+        | just('a)
+
+let main = (args: str[]) ->
+    let x = m.maybe.nothing
+    0

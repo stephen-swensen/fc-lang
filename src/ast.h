@@ -154,7 +154,9 @@ struct Expr {
     bool readonly_copy;
     union {
         /* EXPR_INT_LIT */
-        struct { uint64_t value; Type *lit_type; bool out_of_range; } int_lit;
+        struct { uint64_t value; Type *lit_type; bool out_of_range;
+                 bool negative; /* value is the two's-complement pattern of a
+                                   negated literal (or a negative constant) */ } int_lit;
 
         /* EXPR_FLOAT_LIT */
         struct { double value; Type *lit_type; bool out_of_range; bool underflow; } float_lit;
@@ -225,7 +227,7 @@ struct Expr {
             Type *fixed_array_type; /* non-NULL if field is a fixed-size inline array (TYPE_FIXED_ARRAY) */
             bool is_variant_constructor; /* true when this is union variant construction, not field access */
             bool is_extern_const;       /* true when this is an extern constant (not a function) */
-            bool is_type_property;      /* true for static type properties (int32.min, float64.nan, ...) */
+            bool is_type_property;      /* true for static type properties (i32.min, f64.nan, ...) */
             struct Symbol *resolved_member; /* for module-member access (mod.member): the resolved
                                                member Symbol, set in pass2; used by editor queries
                                                (go-to-definition). NULL for plain struct-field access. */
@@ -639,6 +641,10 @@ struct Decl {
              * through. */
             bool is_frozen;
             Expr *init;
+            /* A generic function: its initializer is a function with a type
+             * variable among its explicit ones or in a parameter type. Set by
+             * pass1 (detect_generic_func), with the symbol's is_generic. */
+            bool is_generic;
             Type *resolved_type;    /* filled by pass2 */
             /* Const-fold cache for module-member lets, filled lazily by the
              * const-expr gate in pass2. Zero-init is the unvisited state. */

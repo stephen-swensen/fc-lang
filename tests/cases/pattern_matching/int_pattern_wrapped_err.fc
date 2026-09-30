@@ -1,0 +1,8 @@
+// A pattern literal is judged by its written value, as an expression literal
+// is: 18446744073709551615i8 does not match -1.
+let f = (x: i8) ->
+    match x with
+    | 18446744073709551615i8 -> 1
+    | _ -> 0
+
+let main = (args: str[]) -> f(-1i8)

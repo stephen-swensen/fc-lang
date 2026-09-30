@@ -1,0 +1,8 @@
+// Two module members that reach each other through qualified references are
+// a cycle, reported without mention of imports, since there are none.
+// Regression: the qualified-member path always said "through imports".
+module m =
+    let a = m.b + 1
+    let b = m.a + 1
+
+let main = (args: str[]) -> m.a

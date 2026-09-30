@@ -125,12 +125,61 @@ char *ns_display_dup(const char *ns);
  * and guards. Invariant: every stored len is proven in [0, fc_len_max()] when
  * the slice is constructed (statically when the value is known at compile
  * time, by an abort guard otherwise). Reads then widen losslessly and bounds
- * checks compare at the stored width. The default is 64. */
+ * checks compare at the stored width. */
+#define FC_LEN_REPR_DEFAULT 64
 extern int g_len_repr;            /* 16, 32, or 64 */
 int64_t fc_len_max(void);         /* INT16_MAX / INT32_MAX / INT64_MAX */
 
 /* The value of hex digit `c` (0-15), or -1 when it is not one. */
 int hex_digit_val(char c);
+
+/* The byte a single-character escape (`\n` `\t` `\r` `\0` `\\` `\"` `\'`)
+ * denotes, `c` being the character after the backslash; -1 when `c` is none of
+ * them. `\x` with exactly two hex digits is the one other escape. The lexer
+ * admits exactly these and decode_str_lit decodes them. */
+int simple_escape_byte(char c);
+
+/* Largest field width or precision a format spec may carry. Both are passed to
+ * the C library as `int`, and C11 guarantees only that `int` reaches 32767 (the
+ * same 16-bit floor the emitted arithmetic assumes), so a larger value cannot
+ * be represented on every target. pass2 rejects specs over the limit rather
+ * than letting the digits wrap into an arbitrary field. The cap also bounds the
+ * hoisted buffer a single segment can demand. */
+#define INTERP_MAX_FIELD 32767
+
+/* A format spec as written between an interpolation segment's `%` and its
+ * `{`: flags, width, precision and conversion character. Codegen copies the
+ * spec into the emitted C format string, so this is also what the C formatter
+ * sees; the lexer, pass2 and codegen all read it through interp_spec_scan. */
+typedef struct InterpSpec {
+    bool minus, plus, space, hash, zero;  /* flags present */
+    char repeated;                        /* a flag written twice (that flag), else 0 */
+    int64_t width;                        /* explicit field width, 0 when absent */
+    int64_t precision;                    /* explicit precision, -1 when absent */
+    int prec_at;                          /* offset of the precision's `.` (of the
+                                             conversion when there is none) */
+    char conversion;                      /* the conversion character */
+} InterpSpec;
+
+/* Read the spec at `text` into *out. Returns its length through the
+ * conversion character, or 0 when `text` does not start a spec (the
+ * conversion must be one interp_conv_class names). Width and precision
+ * saturate one past INTERP_MAX_FIELD, so an over-long digit run reads as too
+ * large instead of overflowing. */
+int interp_spec_scan(const char *text, InterpSpec *out);
+
+/* What a conversion formats. */
+typedef enum {
+    CONV_INTEGER,    /* d i u x X o */
+    CONV_FLOAT,      /* f e E g G */
+    CONV_STRING,     /* s: str or cstr */
+    CONV_CHAR,       /* c */
+    CONV_POINTER,    /* p */
+    CONV_TYPE_NAME,  /* T: the operand's type, named at compile time */
+} InterpConvClass;
+
+/* The class of conversion character `conv`; false when it is not one. */
+bool interp_conv_class(char conv, InterpConvClass *out);
 
 /* Decoded byte length of string-literal source text (escapes collapsed, `%%`
  * read as `%`); when `out` is non-NULL, also writes the bytes. pass2's

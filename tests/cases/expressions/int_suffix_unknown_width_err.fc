@@ -1,0 +1,5 @@
+// An integer suffix must name an integer type: `i99` is not one, and the
+// literal is rejected rather than read as an i32.
+let main = (args: str[]) ->
+    let a = 7i99
+    0

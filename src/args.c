@@ -372,7 +372,7 @@ static bool add_inputs(CompileArgs *out, const char *tok, const char *dir) {
 
 bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
     memset(out, 0, sizeof *out);
-    out->len_repr = 64;
+    out->len_repr = FC_LEN_REPR_DEFAULT;
 
     /* Auto-detect host flags unless suppressed; later --flag entries override
      * by name. */

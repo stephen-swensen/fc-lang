@@ -1,0 +1,5 @@
+// A negated literal whose magnitude exceeds the type is out of range, even
+// when its two's-complement pattern wraps to a small positive value.
+let main = (args: str[]) ->
+    let x = -18446744073709551615i64
+    (i32)x

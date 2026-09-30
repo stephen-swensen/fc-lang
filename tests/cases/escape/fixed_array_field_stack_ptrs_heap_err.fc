@@ -1,0 +1,12 @@
+// A fixed-array field of pointers holds copies of its initializer's pointers,
+// so stack addresses copied into a heap-allocated struct escape.
+struct s =
+    ptrs: i32*[1]
+
+let leak = () ->
+    let mut x = 42
+    alloc(s { ptrs = i32*[1] { &x } })!
+
+let main = (args: str[]) ->
+    let _h = leak()
+    0

@@ -6,6 +6,24 @@
  * not reject what codegen would emit, and codegen does not elide a guard pass2
  * relied on. */
 
+/* The operations the two markers govern. `unguarded` switches off the
+ * value-precondition guards: float-to-int saturation, the integer
+ * divide/modulo zero check, and slice indexing and subslice bounds.
+ * `checked` switches on the data-loss traps: integer `+ - *`, signed `/` (at
+ * MIN / -1), signed negation, a lossy integer narrowing cast, and the two
+ * truncating string forms (a `(cstr[N])` cast, a `%.Ns` interpolation
+ * segment). pass2 rejects a marker whose body has none of the operations it
+ * governs as redundant; codegen gates exactly these on the marker, so the two
+ * cannot disagree.
+ *
+ * `resolve` gives a node's type in the current context: NULL in pass2, where
+ * a generic body's type variable counts as governed when some instantiation
+ * would be (`a / b` has a zero guard at i32 and none at f64, so a marker there
+ * is accepted, and is a no-op in the instances where nothing is governed);
+ * codegen's substitution in an instance, where the type is concrete. */
+bool facts_guard_governs(const Expr *e, Type *(*resolve)(Type *));
+bool facts_overflow_governs(const Expr *e, Type *(*resolve)(Type *));
+
 /* True if an interpolated string's buffer size is not a compile-time constant:
  * it has a %s segment (str or cstr) with no explicit precision, so its byte
  * budget depends on a runtime string length. Such an interpolation needs an
@@ -20,27 +38,8 @@ bool interp_is_runtime_sized(const Expr *e);
  * overflow axis (`checked` aborts instead of clipping). */
 int interp_seg_trunc_prec(const InterpSegment *seg);
 
-/* Largest field width or precision a format spec may carry. Both are passed to
- * the C library as `int`, and C11 guarantees only that `int` reaches 32767 (the
- * same 16-bit floor the emitted arithmetic assumes), so a larger value cannot
- * be represented on every target. pass2 rejects specs over the limit rather
- * than letting the digits wrap into an arbitrary field. The cap also bounds the
- * hoisted buffer a single segment can demand. */
-#define INTERP_MAX_FIELD 32767
-
-/* The modifiers a format spec carries, as written. Codegen copies the spec
- * verbatim into the emitted C format string, so this is also what the C
- * formatter sees, and pass2 judges the spec from this reading. */
-typedef struct InterpSpec {
-    bool minus, plus, space, hash, zero;  /* flags present */
-    char repeated;                        /* a flag written twice (that flag), else 0 */
-    int64_t width;                        /* explicit field width, 0 when absent */
-    int64_t precision;                    /* explicit precision, -1 when absent */
-} InterpSpec;
-
-/* Read a format segment's modifiers. Width and precision saturate one past
- * INTERP_MAX_FIELD so an over-long digit run is reported as too large instead of
- * overflowing the accumulator. */
+/* A format segment's spec (interp_spec_scan); all zero, with precision -1,
+ * for a literal segment. */
 void interp_seg_spec(const InterpSegment *seg, InterpSpec *out);
 
 /* Pointer-value null-status predicates for null-sentinel options (T*?, any*?,
@@ -54,6 +53,13 @@ bool ptr_value_provably_null(const Expr *e);
 bool int_value_provably_nonzero(const Expr *e);
 bool int_value_provably_zero(const Expr *e);
 
+/* Whether function value `e` is code with no context, which C can call as a
+ * raw function pointer through a trampoline: a function named at top level
+ * or in a module (not a local binding), or a non-capturing lambda. pass2
+ * accepts only such a value at an extern call's function parameter; codegen
+ * emits a trampoline for exactly these, there and at `&f`. */
+bool fn_value_is_context_free(const Expr *e);
+
 /* If e is a resolved reference to a declared error constant (a member of an
  * `error` group, reached as `group.member`/`mod.group.member` or through an
  * import as a bare name), return the member's assigned EXPR_INT_LIT; else
@@ -62,7 +68,6 @@ const Expr *error_const_literal(const Expr *e);
 
 /* The helpers the interpolation facts are built from, which codegen's buffer
  * emitter also uses. */
-void parse_format_width_prec(const char *text, int64_t *width, int64_t *precision);
 bool interp_conv_is_unsigned(char conv, Type *t);
 int interp_literal_len(InterpSegment *seg);
 

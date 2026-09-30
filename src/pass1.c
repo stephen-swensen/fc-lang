@@ -317,6 +317,7 @@ static void detect_generic_func(Arena *arena, Decl *d, Symbol *sym) {
     (void)conflict;  /* reported once by the infer_param_kinds fixpoint */
 
     if (vcount > 0) {
+        d->let.is_generic = true;
         sym->is_generic = true;
         sym->type_params = arena_dup_names(arena, vars, vcount);
         sym->type_param_count = vcount;
@@ -472,13 +473,12 @@ static void process_member_import(Decl *d, ImportTable *target,
         return;
     }
 
-    /* Look up the source module: global symtab first, then import table
-     * (a prior whole-module import in the same scope may have brought it in) */
+    /* Look up the source module: in the named (or the current) namespace
+     * only, since a non-global namespace cannot implicitly reach a
+     * global-namespace module; then in the import table (a prior whole-module
+     * import in the same scope may have brought it in). */
     const char *lookup_ns = from_ns ? from_ns : current_ns;
     Symbol *mod_sym = symtab_lookup_module(symtab, mod_name, lookup_ns);
-    /* Fall back to global namespace only if we're already in the global namespace.
-     * Non-global namespaces cannot implicitly access global-namespace modules. */
-    if (!mod_sym && !lookup_ns) mod_sym = symtab_lookup_module(symtab, mod_name, NULL);
     if (!mod_sym || mod_sym->kind != DECL_MODULE) {
         /* Check the target import table for a whole-module import */
         for (int k = 0; k < target->count; k++) {
@@ -1104,6 +1104,29 @@ static void validate_module_body(Decl *d) {
     }
 }
 
+/* Point each struct/union/enum Type in `tab` at its defining Symbol, once
+ * `tab` has stopped growing. register_type_decl cannot set Type.resolved_sym
+ * at registration time: every later symtab_add DA_APPENDs to the by-value
+ * `symbols` array and may realloc it, leaving an earlier &symbols[i] dangling
+ * for mono to read. A module's member table is final at the end of its
+ * registration (finish_module_members); the global table at the end of pass1.
+ * The non-NULL guard keeps a module-scoped type's resolved_sym (its member
+ * Symbol) when its global-symtab alias is visited. */
+static void set_type_resolved_syms(SymbolTable *tab) {
+    for (int i = 0; i < tab->count; i++) {
+        Symbol *s = &tab->symbols[i];
+        if (s->kind == DECL_STRUCT && s->type && s->type->kind == TYPE_STRUCT
+            && !s->type->struc.resolved_sym)
+            s->type->struc.resolved_sym = s;
+        else if (s->kind == DECL_UNION && s->type && s->type->kind == TYPE_UNION
+                 && !s->type->unio.resolved_sym)
+            s->type->unio.resolved_sym = s;
+        else if (s->kind == DECL_ENUM && s->type && s->type->kind == TYPE_ENUM
+                 && !s->type->enu.resolved_sym)
+            s->type->enu.resolved_sym = s;
+    }
+}
+
 /* With a module's members registered: resolve type names against sibling
  * types, bind each type to its symbol, and register the types in the global
  * table under their mangled names. */
@@ -1154,17 +1177,7 @@ static void finish_module_members(SymbolTable *members, InternTable *intern,
         }
     }
 
-    /* Set resolved_sym on each type now that the symtab is stable (no more reallocs).
-     * This bridges pass1 symbol info to mono without requiring symtab re-lookup. */
-    for (int j = 0; j < members->count; j++) {
-        Symbol *msym = &members->symbols[j];
-        if (msym->kind == DECL_STRUCT && msym->type && msym->type->kind == TYPE_STRUCT)
-            msym->type->struc.resolved_sym = msym;
-        if (msym->kind == DECL_UNION && msym->type && msym->type->kind == TYPE_UNION)
-            msym->type->unio.resolved_sym = msym;
-        if (msym->kind == DECL_ENUM && msym->type && msym->type->kind == TYPE_ENUM)
-            msym->type->enu.resolved_sym = msym;
-    }
+    set_type_resolved_syms(members);
 
     /* Register module-scoped struct/union/enum types in the global symbol table
      * under their mangled names, so resolve_type can find them from any context. */
@@ -1306,6 +1319,70 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
     finish_module_members(members, intern, global_symtab);
 }
 
+/* Resolve one import declaration into `tbl`, the import table of the file or
+ * module body that wrote it; `current_ns` is that body's namespace. */
+static void resolve_import(Decl *d, ImportTable *tbl, SymbolTable *symtab,
+                           const char *current_ns) {
+    const char *mod_name = d->import.from_module;
+    const char *from_ns = d->import.from_namespace;
+
+    if (!mod_name && !from_ns) {
+        /* import MODULE [as ALIAS]: bare whole-module imports are not supported.
+         * Same-namespace modules are already visible by name; cross-namespace
+         * modules require 'import MODULE from ns::'. */
+        diag_error(d->loc,
+            "bare 'import %s' is not supported; use 'import %s from ns::' for cross-namespace or access members directly",
+            d->import.name, d->import.name);
+        return;
+    }
+
+    if (from_ns && !mod_name) {
+        if (d->import.is_wildcard) {
+            diag_error(d->loc, "cannot wildcard-import from a namespace; import * works on modules only");
+            return;
+        }
+        if (strcmp(from_ns, "global") == 0) {
+            diag_error(d->loc, "cannot import from 'global::'; global-namespace modules are already visible by name");
+            return;
+        }
+        /* import NAME from namespace:: imports a top-level symbol (module,
+         * struct, union or enum) from another namespace. Companion pairs
+         * (same-named type + module) import both entries. */
+        const char *name = d->import.name;
+        const char *import_name = d->import.alias ? d->import.alias : name;
+        Symbol *mod = symtab_lookup_module(symtab, name, from_ns);
+        Symbol *type_sym = symtab_lookup_kind_ns(symtab, name, DECL_STRUCT, from_ns);
+        if (!type_sym)
+            type_sym = symtab_lookup_kind_ns(symtab, name, DECL_UNION, from_ns);
+        if (!type_sym)
+            type_sym = symtab_lookup_kind_ns(symtab, name, DECL_ENUM, from_ns);
+        if (!mod && !type_sym) {
+            char *shown = ns_display_dup(from_ns);
+            diag_error(d->loc, "unknown symbol '%s' in namespace '%s'", name, shown);
+            free(shown);
+            return;
+        }
+        /* A cross-namespace whole-symbol import brings in a module and/or
+         * a type, so an `as` alias onto a built-in type name would be
+         * unreachable. */
+        if (d->import.alias && is_builtin_type_name(import_name)) {
+            diag_error(d->loc,
+                "import alias '%s' is a built-in type name and cannot name a type or module",
+                import_name);
+        }
+        if (mod) import_table_add(tbl, import_name, DECL_MODULE, mod);
+        if (type_sym) import_table_add(tbl, import_name, type_sym->kind, type_sym);
+        /* A companion pair imports both halves under one name; the type is
+         * what the name primarily denotes, the module its companion. */
+        d->import.resolved_sym = type_sym ? type_sym : mod;
+        d->import.resolved_companion = type_sym ? mod : NULL;
+        return;
+    }
+
+    /* Member import (import X from M / import * from M) */
+    process_member_import(d, tbl, symtab, current_ns);
+}
+
 /* Process imports for a single module symbol */
 static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab) {
     Decl *mod_decl = ms->decl;
@@ -1324,73 +1401,10 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab)
     memset(imports, 0, sizeof(ImportTable));
     ms->imports = imports;
 
-    const char *mod_ns = ms->ns_prefix;
     for (int j = 0; j < mod_decl->module.decl_count; j++) {
         Decl *d = mod_decl->module.decls[j];
-        if (d->kind != DECL_IMPORT) continue;
-
-        const char *imp_mod = d->import.from_module;
-        const char *imp_ns = d->import.from_namespace;
-
-        if (imp_mod) {
-            /* import X from MODULE or import * from MODULE */
-            process_member_import(d, imports, global_symtab, mod_ns);
-        } else if (imp_ns && !imp_mod) {
-            /* import MODULE from NS:: */
-            if (d->import.is_wildcard) {
-                diag_error(d->loc, "cannot wildcard-import from a namespace");
-                continue;
-            }
-            if (strcmp(imp_ns, "global") == 0) {
-                diag_error(d->loc, "cannot import from 'global::'; global-namespace modules are already visible by name");
-                continue;
-            }
-            const char *name = d->import.name;
-            Symbol *src = symtab_lookup_module(global_symtab, name, imp_ns);
-            if (!src || src->kind != DECL_MODULE) {
-                char *shown = ns_display_dup(imp_ns);
-                diag_error(d->loc, "unknown module '%s' in namespace '%s'", name, shown);
-                free(shown);
-                continue;
-            }
-            const char *import_name = d->import.alias ? d->import.alias : name;
-            if (d->import.alias && is_builtin_type_name(import_name)) {
-                diag_error(d->loc,
-                    "import alias '%s' is a built-in type name and cannot name a module",
-                    import_name);
-            }
-            import_table_add(imports, import_name, DECL_MODULE, src);
-            d->import.resolved_sym = src;
-        } else {
-            /* import MODULE [as ALIAS]: bare whole-module imports are not supported.
-             * Same-namespace modules are already visible by name; cross-namespace
-             * modules require 'import MODULE from ns::'. */
-            diag_error(d->loc,
-                "bare 'import %s' is not supported; use 'import %s from ns::' for cross-namespace or access members directly",
-                d->import.name, d->import.name);
-        }
-    }
-}
-
-/* Point each top-level struct/union/enum Type at its defining Symbol.
- * register_type_decl cannot set Type.resolved_sym at registration time: every
- * later symtab_add DA_APPENDs to the by-value `symbols` array and may realloc it,
- * leaving an earlier &symbols[i] dangling for mono to read. Module members get
- * the same deferral in finish_module_members; this runs at the end of pass1,
- * after all symtab mutations. The non-NULL guard keeps a module-scoped type's
- * resolved_sym (its member Symbol) when its global-symtab alias is visited. */
-static void set_type_resolved_syms(SymbolTable *tab) {
-    for (int i = 0; i < tab->count; i++) {
-        Symbol *s = &tab->symbols[i];
-        if (s->kind == DECL_STRUCT && s->type && s->type->kind == TYPE_STRUCT
-            && !s->type->struc.resolved_sym)
-            s->type->struc.resolved_sym = s;
-        else if (s->kind == DECL_UNION && s->type && s->type->kind == TYPE_UNION
-                 && !s->type->unio.resolved_sym)
-            s->type->unio.resolved_sym = s;
-        else if (s->kind == DECL_ENUM && s->type && s->type->kind == TYPE_ENUM
-                 && !s->type->enu.resolved_sym)
-            s->type->enu.resolved_sym = s;
+        if (d->kind == DECL_IMPORT)
+            resolve_import(d, imports, global_symtab, ms->ns_prefix);
     }
 }
 
@@ -1986,67 +2000,8 @@ static void resolve_file_imports(Program *prog, SymbolTable *symtab,
 
         if (d->kind != DECL_IMPORT) continue;
 
-        const char *mod_name = d->import.from_module;
-        const char *from_ns = d->import.from_namespace;
-
-        /* All imports go to the file's ImportTable */
-        ImportTable *file_tbl = get_file_imports(file_scopes, d->loc.filename);
-
-        if (!mod_name && !from_ns) {
-            /* import MODULE [as ALIAS]: bare whole-module imports are not supported.
-             * Same-namespace modules are already visible by name; cross-namespace
-             * modules require 'import MODULE from ns::'. */
-            diag_error(d->loc,
-                "bare 'import %s' is not supported; use 'import %s from ns::' for cross-namespace or access members directly",
-                d->import.name, d->import.name);
-            continue;
-        }
-
-        if (from_ns && !mod_name) {
-            if (d->import.is_wildcard) {
-                diag_error(d->loc, "cannot wildcard-import from a namespace; import * works on modules only");
-                continue;
-            }
-            if (strcmp(from_ns, "global") == 0) {
-                diag_error(d->loc, "cannot import from 'global::'; global-namespace modules are already visible by name");
-                continue;
-            }
-            /* import NAME from namespace:: imports a top-level symbol (module,
-             * struct, union or enum) from another namespace. Companion pairs
-             * (same-named type + module) import both entries. */
-            const char *name = d->import.name;
-            const char *import_name = d->import.alias ? d->import.alias : name;
-            Symbol *mod = symtab_lookup_module(symtab, name, from_ns);
-            Symbol *type_sym = symtab_lookup_kind_ns(symtab, name, DECL_STRUCT, from_ns);
-            if (!type_sym)
-                type_sym = symtab_lookup_kind_ns(symtab, name, DECL_UNION, from_ns);
-            if (!type_sym)
-                type_sym = symtab_lookup_kind_ns(symtab, name, DECL_ENUM, from_ns);
-            if (!mod && !type_sym) {
-                char *shown = ns_display_dup(from_ns);
-                diag_error(d->loc, "unknown symbol '%s' in namespace '%s'", name, shown);
-                free(shown);
-                continue;
-            }
-            /* A cross-namespace whole-symbol import brings in a module and/or
-             * a type, so an `as` alias onto a built-in type name would be
-             * unreachable. */
-            if (d->import.alias && is_builtin_type_name(import_name)) {
-                diag_error(d->loc,
-                    "import alias '%s' is a built-in type name and cannot name a type or module",
-                    import_name);
-            }
-            if (mod) import_table_add(file_tbl, import_name, DECL_MODULE, mod);
-            if (type_sym) import_table_add(file_tbl, import_name, type_sym->kind, type_sym);
-            /* A companion pair imports both halves under one name; the type is
-             * what the name primarily denotes, the module its companion. */
-            d->import.resolved_sym = type_sym ? type_sym : mod;
-            d->import.resolved_companion = type_sym ? mod : NULL;
-            continue;
-        }
-
-        /* Member import (import X from M / import * from M) */
-        process_member_import(d, file_tbl, symtab, current_ns);
+        resolve_import(d, get_file_imports(file_scopes, d->loc.filename), symtab,
+                       current_ns);
     }
 }
 

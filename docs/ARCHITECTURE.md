@@ -55,7 +55,8 @@ The command-line driver is `main()` in `src/main.c`:
    infinite instance family) stop the driver.
 9. **codegen** (`codegen_emit`) writes the C file.
 10. If the program declares `error` groups, the driver writes the error-code
-    map (`<output>.errcodes`) beside the C file.
+    map beside the C file: the output path with `.errcodes` in place of its
+    extension.
 
 The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 [Language server](#language-server).
@@ -70,14 +71,14 @@ The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 | `lexer.c/h` | Tokenizer, the `#if` evaluator, and the layout pass that turns indentation into `INDENT`/`DEDENT`/`NEWLINE` tokens (the offside rule; a leading `\|` of a match arm is a same-level delimiter). |
 | `ast.c/h` | AST node types (`Expr`, `Pattern`, `Decl`, `Program`) and the shared child visitors `expr_for_each_child`, `expr_any_child` and `pattern_for_each_child`. |
 | `parser.c/h` | Pratt parser with error recovery. Produces the AST, including desugared forms (an `error` group becomes a module of constants). |
-| `types.c/h` | The `Type` representation, equality, printing (`type_name`), substitution, the context-free const-expression evaluator used by const generics, and type-name mangling. `str` and `cstr` are true aliases of `u8[]` and `u8*`: the `Type` keeps the alias spelling for messages only. |
+| `types.c/h` | The `Type` representation, equality, printing (`type_name`), substitution, the context-free const-expression evaluator used by const generics, and type-name mangling (`instance_base_name` is the one rule for the template an instance is named from). Also the rules pass2 and codegen share about types: the constant operators (`const_binary_op`, `const_unary_op`, `const_cast_value`), what a type embeds by value (`type_byval_aggregate`), and which options are null-sentinel pointers (`option_inner_is_null_sentinel`). `str` and `cstr` are true aliases of `u8[]` and `u8*`: the `Type` keeps the alias spelling for messages only. |
 | `pass1.c/h` | Symbol tables. Collects every top-level and module-level name, type layout and function signature so declarations can refer to each other in any order; resolves imports; assigns C names; numbers error codes; checks that no two declarations claim one C name. |
-| `pass2.c/h` | The type checker: inference, name resolution, widening, casts, match exhaustiveness, provenance (escape) analysis, constant folding, generic validation, and registration of generic instances. |
-| `facts.c/h` | Facts about values that pass2 judges by and codegen emits by, so the two agree: whether a pointer or integer is provably null/non-zero, error-constant values, and how interpolated-string format specs are read and sized. |
+| `pass2.c/h` | The type checker: inference, name resolution, widening, casts, match exhaustiveness, provenance (escape) analysis, constant folding, generic validation, and registration of generic instances. `front_end_free` tears down what the front end built, for both fcc and the language server. |
+| `facts.c/h` | Facts about expressions that pass2 judges by and codegen emits by, so the two agree: which operations `checked` and `unguarded` govern, which function values C can call through a trampoline, whether a pointer or integer is provably null/non-zero, error-constant values, and how interpolated-string segments are sized. |
 | `monomorph.c/h` | The instance table (`mono_register`), transitive discovery, and the finalize step that resolves instance type names. |
 | `codegen.c/h` | The C emitter. |
 | `diag.c/h` | Error reporting. In server mode it reports to a sink and turns a fatal error into a `longjmp`. |
-| `common.c/h` | The arena allocator; the `xmalloc`/`xcalloc`/`xrealloc` wrappers, which exit on out-of-memory; growable arrays (`DA_APPEND`); exact-size string builders; the intern table (the parser interns every name, so names compare by pointer); file reading; name helpers shared by several passes (`c_safe_ident`, `is_mangled_root_name`, `mangled_source_name`, `ns_display`); string-literal decoding; and `g_len_repr`, the `--len-repr` setting. |
+| `common.c/h` | The arena allocator; the `xmalloc`/`xcalloc`/`xrealloc` wrappers, which exit on out-of-memory; growable arrays (`DA_APPEND`); exact-size string builders; the intern table (the parser interns every name, so names compare by pointer); file reading; name helpers shared by several passes (`c_safe_ident`, `is_mangled_root_name`, `mangled_source_name`, `ns_display`); string-literal decoding and the one escape table (`simple_escape_byte`); the one format-spec reader and conversion table (`interp_spec_scan`, `interp_conv_class`), shared by the lexer, facts and codegen; and `g_len_repr`, the `--len-repr` setting. |
 | `analyze.c/h` | The non-fatal front end used by the language server. |
 | `lsp.c/h`, `json.c/h` | The language server and its JSON-RPC value model. |
 | `builtin_docs.inc` | Hover documentation for built-in intrinsics (user-facing markdown). |
@@ -115,6 +116,8 @@ statements, patterns and declarations. It never aborts:
   that might be a cast, a `<` that might open type arguments), the attempt runs
   inside `diag_speculate_begin`/`diag_speculate_end`: its errors are held and
   dropped if the parser backtracks, so an abandoned reading reports nothing.
+  Held errors are not in `diag_error_count()`, so code inside a speculation
+  that compares error counts sees none of them.
 
 ### pass1: declarations
 
@@ -168,7 +171,9 @@ Besides typing, pass2 does:
 mangles the instance name, evaluates the instance's `static_assert`s, and caps
 the number of instances per template: a template that instantiates itself
 with a growing const argument (`f<'n + 1>` inside `f`) would otherwise never
-terminate. After pass2, discovery walks instantiated bodies to a fixpoint,
+terminate. Once any error has been reported it registers nothing, so in a
+program (or an editor buffer) that already has an error, no further instance
+is checked. After pass2, discovery walks instantiated bodies to a fixpoint,
 and finalize resolves every type name to its mangled C name. Codegen's
 `emit_types` sorts every struct and union definition, instances and
 top-level declarations together, so a by-value field's type is defined before
@@ -177,10 +182,16 @@ the struct that holds it.
 ### Code generation
 
 `codegen_emit` writes, in order: the preamble (includes and defines), runtime
-support helpers, type definitions, prototypes, globals, function bodies, and
-the backtrace table when `--backtraces` is on. Generic functions and types
-are emitted once per instance, with a substitution context that maps type
-variables to the instance's concrete types.
+support helpers (`emit_runtime_support`), type definitions, prototypes,
+globals, function bodies, and the backtrace table when `--backtraces` is on.
+Generic functions and types are emitted once per instance, with a
+substitution context that maps type variables to the instance's concrete
+types: `subst_resolve` gives a node's type in the current instance, and
+`instance_type` also resolves a generic stub to the instance's struct. The
+body is written first, into the output file itself; the headers the preamble
+includes and the runtime helpers it defines are then chosen by what the body
+uses (`scan_body_needs`), and the file is rewritten as preamble, runtime
+support, body. No emitter reports what it needs.
 
 ## Invariants
 
@@ -243,10 +254,13 @@ emitted C apart:
   in codegen is that relation.
 - `_l_<name>_<id>` for every function-local binding (let, parameter, loop
   variable, pattern binding), assigned by `local_c_name` in pass2, plus
-  `_<temp><n>` for codegen temporaries and compiler-made file-scope functions
-  (a lifted lambda's `_fn_<n>`, suffixed `__<instance>` inside a generic
-  instance, and `_fc_back_<n>`). Source names never reach C directly, so a
-  local can be named after a libc function or a C keyword.
+  `_<temp><n>` for codegen temporaries. Compiler-made helpers share the `_`
+  prefix: a lifted lambda `_fn_<n>` (suffixed `__<instance>` inside a
+  generic instance) and its context struct `_ctx_<lambda>`, a function-entry
+  backing slot `_fc_back_<n>` (for a slice literal, an interpolation buffer, a
+  `(cstr[N])` buffer or a closure's context), and a constant's backing array
+  `_fc_const_backing_<n>`. Source names never reach C directly, so a local
+  can be named after a libc function or a C keyword.
 
 Struct fields and union payloads keep their FC names (escaped by
 `c_safe_ident` if they are C keywords); they live in per-type name spaces.
@@ -293,6 +307,9 @@ cannot make is made per instance by the concrete rule.
 - It must not assume the width of `int`; FC targets include 16-bit-int
   platforms. Arithmetic on types narrower than `int` goes through `unsigned`,
   and lengths narrow to `size_t` or `int` through `fc_to_size`/`fc_to_int`.
+  Those two and `fc_alloc_n` check with C `assert`, so compiling the output
+  with `-DNDEBUG` removes the checks (the spec allows it); the bounds and
+  length guards that carry FC semantics are never compiled out.
 - Signed arithmetic goes through unsigned to define overflow:
   `(int32_t)((uint32_t)a + (uint32_t)b)`. Shift counts are masked
   (`a << (b & 31)`). Integer division aborts on a zero divisor and handles
@@ -308,19 +325,27 @@ cannot make is made per instance by the concrete rule.
 A walk that must handle every kind has a `switch` with no `default`, so adding
 a kind produces a `-Wswitch` warning at every such site, and
 `make check-warnings` fails until each one handles it. These are the child
-visitors in `ast.c` (`expr_for_each_child` and friends, which every other
-whole-tree walk goes through), the dispatchers `check_expr_inner` (pass2) and
-`emit_expr` (codegen), the whole-tree predicates in pass2 (such as
-`expr_may_yield_stack`, which decides whether a loop's value can point into
-its own frame), and the type-kind walkers in `types.c` and codegen. A kind
-that must never reach one of them gets an explicit case that reports an
-internal error. A `switch` with a `default` answers a question about a few
-kinds and is fine to leave alone.
+visitors in `ast.c` (`expr_for_each_child` and friends), the dispatchers
+`check_expr_inner` (pass2) and `emit_expr` (codegen), the whole-tree
+predicates in pass2 (such as `expr_may_yield_stack`, which decides whether a
+loop's value can point into its own frame) and the self-recursion flow
+(`sr_flow`), codegen's evaluation-order predicates (`expr_has_side_effects`,
+`expr_structurally_equal`), the language server's node finder
+(`find_in_expr`), and the type-kind walkers in `types.c` and codegen
+(including `type_ident_eq`). A walk that treats most kinds alike lists them
+anyway, and reaches their children through the visitor rather than naming
+them itself. A kind that must never reach one of them gets an
+explicit case that reports an internal error. A `switch` with a `default`
+answers a question about a few kinds; CONTRIBUTING.md lists the ones a new
+expression kind usually has to be added to.
 
 Facts that pass2 and codegen both need (a type property's result type, a
 built-in member's type, the width of a fixed-size integer, an interpolation
-segment's size budget) live in one table or function, in `types.c` or
-`facts.c`, that both read.
+segment's size budget, which operations a marker governs) live in one table or
+function, in `types.c` or `facts.c`, that both read. The same holds within a
+pass: a rule that several checks or emitters apply (the length limits in
+pass2's `static_length_error`, codegen's `union_variant_payload` and
+`needs_eq_func`, the parser's `parse_body_lines`) is one function they call.
 
 ### Memory and re-entry
 
@@ -346,9 +371,11 @@ expression), and a fixed array's size can be symbolic until substitution
 folds it with `const_type_eval`. Parameter kinds (`GenParamKind`) sit in
 arrays parallel to `type_params`.
 
-Constant expressions are evaluated in two places. pass2 folds a `let`
-initializer or a concrete size or argument in context (`fold_const_leaf` and
-its callers), with names resolved and diagnostics at hand. `const_type_eval`
+Constant expressions are evaluated in two places. pass2 folds a module
+constant's initializer (`fold_module_let`) or a concrete size, argument or
+`static_assert` condition (`fold_to_literal`) in context with
+`const_fold_expr`, which evaluates each operator with `try_eval_const`, with
+names resolved and diagnostics at hand. `const_type_eval`
 evaluates a `TYPE_CONST_EXPR` with no context during substitution, in the
 `int64_t` domain of const arguments and sizes, and stashes its errors (see
 [Errors](#errors)); `const_eval_typed` is its mode for a function body's
@@ -369,9 +396,10 @@ costs one analysis.
 `analyze()` runs the lexer, parser, pass1 and pass2 over in-memory sources and
 keeps the typed AST, symbols and arena alive in an `AnalysisResult` for
 queries. It differs from the CLI in four ways: diagnostics go to a collector,
-a lexer fatal aborts only this analysis, pass2 runs past recoverable parse and
+a fatal error aborts only this analysis, pass2 runs past recoverable parse and
 pass1 errors (so a half-typed line doesn't blank the rest of the file), and it
-stops after pass2. It does not require a `main`, so library files can be
+stops after pass2. An error that only monomorphization or codegen reports
+therefore never reaches the editor. It does not require a `main`, so library files can be
 analyzed on their own.
 
 Unchanged feed files are not re-lexed on every keystroke: a session-scoped lex
@@ -380,19 +408,26 @@ cache keeps their tokens, keyed by path, content hash and flag set.
 ### Compilation units
 
 Every open document belongs to a unit, and the server keeps one analysis per
-unit, shared by all its open documents (`unit_key`):
+unit, shared by all its open documents (`unit_key`). Which unit a document
+belongs to depends only on the files on disk, never on the order documents
+were opened in:
 
 - **With `lsp.rsp`.** The server walks up from the document's directory for a
-  file named `lsp.rsp`. If it finds one, the unit is exactly what `fcc
-  @lsp.rsp` would compile: its inputs (globbed, resolved against the response
-  file's directory), its `--flag`s and its `--len-repr`. Nothing else is
-  merged, so the editor resolves names exactly as the CLI does. A broken
-  `lsp.rsp` falls back to the rule below and adds one diagnostic saying why.
+  file named `lsp.rsp`. If it finds one that lists the document, the unit is
+  exactly what `fcc @lsp.rsp` would compile: its inputs (globbed, resolved
+  against the response file's directory), its `--flag`s and its
+  `--len-repr`. Nothing else is merged, so the editor resolves names exactly
+  as the CLI does. A broken `lsp.rsp` falls back to the rule below and adds
+  one diagnostic saying why.
 - **Without it.** The unit is the document's directory: the document, its
   sibling `.fc` files and the installed standard library (`FCC_STDLIB_DIR`,
-  else the install data directory, else `./stdlib`). A stdlib file that is
-  also open or a sibling is merged once, matched by canonical path or by
-  identical content.
+  else the install data directory, else a `stdlib` directory under the
+  server's working directory). A stdlib file that is also open or a sibling is
+  merged once, matched by canonical path or by identical content.
+- **Not listed by the lsp.rsp above it.** The document is analyzed by the
+  directory rule, in a unit of its own, and gets one diagnostic saying the
+  rsp does not list it. That unit reports nothing about the files the rsp
+  does list, so their diagnostics come only from the rsp's unit.
 
 An open buffer always wins over its file on disk, however an `lsp.rsp` spells
 the path (documents are matched by canonical path, `store_find_by_path`).

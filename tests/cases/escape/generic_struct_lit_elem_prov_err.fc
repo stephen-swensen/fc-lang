@@ -1,0 +1,15 @@
+// A generic struct literal records what its fields hold, as a concrete one
+// does: reading a stack pointer back out of it still carries the stack.
+struct gbox =
+    v: 'a
+    n: i32
+
+let leak = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    let b = gbox { v = ptrs, n = 1 }
+    b.v[0]
+
+let main = (args: str[]) ->
+    let _p = leak()
+    0

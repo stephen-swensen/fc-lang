@@ -121,73 +121,21 @@ bool int_value_provably_zero(const Expr *e) {
 
 /* ---- Interpolation formats ---- */
 
-/* Parse width and precision from an InterpSegment format spec string.
- * Sets *width to the explicit width (0 if absent).
- * Sets *precision to the explicit precision (-1 if absent, 0 for ".0").
- *
- * Both accumulate in int64 and saturate one past INTERP_MAX_FIELD, so a digit
- * run long enough to overflow the accumulator (undefined behavior) instead
- * compares as too large. pass2 rejects over-limit specs (via interp_seg_spec),
- * so codegen sees only values in range. */
-void parse_format_width_prec(const char *text,
-                                     int64_t *width, int64_t *precision) {
-    const char *fs = text;
-    const int64_t sat = (int64_t)INTERP_MAX_FIELD + 1;
-    *width = 0;
-    *precision = -1;
-    /* Skip flags */
-    while (*fs == '-' || *fs == '+' || *fs == '0' ||
-           *fs == '#' || *fs == ' ') fs++;
-    /* Width */
-    while (*fs >= '0' && *fs <= '9') {
-        if (*width < sat) *width = *width * 10 + (*fs - '0');
-        if (*width > sat) *width = sat;
-        fs++;
-    }
-    /* Precision */
-    if (*fs == '.') {
-        fs++;
-        *precision = 0;
-        while (*fs >= '0' && *fs <= '9') {
-            if (*precision < sat) *precision = *precision * 10 + (*fs - '0');
-            if (*precision > sat) *precision = sat;
-            fs++;
-        }
-    }
-}
-
-/* A leading `0` is the zero flag, not a width digit: C puts the flag prefix
- * ahead of the width, so `%08d` is flag `0` + width 8 and `%00d` is the flag
- * written twice. The flag loop below and parse_format_width_prec split at the
- * same point. */
 void interp_seg_spec(const InterpSegment *seg, InterpSpec *out) {
-    memset(out, 0, sizeof *out);
-    out->precision = -1;
-    if (seg->is_literal) return;
-    const char *fs = seg->text;
-    for (;; fs++) {
-        bool *slot;
-        switch (*fs) {
-        case '-': slot = &out->minus; break;
-        case '+': slot = &out->plus;  break;
-        case ' ': slot = &out->space; break;
-        case '#': slot = &out->hash;  break;
-        case '0': slot = &out->zero;  break;
-        default:  slot = NULL;        break;
-        }
-        if (!slot) break;
-        if (*slot && !out->repeated) out->repeated = *fs;
-        *slot = true;
+    if (seg->is_literal) {
+        memset(out, 0, sizeof *out);
+        out->precision = -1;
+        return;
     }
-    parse_format_width_prec(seg->text, &out->width, &out->precision);
+    interp_spec_scan(seg->text, out);
 }
 
 /* pass2's checked-overflow test and codegen's truncation check both ask here. */
 int interp_seg_trunc_prec(const InterpSegment *seg) {
     if (seg->is_literal || seg->conversion != 's') return -1;
-    int64_t width = 0, precision = -1;
-    parse_format_width_prec(seg->text, &width, &precision);
-    return (int)precision;
+    InterpSpec spec;
+    interp_seg_spec(seg, &spec);
+    return (int)spec.precision;
 }
 
 /* True when an integer conversion renders its operand as unsigned. `%u %x %X %o`
@@ -215,8 +163,9 @@ int interp_literal_len(InterpSegment *seg) {
 /* Upper bound on the bytes a non-string conversion can emit, for buffer sizing.
  * A field width is a minimum, not a maximum, so it can only widen the bound;
  * flags may add a sign, a space, or a `#` prefix. */
-static int64_t interp_numeric_bound(char conv, Type *t, const char *flags_text,
-                                    int64_t explicit_width, int64_t explicit_prec) {
+static int64_t interp_numeric_bound(Type *t, const InterpSpec *sp) {
+    char conv = sp->conversion;
+    int64_t explicit_width = sp->width, explicit_prec = sp->precision;
     int64_t bound;
     switch (conv) {
     case 'd': case 'i': case 'u':
@@ -292,12 +241,9 @@ static int64_t interp_numeric_bound(char conv, Type *t, const char *flags_text,
         break;
     default: break;
     }
-    const char *flags = flags_text;
-    while (*flags == '-' || *flags == '+' || *flags == '0' || *flags == '#' || *flags == ' ') {
-        if (*flags == '+' || *flags == ' ') bound++;
-        if (*flags == '#') bound += 2;
-        flags++;
-    }
+    if (sp->plus) bound++;
+    if (sp->space) bound++;
+    if (sp->hash) bound += 2;
     if (explicit_width > bound) bound = explicit_width;
     return bound;
 }
@@ -310,15 +256,15 @@ InterpSegBudget interp_seg_budget(InterpSegment *seg, Type *t) {
         return (InterpSegBudget){ false, interp_literal_len(seg) };
     if (seg->conversion == 'T')
         return (InterpSegBudget){ false, (int64_t)strlen(type_name(t)) };
-    int64_t width = 0, prec = -1;
-    parse_format_width_prec(seg->text, &width, &prec);
+    InterpSpec sp;
+    interp_seg_spec(seg, &sp);
     if (seg->conversion == 's' && t && (is_str_type(t) || is_cstr_type(t))) {
         /* Precision is a hard maximum; width is a minimum field. */
-        if (prec >= 0) return (InterpSegBudget){ false, prec > width ? prec : width };
-        return (InterpSegBudget){ true, width };
+        if (sp.precision >= 0)
+            return (InterpSegBudget){ false, sp.precision > sp.width ? sp.precision : sp.width };
+        return (InterpSegBudget){ true, sp.width };
     }
-    return (InterpSegBudget){ false, interp_numeric_bound(seg->conversion, t, seg->text,
-                                                         width, prec) };
+    return (InterpSegBudget){ false, interp_numeric_bound(t, &sp) };
 }
 
 /* If the interpolation's byte budget is a compile-time constant (no segment
@@ -343,4 +289,88 @@ bool interp_const_buffer_size(Expr *e, Type *(*resolve)(Type *), int64_t *out_si
 bool interp_is_runtime_sized(const Expr *e) {
     int64_t dummy = 0;
     return !interp_const_buffer_size((Expr *)e, NULL, &dummy);
+}
+
+/* A node's type in the governing context (see facts_guard_governs). */
+static Type *gov_type(Type *t, Type *(*resolve)(Type *)) {
+    return t && resolve ? resolve(t) : t;
+}
+
+/* Whether some instantiation of `t` is an integer (a signed one): `t` itself,
+ * or a type variable, which may become one. Casts from or to a type variable
+ * are invalid, so the cast arms below never see one. */
+static bool maybe_integer(Type *t) {
+    return t && (type_is_integer(t) || t->kind == TYPE_TYPE_VAR);
+}
+
+static bool maybe_signed(Type *t) {
+    return t && (type_is_signed(t) || t->kind == TYPE_TYPE_VAR);
+}
+
+static bool is_slice(Type *t) {
+    return t && t->kind == TYPE_SLICE;
+}
+
+bool facts_guard_governs(const Expr *e, Type *(*resolve)(Type *)) {
+    switch (e->kind) {
+    case EXPR_CAST: {   /* float-to-int saturation */
+        Type *from = gov_type(e->cast.operand->type, resolve);
+        return from && type_is_float(from) && e->cast.target &&
+               type_is_integer(e->cast.target);
+    }
+    case EXPR_BINARY:   /* integer divide/modulo: the zero check (MIN / -1 is
+                           on the overflow axis, and always handled) */
+        return (e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) &&
+               maybe_integer(gov_type(e->type, resolve));
+    case EXPR_INDEX:    /* slice bounds check */
+        return is_slice(gov_type(e->index.object->type, resolve));
+    case EXPR_SLICE:    /* subslice bounds check */
+        return is_slice(gov_type(e->slice.object->type, resolve));
+    default:
+        return false;
+    }
+}
+
+bool facts_overflow_governs(const Expr *e, Type *(*resolve)(Type *)) {
+    switch (e->kind) {
+    case EXPR_BINARY: {
+        Type *t = gov_type(e->type, resolve);
+        if (e->binary.op == TOK_PLUS || e->binary.op == TOK_MINUS ||
+            e->binary.op == TOK_STAR)
+            return maybe_integer(t);     /* unsigned wrap is trapped too */
+        if (e->binary.op == TOK_SLASH)
+            return maybe_signed(t);      /* MIN / -1; unsigned `/` and `%` never overflow */
+        return false;
+    }
+    case EXPR_UNARY_PREFIX:              /* MIN negation */
+        return e->unary_prefix.op == TOK_MINUS &&
+               maybe_signed(gov_type(e->type, resolve));
+    case EXPR_CAST: {
+        if (e->cast.buffer_size > 0) return true;   /* (cstr[N]): clips past N-1 */
+        /* A lossy integer narrowing (an enum narrows as its repr). float-to-int
+         * is not here: its saturation is on the guard axis, because the C
+         * conversion is undefined out of range. */
+        Type *from = type_enum_underlying(gov_type(e->cast.operand->type, resolve));
+        Type *to = e->cast.target;
+        return from && to && type_is_integer(from) && type_is_integer(to) &&
+               !type_can_widen(from, to);
+    }
+    case EXPR_INTERP_STRING:             /* a %.Ns segment clips past N */
+        for (int i = 0; i < e->interp_string.segment_count; i++)
+            if (interp_seg_trunc_prec(&e->interp_string.segments[i]) >= 0)
+                return true;
+        return false;
+    default:
+        return false;
+    }
+}
+
+bool fn_value_is_context_free(const Expr *e) {
+    if (!e->type || e->type->kind != TYPE_FUNC) return false;
+    switch (e->kind) {
+    case EXPR_IDENT: return !e->ident.is_local;
+    case EXPR_FIELD: return e->field.codegen_name != NULL;
+    case EXPR_FUNC:  return e->func.capture_count == 0 && e->func.lifted_name;
+    default:         return false;
+    }
 }

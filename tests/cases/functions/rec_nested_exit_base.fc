@@ -1,0 +1,28 @@
+// A base case reached through a `return` nested in an operand (a let's
+// initializer, an assignment, a call argument, an if condition) keeps a
+// self-recursive function accepted, like a guard-clause return. Regression:
+// each was rejected as "this function never returns".
+let use = (x: i32) -> x
+
+let in_let = (n: i32) ->
+    let x = if n == 0 then return 10 else n
+    in_let(x - 1)
+
+let in_assign = (n: i32) ->
+    let mut x = 0
+    x = if n == 0 then return 20 else n
+    in_assign(x - 1)
+
+let in_arg = (n: i32) ->
+    let x = use(if n == 0 then return 30 else n)
+    in_arg(x - 1)
+
+let in_cond = (n: i32) ->
+    if (if n == 0 then return 40 else n) > 100 then in_cond(n - 2) else in_cond(n - 1)
+
+let main = (args: str[]) ->
+    assert(in_let(3) == 10)
+    assert(in_assign(3) == 20)
+    assert(in_arg(3) == 30)
+    assert(in_cond(3) == 40)
+    0

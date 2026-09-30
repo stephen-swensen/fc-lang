@@ -1,6 +1,6 @@
-// A non-positive fixed-array size is reported and parsing carries on.
+// A fixed-array size too large to read is reported and parsing carries on.
 struct s =
-    data: i32[0]
+    data: i32[99999999999999999999]
 
 let main = (args: str[]) ->
     let late = struct

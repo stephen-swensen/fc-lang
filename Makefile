@@ -159,7 +159,11 @@ uninstall-vscode:
 # Every suite runs tests/run_tests.sh. CC picks the compiler for the generated
 # C, CC_OPT its optimization flags, FCC_EXTRA_ARGS adds fcc options, and FILTER
 # is an awk regular expression over category/test_name.
-RUN_TESTS = FILTER=$(FILTER) bash tests/run_tests.sh
+# FILTER reaches the runner through the environment, taken unexpanded, so
+# neither make (a regex's `$`) nor the shell (`|`, parentheses) reads it.
+override FILTER := $(value FILTER)
+export FILTER
+RUN_TESTS = bash tests/run_tests.sh
 
 # `check` is the GNU canonical test target: everything below that runs in a few
 # minutes. test-all-O2 and test-asan are run separately (see CONTRIBUTING.md).
@@ -301,8 +305,8 @@ help:
 	@echo "  Override PREFIX, DESTDIR, bindir, or datadir to customize install paths."
 	@echo ""
 	@echo "Test:"
-	@echo "  make check        Everything CI runs: the check-* targets, test-all,"
-	@echo "                    test-all-len16 and test-lsp"
+	@echo "  make check        The check-* targets, test-all, test-all-len16 and"
+	@echo "                    test-lsp (CI runs this and test-vscode)"
 	@echo "  make check-ascii  Fail on non-ASCII bytes in src/*.c and src/*.h"
 	@echo "  make check-warnings  Compile src/ with -Werror under gcc and clang"
 	@echo "  make check-keywords  Check every keyword list against the lexer's table"
