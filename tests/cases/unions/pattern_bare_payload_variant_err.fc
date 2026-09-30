@@ -1,0 +1,12 @@
+// A payload variant written bare in a pattern is an error: read as a binding it
+// would match every value, silently making the arm a catch-all.
+union slot =
+    | empty
+    | full(i32)
+
+let describe = (s: slot) ->
+    match s with
+    | full -> 1
+    | empty -> 0
+
+let main = (args: str[]) -> describe(slot.full(3)) - 1

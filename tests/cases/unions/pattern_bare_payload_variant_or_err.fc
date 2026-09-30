@@ -1,0 +1,11 @@
+// In an or-pattern alternative a bare payload variant is reported as such, not
+// as a binding in an alternative.
+union slot =
+    | empty
+    | full(i32)
+
+let main = (args: str[]) ->
+    let o = some(slot.full(1))
+    match o with
+    | some(full | empty) -> 0
+    | none -> 1

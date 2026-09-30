@@ -1,0 +1,14 @@
+// Const arguments are evaluated in the i64 domain with wraparound, so
+// i64.min / -1 is i64.min whether it is written out or reached through a
+// const parameter; both calls name the same instance.
+struct tag =
+    bytes: u8[('n & 1) + 1]
+
+let zero = <'n>() ->
+    let t = default(tag<'n>)
+    (i32)t.bytes[0]
+
+let via_param = <'m>() -> zero<'m / -1>()
+
+let main = (args: str[]) ->
+    zero<i64.min / -1>() + via_param<i64.min>()

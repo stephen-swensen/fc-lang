@@ -1,6 +1,7 @@
 #pragma once
 #include "common.h"
 #include "diag.h"   /* SrcLoc (StructField/UnionVariant carry a source loc) */
+#include "token.h"  /* TokenKind: const_binary_op takes the operator */
 
 typedef enum {
     TYPE_INT8,
@@ -299,13 +300,43 @@ bool type_is_const_arg(Type *t);
  * size_ref (TYPE_CONST_INT). Returns false if still symbolic. */
 bool type_fixed_array_size(Type *t, int64_t *out);
 
+/* Mask a 64-bit value to `width` bits, sign-extending back to 64 if signed. */
+uint64_t const_mask_extend(uint64_t v, int width, bool is_signed);
+
+typedef enum { CONST_OP_OK, CONST_OP_DIV_ZERO, CONST_OP_UNSUPPORTED } ConstOpStatus;
+
+/* `l op r` on constant operands, with the semantics the generated code has at
+ * run time. Arithmetic and bitwise operators work on `width`-bit operands of
+ * the given signedness: the result wraps, a shift count is masked to
+ * width - 1, a signed right shift is arithmetic, and a signed x / -1 wraps
+ * (x % -1 is 0). A comparison compares the operands, as given, signed or
+ * unsigned; comparisons, && and || yield 0 or 1. Values are 64-bit patterns
+ * (a narrower value sign- or zero-extended). Every const evaluator in the
+ * compiler goes through this, so they agree with each other and with the C. */
+ConstOpStatus const_binary_op(TokenKind op, uint64_t l, uint64_t r, int width,
+                              bool is_signed, uint64_t *out);
+
+/* Whether const_binary_op's `op` yields a truth value (a comparison, && or
+ * ||), evaluated at its operands' type rather than at its own. */
+bool const_op_yields_bool(TokenKind op);
+
 /* Evaluate a const-arg carrier (TYPE_CONST_INT / TYPE_CONST_EXPR / a const
  * param TYPE_TYPE_VAR) under name-to-Type bindings where const params bind to
- * TYPE_CONST_INT. Context-free i64 evaluation (two's-complement wrap, masked
- * shifts, div-by-zero = error). Returns false when still symbolic (no error)
- * or on a hard failure (error stashed; see const_eval_take_error). */
+ * TYPE_CONST_INT. Context-free evaluation in the i64 domain of const arguments
+ * and sizes (const_binary_op at 64 bits, signed; div-by-zero = error). Returns
+ * false when still symbolic (no error) or on a hard failure (error stashed; see
+ * const_eval_take_error). */
 bool const_type_eval(Type *t, const char **var_names, Type **concrete,
                      int count, int64_t *out);
+
+/* Evaluate `e`, a const expression that was type-checked as an ordinary
+ * expression (a static_assert condition in a function body), under the same
+ * bindings, with every node at its own type: the result is what the same
+ * expression computes at run time, as it is for a concrete condition. A const
+ * parameter is read as the i32 its expression type says, so its value must
+ * fit. Same failure contract as const_type_eval. */
+bool const_eval_typed(struct Expr *e, const char **var_names, Type **concrete,
+                      int count, int64_t *out);
 
 /* Take (and clear) the last const-generic evaluation error, or NULL if none.
  * The caller owning a diagnostic site reports it with the returned loc. */

@@ -926,30 +926,95 @@ static void const_eval_fail(Expr *e, const char *msg) {
     if (!g_const_eval_err) { g_const_eval_err = msg; g_const_eval_err_loc = e->loc; }
 }
 
-/* Truncate/sign-extend a two's-complement bit pattern to a fixed-width int
- * kind. Returns false for non-fixed-width targets. */
-static bool const_eval_mask(TypeKind k, int64_t v, int64_t *out) {
-    uint64_t u = (uint64_t)v;
-    switch (k) {
-    case TYPE_INT8:   *out = (int8_t)u;   return true;
-    case TYPE_INT16:  *out = (int16_t)u;  return true;
-    case TYPE_INT32:  *out = (int32_t)u;  return true;
-    case TYPE_INT64:  *out = (int64_t)u;  return true;
-    case TYPE_UINT8:  *out = (int64_t)(uint8_t)u;  return true;
-    case TYPE_UINT16: *out = (int64_t)(uint16_t)u; return true;
-    case TYPE_UINT32: *out = (int64_t)(uint32_t)u; return true;
-    case TYPE_UINT64: *out = (int64_t)u; return true;   /* bit pattern, i64 domain */
-    default: return false;
+uint64_t const_mask_extend(uint64_t v, int width, bool is_signed) {
+    if (width >= 64) return v;
+    uint64_t mask = ((uint64_t)1 << width) - 1;
+    v &= mask;
+    if (is_signed && (v & ((uint64_t)1 << (width - 1))))
+        v |= ~mask;
+    return v;
+}
+
+bool const_op_yields_bool(TokenKind op) {
+    switch (op) {
+    case TOK_EQEQ: case TOK_BANGEQ: case TOK_LT: case TOK_GT:
+    case TOK_LTEQ: case TOK_GTEQ: case TOK_AMPAMP: case TOK_PIPEPIPE:
+        return true;
+    default:
+        return false;
     }
 }
 
+ConstOpStatus const_binary_op(TokenKind op, uint64_t l, uint64_t r, int width,
+                              bool is_signed, uint64_t *out) {
+    switch (op) {
+    case TOK_EQEQ: case TOK_BANGEQ:
+    case TOK_LT: case TOK_GT: case TOK_LTEQ: case TOK_GTEQ: {
+        bool lt = is_signed ? (int64_t)l < (int64_t)r : l < r;
+        bool gt = is_signed ? (int64_t)l > (int64_t)r : l > r;
+        bool res = op == TOK_EQEQ ? l == r : op == TOK_BANGEQ ? l != r
+                 : op == TOK_LT ? lt : op == TOK_GT ? gt
+                 : op == TOK_LTEQ ? !gt : !lt;
+        *out = res;
+        return CONST_OP_OK;
+    }
+    case TOK_AMPAMP:   *out = l != 0 && r != 0; return CONST_OP_OK;
+    case TOK_PIPEPIPE: *out = l != 0 || r != 0; return CONST_OP_OK;
+    default: break;
+    }
+    uint64_t lv = const_mask_extend(l, width, is_signed);
+    uint64_t rv = const_mask_extend(r, width, is_signed);
+    uint64_t shamt = (uint64_t)(width - 1);
+    uint64_t res;
+    switch (op) {
+    case TOK_PLUS:  res = lv + rv; break;
+    case TOK_MINUS: res = lv - rv; break;
+    case TOK_STAR:  res = lv * rv; break;
+    case TOK_AMP:   res = lv & rv; break;
+    case TOK_PIPE:  res = lv | rv; break;
+    case TOK_CARET: res = lv ^ rv; break;
+    case TOK_LTLT:  res = lv << (rv & shamt); break;
+    case TOK_GTGT:
+        res = is_signed ? (uint64_t)((int64_t)lv >> (rv & shamt)) : lv >> (rv & shamt);
+        break;
+    case TOK_SLASH:
+    case TOK_PERCENT:
+        if (rv == 0) return CONST_OP_DIV_ZERO;
+        if (is_signed) {
+            int64_t la = (int64_t)lv, ra = (int64_t)rv;
+            if (ra == -1)   /* MIN / -1 wraps; computed without the C division, whose overflow is undefined */
+                res = op == TOK_SLASH ? (uint64_t)0 - lv : 0;
+            else
+                res = op == TOK_SLASH ? (uint64_t)(la / ra) : (uint64_t)(la % ra);
+        } else {
+            res = op == TOK_SLASH ? lv / rv : lv % rv;
+        }
+        break;
+    default:
+        return CONST_OP_UNSUPPORTED;
+    }
+    *out = const_mask_extend(res, width, is_signed);
+    return CONST_OP_OK;
+}
+
+/* The width and signedness `e` is evaluated at: in a typed evaluation its own
+ * fixed-width integer type, else (and for a bool) the 64-bit signed domain of
+ * const arguments and sizes. */
+static void const_eval_width(const Expr *e, bool typed, int *width, bool *is_signed) {
+    int w = typed && e->type ? type_fixed_int_bits(e->type) : 0;
+    *width = w ? w : 64;
+    *is_signed = w ? type_is_signed(e->type) : true;
+}
+
 /* Evaluate `e` with const params bound through (var_names, concrete, count),
- * where a binding for a const param is a TYPE_CONST_INT. Returns false and
- * stashes the last-error on a hard failure; returns false without an error
- * when a referenced var is unbound (a still-symbolic template context, where
- * the caller keeps the expression symbolic). */
-static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
-                            int count, int64_t *out) {
+ * where a binding for a const param is a TYPE_CONST_INT. `typed` evaluates
+ * every node at its own type (const_eval_typed); otherwise the whole
+ * expression is evaluated in the i64 domain. Returns false and stashes the
+ * last-error on a hard failure; returns false without an error when a
+ * referenced var is unbound (a still-symbolic template context, where the
+ * caller keeps the expression symbolic). */
+static bool const_expr_eval(Expr *e, bool typed, const char **var_names,
+                            Type **concrete, int count, int64_t *out) {
     if (!e) return false;
     switch (e->kind) {
     case EXPR_INT_LIT:
@@ -962,7 +1027,17 @@ static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
         for (int i = 0; i < count; i++) {
             if (var_names[i] == e->type_var_ref.name) {
                 if (concrete[i]->kind == TYPE_CONST_INT) {
-                    *out = concrete[i]->const_int.value;
+                    int64_t v = concrete[i]->const_int.value;
+                    int w; bool sg;
+                    const_eval_width(e, typed, &w, &sg);
+                    if ((int64_t)const_mask_extend((uint64_t)v, w, sg) != v) {
+                        const_eval_fail(e, "const parameter does not fit i32 in expression "
+                            "position (a const parameter is an i32 where it is read as a "
+                            "value; a value this large is usable only in a type or size "
+                            "position)");
+                        return false;
+                    }
+                    *out = v;
                     return true;
                 }
                 /* Bound to another symbolic param (a generic body naming
@@ -978,12 +1053,14 @@ static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
     }
     case EXPR_UNARY_PREFIX: {
         int64_t v;
-        if (!const_expr_eval(e->unary_prefix.operand, var_names, concrete, count, &v))
+        if (!const_expr_eval(e->unary_prefix.operand, typed, var_names, concrete, count, &v))
             return false;
+        int w; bool sg;
+        const_eval_width(e, typed, &w, &sg);
         switch (e->unary_prefix.op) {
-        case TOK_MINUS: *out = (int64_t)(0 - (uint64_t)v); return true;
-        case TOK_TILDE: *out = (int64_t)(~(uint64_t)v);    return true;
-        case TOK_BANG:  *out = (v == 0) ? 1 : 0;           return true;
+        case TOK_MINUS: *out = (int64_t)const_mask_extend(0 - (uint64_t)v, w, sg); return true;
+        case TOK_TILDE: *out = (int64_t)const_mask_extend(~(uint64_t)v, w, sg);    return true;
+        case TOK_BANG:  *out = (v == 0) ? 1 : 0;                                    return true;
         default:
             const_eval_fail(e, "operator not allowed in a const-generic expression");
             return false;
@@ -991,58 +1068,49 @@ static bool const_expr_eval(Expr *e, const char **var_names, Type **concrete,
     }
     case EXPR_BINARY: {
         int64_t l, r;
-        if (!const_expr_eval(e->binary.left, var_names, concrete, count, &l)) return false;
-        if (!const_expr_eval(e->binary.right, var_names, concrete, count, &r)) return false;
-        uint64_t ul = (uint64_t)l, ur = (uint64_t)r;
-        switch (e->binary.op) {
-        case TOK_PLUS:    *out = (int64_t)(ul + ur); return true;
-        case TOK_MINUS:   *out = (int64_t)(ul - ur); return true;
-        case TOK_STAR:    *out = (int64_t)(ul * ur); return true;
-        case TOK_AMP:     *out = (int64_t)(ul & ur); return true;
-        case TOK_PIPE:    *out = (int64_t)(ul | ur); return true;
-        case TOK_CARET:   *out = (int64_t)(ul ^ ur); return true;
-        case TOK_LTLT:    *out = (int64_t)(ul << (ur & 63)); return true;
-        case TOK_GTGT:    *out = l >> (ur & 63); return true;  /* arithmetic (i64 domain) */
-        case TOK_EQEQ:    *out = (l == r) ? 1 : 0; return true;
-        case TOK_BANGEQ:  *out = (l != r) ? 1 : 0; return true;
-        case TOK_LT:      *out = (l <  r) ? 1 : 0; return true;
-        case TOK_GT:      *out = (l >  r) ? 1 : 0; return true;
-        case TOK_LTEQ:    *out = (l <= r) ? 1 : 0; return true;
-        case TOK_GTEQ:    *out = (l >= r) ? 1 : 0; return true;
-        case TOK_AMPAMP:  *out = (l != 0 && r != 0) ? 1 : 0; return true;
-        case TOK_PIPEPIPE: *out = (l != 0 || r != 0) ? 1 : 0; return true;
-        case TOK_SLASH:
-        case TOK_PERCENT:
-            if (r == 0) {
-                const_eval_fail(e, e->binary.op == TOK_SLASH
-                    ? "division by zero in const-generic expression"
-                    : "modulo by zero in const-generic expression");
-                return false;
-            }
-            if (l == INT64_MIN && r == -1) {
-                const_eval_fail(e, "overflow in const-generic expression (i64.min / -1)");
-                return false;
-            }
-            *out = (e->binary.op == TOK_SLASH) ? l / r : l % r;
+        if (!const_expr_eval(e->binary.left, typed, var_names, concrete, count, &l)) return false;
+        if (!const_expr_eval(e->binary.right, typed, var_names, concrete, count, &r)) return false;
+        /* A comparison is made at its operands' type; everything else at its
+         * own. */
+        int w; bool sg;
+        const_eval_width(const_op_yields_bool(e->binary.op) ? e->binary.left : e,
+                         typed, &w, &sg);
+        uint64_t res;
+        switch (const_binary_op(e->binary.op, (uint64_t)l, (uint64_t)r, w, sg, &res)) {
+        case CONST_OP_OK:
+            *out = (int64_t)res;
             return true;
-        default:
-            const_eval_fail(e, "operator not allowed in a const-generic expression");
+        case CONST_OP_DIV_ZERO:
+            const_eval_fail(e, e->binary.op == TOK_SLASH
+                ? "division by zero in const-generic expression"
+                : "modulo by zero in const-generic expression");
             return false;
+        case CONST_OP_UNSUPPORTED:
+            break;
         }
+        const_eval_fail(e, "operator not allowed in a const-generic expression");
+        return false;
     }
     case EXPR_CAST: {
         int64_t v;
-        if (!const_expr_eval(e->cast.operand, var_names, concrete, count, &v)) return false;
-        if (!e->cast.target || !const_eval_mask(e->cast.target->kind, v, out)) {
+        if (!const_expr_eval(e->cast.operand, typed, var_names, concrete, count, &v)) return false;
+        int w = e->cast.target ? type_fixed_int_bits(e->cast.target) : 0;
+        if (w == 0) {
             const_eval_fail(e, "cast in a const-generic expression must target a fixed-width integer type");
             return false;
         }
+        *out = (int64_t)const_mask_extend((uint64_t)v, w, type_is_signed(e->cast.target));
         return true;
     }
     default:
         const_eval_fail(e, "expression not allowed in a const-generic argument");
         return false;
     }
+}
+
+bool const_eval_typed(Expr *e, const char **var_names, Type **concrete,
+                      int count, int64_t *out) {
+    return const_expr_eval(e, true, var_names, concrete, count, out);
 }
 
 /* Public entry: evaluate a const-arg carrier type (TYPE_CONST_INT or
@@ -1072,7 +1140,7 @@ bool const_type_eval(Type *t, const char **var_names, Type **concrete,
         return false;
     }
     if (t->kind == TYPE_CONST_EXPR)
-        return const_expr_eval(t->const_expr.expr, var_names, concrete, count, out);
+        return const_expr_eval(t->const_expr.expr, false, var_names, concrete, count, out);
     return false;
 }
 

@@ -121,6 +121,12 @@ typedef struct StaticAssert {
                                is never monomorphized still gets its verdict,
                                and mono_register does not judge it again per
                                instance */
+    bool typed;             /* a function body's condition: type-checked as an
+                               ordinary expression, so each instance evaluates
+                               it at those types (const_eval_typed), as a
+                               concrete condition is folded. A type body's
+                               condition is evaluated in the i64 const domain
+                               (const_type_eval), concrete or not */
 } StaticAssert;
 
 typedef struct FieldPattern {

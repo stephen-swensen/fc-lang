@@ -8348,6 +8348,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                         na[n].msg = e->static_assert_expr.msg;
                         na[n].loc = e->loc;
                         na[n].owner = fd->let.name;
+                        na[n].typed = true;
                         fd->let.static_asserts = na;
                         fd->let.static_assert_count = n + 1;
                     }
@@ -8510,16 +8511,26 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
     case PAT_ERROR:   /* malformed pattern: treat as wildcard, bind nothing */
         break;
     case PAT_BINDING:
-        /* Check if binding name is a no-payload union variant */
+        /* A bare name that names one of the union's variants is that variant,
+         * not a binding. A payload variant must be matched with its payload
+         * pattern; written bare it is an error (it would otherwise bind the
+         * whole value and match everything), read on as `name(_)`. */
         if (type->kind == TYPE_UNION) {
             for (int v = 0; v < type->unio.variant_count; v++) {
-                if (type->unio.variants[v].name == pat->binding.name &&
-                    type->unio.variants[v].payload == NULL) {
-                    pat->kind = PAT_VARIANT;
-                    pat->variant.variant = pat->binding.name;
-                    pat->variant.payload = NULL;
-                    return;
+                if (type->unio.variants[v].name != pat->binding.name) continue;
+                Pattern *payload = NULL;
+                if (type->unio.variants[v].payload) {
+                    diag_error(pat->loc, "variant '%s' carries a payload; match it as "
+                        "`%s(x)`, or `%s(_)` to ignore the payload",
+                        pat->binding.name, pat->binding.name, pat->binding.name);
+                    payload = arena_alloc(ctx->arena, sizeof(Pattern));
+                    payload->kind = PAT_WILDCARD;
+                    payload->loc = pat->loc;
                 }
+                pat->kind = PAT_VARIANT;
+                pat->variant.variant = pat->binding.name;
+                pat->variant.payload = payload;
+                return;
             }
         }
         /* Enum subjects: a bare name matching a variant is that variant. */
@@ -8679,8 +8690,8 @@ static void check_match_pattern(CheckCtx *ctx, Pattern *pat, Type *type, bool re
             if (type->unio.variants[v].name != pat->variant.variant) continue;
             found = true;
             /* The pattern's shape says whether the variant has a payload, as
-             * for `ok` on a result. (A bare name that is not a no-payload
-             * variant is a binding, so a bare payload variant never gets here.) */
+             * for `ok` on a result. (A bare payload variant is reported as a
+             * PAT_BINDING and reaches here with a wildcard payload.) */
             Type *payload = type->unio.variants[v].payload;
             if (pat->variant.payload && !payload) {
                 diag_error(pat->loc, "variant '%s' carries no payload; write bare `%s`",
@@ -9960,21 +9971,9 @@ static Expr *const_clone_expr(CheckCtx *ctx, Expr *src) {
  * is not a constant initializer. Only fixed-width types (i8..u64, bool)
  * are evaluated: isize/usize widths are target-defined and float folding is
  * left to the C compiler, so those return NULL and the tree is kept.
- * The results must match what codegen computes at runtime: two's-complement
- * wrap, shift-amount masking, arithmetic vs. logical right shift, and the
- * signed INT_MIN/-1 case. */
-
-/* Bit width of a fixed-width integer type, or 0 for isize/usize/non-integer. */
-
-/* Mask a 64-bit value to `width` bits, sign-extending back to 64 if signed. */
-static uint64_t const_mask_extend(uint64_t v, int width, bool is_signed) {
-    if (width >= 64) return v;
-    uint64_t mask = ((uint64_t)1 << width) - 1;
-    v &= mask;
-    if (is_signed && (v & ((uint64_t)1 << (width - 1))))
-        v |= ~mask;
-    return v;
-}
+ * The results must match what codegen computes at runtime, so the operators
+ * are evaluated by const_binary_op (types.c), which the context-free const
+ * evaluator shares. */
 
 /* A scalar integer value read from a literal, normalized to 64 bits. */
 typedef struct { uint64_t val; int width; bool is_signed; } ConstScalar;
@@ -10119,82 +10118,25 @@ static Expr *try_eval_const(CheckCtx *ctx, Expr *e) {
         ConstScalar a, b;
         if (!const_read_scalar(e->binary.left, &a)) return NULL;
         if (!const_read_scalar(e->binary.right, &b)) return NULL;
-
-        switch (op) {
-        case TOK_EQEQ: case TOK_BANGEQ:
-        case TOK_LT: case TOK_GT: case TOK_LTEQ: case TOK_GTEQ: {
-            if (e->type->kind != TYPE_BOOL) return NULL;
-            /* Operands share a common type post-widening; use left's signedness. */
-            bool res;
-            if (a.is_signed) {
-                int64_t la = (int64_t)a.val, lb = (int64_t)b.val;
-                switch (op) {
-                case TOK_EQEQ:  res = la == lb; break;
-                case TOK_BANGEQ:res = la != lb; break;
-                case TOK_LT:    res = la <  lb; break;
-                case TOK_GT:    res = la >  lb; break;
-                case TOK_LTEQ:  res = la <= lb; break;
-                default:        res = la >= lb; break;
-                }
-            } else {
-                uint64_t la = a.val, lb = b.val;
-                switch (op) {
-                case TOK_EQEQ:  res = la == lb; break;
-                case TOK_BANGEQ:res = la != lb; break;
-                case TOK_LT:    res = la <  lb; break;
-                case TOK_GT:    res = la >  lb; break;
-                case TOK_LTEQ:  res = la <= lb; break;
-                default:        res = la >= lb; break;
-                }
-            }
-            return const_make_bool(ctx, e->type, res, e->loc);
-        }
-        case TOK_AMPAMP:
-            return const_make_bool(ctx, e->type, (a.val != 0) && (b.val != 0), e->loc);
-        case TOK_PIPEPIPE:
-            return const_make_bool(ctx, e->type, (a.val != 0) || (b.val != 0), e->loc);
-        default: break;
-        }
-
-        int w = type_fixed_int_bits(e->type);
+        /* A comparison is made at its operands' (shared, post-widening) type,
+         * read from the left; everything else at the node's own type. */
+        bool is_bool = const_op_yields_bool(op);
+        if (is_bool && e->type->kind != TYPE_BOOL) return NULL;
+        int w = is_bool ? a.width : type_fixed_int_bits(e->type);
         if (w == 0) return NULL;
-        bool s = type_is_signed(e->type);
-        uint64_t lv = const_mask_extend(a.val, w, s);
-        uint64_t rv = const_mask_extend(b.val, w, s);
-        uint64_t shamt = (uint64_t)(w - 1);
+        bool s = is_bool ? a.is_signed : type_is_signed(e->type);
         uint64_t r;
-        switch (op) {
-        case TOK_PLUS:  r = lv + rv; break;
-        case TOK_MINUS: r = lv - rv; break;
-        case TOK_STAR:  r = lv * rv; break;
-        case TOK_AMP:   r = lv & rv; break;
-        case TOK_PIPE:  r = lv | rv; break;
-        case TOK_CARET: r = lv ^ rv; break;
-        case TOK_LTLT:  r = lv << (rv & shamt); break;
-        case TOK_GTGT:
-            if (s) r = (uint64_t)((int64_t)lv >> (rv & shamt));
-            else   r = lv >> (rv & shamt);
+        switch (const_binary_op(op, a.val, b.val, w, s, &r)) {
+        case CONST_OP_OK:
             break;
-        case TOK_SLASH:
-        case TOK_PERCENT:
-            if (rv == 0) {
-                diag_error(e->loc, "division by zero in constant expression");
-                return NULL;
-            }
-            if (s) {
-                int64_t la = (int64_t)lv, ra = (int64_t)rv;
-                if (ra == -1)  /* INT_MIN/-1 and x%-1: avoid UB in fcc itself */
-                    r = (op == TOK_SLASH) ? ((uint64_t)0 - lv) : 0;
-                else
-                    r = (op == TOK_SLASH) ? (uint64_t)(la / ra) : (uint64_t)(la % ra);
-            } else {
-                r = (op == TOK_SLASH) ? (lv / rv) : (lv % rv);
-            }
-            break;
-        default:
+        case CONST_OP_DIV_ZERO:
+            diag_error(e->loc, "division by zero in constant expression");
+            return NULL;
+        case CONST_OP_UNSUPPORTED:
             return NULL;
         }
-        return const_make_int(ctx, e->type, const_mask_extend(r, w, s), e->loc);
+        return is_bool ? const_make_bool(ctx, e->type, r != 0, e->loc)
+                       : const_make_int(ctx, e->type, r, e->loc);
     }
     default:
         return NULL;

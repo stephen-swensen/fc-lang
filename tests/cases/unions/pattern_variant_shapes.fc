@@ -1,0 +1,23 @@
+// Each variant is matched in its own shape: a no-payload variant bare, a
+// payload variant with a payload pattern (`_` ignores it). A bare name that is
+// no variant still binds the whole value.
+union slot =
+    | empty
+    | full(i32)
+
+let kind = (s: slot) ->
+    match s with
+    | full(_) -> 1
+    | empty -> 0
+
+let payload = (s: slot) ->
+    match s with
+    | full(v) -> v
+    | other -> kind(other)
+
+let main = (args: str[]) ->
+    assert(kind(slot.full(3)) == 1)
+    assert(kind(slot.empty) == 0)
+    assert(payload(slot.full(7)) == 7)
+    assert(payload(slot.empty) == 0)
+    0

@@ -1,0 +1,15 @@
+// The bare-payload-variant rule holds wherever a union is matched, including a
+// struct field's pattern.
+union slot =
+    | empty
+    | full(i32)
+
+struct holder =
+    s: slot
+    n: i32
+
+let main = (args: str[]) ->
+    let h = holder { s = slot.full(3), n = 1 }
+    match h with
+    | { s = full, n = k } -> k - 1
+    | { s = empty, n = k } -> k

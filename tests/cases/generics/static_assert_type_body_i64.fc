@@ -1,0 +1,16 @@
+// A static_assert in a type body is a constant expression of the type, like
+// the sizes it guards, and is evaluated in the i64 const domain whether the
+// condition is concrete or over the type's const parameters: 2147483647 + 1
+// does not wrap there.
+struct concrete =
+    static_assert(2147483647 + 1 > 0, "i64 domain: no i32 wrap")
+    x: i32
+
+struct sized =
+    static_assert('n + 1 > 0, "i64 domain: no i32 wrap")
+    bytes: u8['n / 1000000000]
+
+let main = (args: str[]) ->
+    let c = default(concrete)
+    let s = default(sized<2147483647>)
+    c.x + (i32)s.bytes[0]

@@ -3541,7 +3541,7 @@ static void parse_struct_body(Parser *p, Decl *d, bool allow_static_assert) {
         int line_errs = diag_error_count();
         Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
         if (allow_static_assert && parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
-            StaticAssert sa = { sa_cond, sa_msg, sa_loc, d->struc.name, false };
+            StaticAssert sa = { .cond = sa_cond, .msg = sa_msg, .loc = sa_loc, .owner = d->struc.name };
             DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
         } else {
             Token *ftok = expect_name(p);
@@ -3608,7 +3608,7 @@ static Decl *parse_union_decl(Parser *p) {
         {
             Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
             if (parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
-                StaticAssert sa = { sa_cond, sa_msg, sa_loc, name, false };
+                StaticAssert sa = { .cond = sa_cond, .msg = sa_msg, .loc = sa_loc, .owner = name };
                 DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
                 recover_progress(p, guard);
                 skip_newlines(p);

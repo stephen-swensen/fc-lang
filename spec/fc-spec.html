@@ -2110,6 +2110,7 @@ match some_node with
 |---------|---------|
 | `_` | wildcard — matches anything, binds nothing |
 | `name` | matches anything, binds value to name |
+| `variant` | matches a no-payload variant; a name that names one of the subject's variants is that variant, never a binding, and a payload variant needs `variant(pattern)` |
 | `0`, `-1`, `42i64`, etc. | matches that exact integer literal value |
 | `'a'`, `'\\n'` | matches that exact char value |
 | `true`, `false` | matches that exact bool value |
@@ -2121,9 +2122,9 @@ match some_node with
 
 A name may be bound only once per pattern. `{ a, a }` and `both({ x = n, y = n })` are compile errors, not a last-wins rebinding — the same rule holds for a `let` or `for` destructuring pattern. Distinct arms may of course reuse a name, and a pattern binding may shadow an outer binding of the same name; only two bindings *within one pattern* collide. (A repeated no-payload variant name is not a binding at all, so `{ a = red, b = red }` is unaffected.)
 
-When matching on a union type, a bare identifier in pattern position is first checked against the union's no-payload variant names. If it matches a variant, it is a variant pattern (not a binding). If it does not match any variant, it is a binding pattern. This means variant names take precedence over bindings — you cannot bind a union value to a variable that shares a name with one of its no-payload variants. Inside an or-pattern alternative this rule is further constrained: because alternatives must be binding-free, a lone identifier must resolve to a no-payload variant (or be `_`); an unresolved bare name is a compile error rather than a binding.
+When matching on a union type, a bare identifier in pattern position is first checked against the union's variant names. If it names a no-payload variant, it is a variant pattern (not a binding). If it names a payload variant, it is a compile error: a payload variant is matched with a payload pattern (`| full(x)`, or `| full(_)` to ignore the payload), and a bare `| full` read as a binding would match every value, silently turning the arm into a catch-all. If it does not match any variant, it is a binding pattern. This means variant names take precedence over bindings — you cannot bind a union value to a variable that shares a name with one of its variants. Inside an or-pattern alternative this rule is further constrained: because alternatives must be binding-free, a lone identifier must resolve to a no-payload variant (or be `_`); an unresolved bare name is a compile error rather than a binding.
 
-A variant pattern's shape must match the variant: a no-payload variant is matched bare (`| empty`), and giving it a payload pattern (`| empty(y)`) is a compile error, as `ok(v)` is on a `void!`.
+A variant pattern's shape must match the variant: a no-payload variant is matched bare (`| empty`), and giving it a payload pattern (`| empty(y)`) is a compile error, as `ok(v)` is on a `void!`; a payload variant always carries a payload pattern.
 
 Negative integer literals such as `-1`, `-42i8`, and `-100i64` are valid in pattern position. The `-` is part of the literal, not a unary operator — the parser treats a minus sign immediately followed by digits as a single integer literal token in pattern context.
 
@@ -4219,6 +4220,8 @@ let halve = <'n>() ->
 ```
 
 A condition over const parameters is checked once per instantiation, on every path an instance can be reached by (a direct annotation, a call, an instance produced by const arithmetic inside another generic); a failing instance is rejected with the message: `static assertion failed in instantiation of 'uwide<100>': uwide width must be a multiple of 32, at least 64`. A fully concrete condition is judged immediately where it stands. In every case `static_assert` emits no code and evaluates nothing at runtime — it is the compile-time twin of `assert`: the same role (state a precondition, fail loudly on violation), moved to the instantiation boundary.
+
+**Evaluation.** A condition is evaluated by the rules of the body it stands in, and an instance judges it exactly as it judges the same condition with the instance's values written in. In a function body the condition is an ordinary expression of that body: it is typed like any other (a const parameter is the `i32` it is everywhere in the body, so the instance's value must fit), and it computes what the same expression computes at run time — `i32` arithmetic wraps and shift counts are masked, so `static_assert('n + 1 < 0, "…")` holds for `'n = 2147483647`, as `static_assert(2147483647 + 1 < 0, "…")` does. In a struct or union body the condition is a constant expression of the type, evaluated like the type's sizes in the 64-bit domain of const arguments, whether or not it mentions a const parameter; there, `2147483647 + 1` is simply `2147483648`.
 
 **Placement.** In a struct or union body, `static_assert` lines may appear anywhere among the members; in a function body, at any straight-line statement position. Position carries no semantic weight in either case — the assertion means exactly the same thing wherever it stands — so placement is documentation: co-locate an assert with what it protects (next to the field or buffer it justifies), and by convention lead the body with a function's instantiation contract so it reads as part of the signature. The one placement restriction is semantic, not stylistic: `static_assert` may not nest inside `if`/`match` arms, loop bodies, `defer`, or a lambda body. The assertion is unconditional — FC evaluates no branches at compile time — so nesting would visually promise conditionality that cannot exist.
 

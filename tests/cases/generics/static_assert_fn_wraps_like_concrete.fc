@@ -1,0 +1,28 @@
+// A static_assert condition in a function body is an ordinary expression: a
+// generic instance evaluates it at the types it was checked at, exactly as the
+// same condition with the value written in is folded. A const parameter read
+// as a value is an i32, so i32 arithmetic wraps, shift counts are masked, and
+// an unsigned subtraction wraps.
+let div_wraps = <'n>() ->
+    static_assert('n / -1 < 0, "i32.min / -1 wraps to i32.min")
+    0
+
+let add_wraps = <'n>() ->
+    static_assert('n + 1 < 0, "i32.max + 1 wraps to i32.min")
+    0
+
+let shift_masks = <'n>() ->
+    static_assert(1 << 'n == 2, "an i32 shift count is masked to 5 bits")
+    0
+
+let unsigned_wraps = <'n>() ->
+    static_assert((u32)'n - 1u32 > 100u32, "u32 0 - 1 wraps to u32.max")
+    0
+
+let main = (args: str[]) ->
+    static_assert(i32.min / -1 < 0, "i32.min / -1 wraps to i32.min")
+    static_assert(i32.max + 1 < 0, "i32.max + 1 wraps to i32.min")
+    static_assert(1 << 33 == 2, "an i32 shift count is masked to 5 bits")
+    static_assert((u32)0 - 1u32 > 100u32, "u32 0 - 1 wraps to u32.max")
+    div_wraps<-2147483648>() + add_wraps<2147483647>() + shift_masks<33>() +
+        unsigned_wraps<0>()

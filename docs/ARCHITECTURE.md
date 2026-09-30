@@ -349,9 +349,12 @@ arrays parallel to `type_params`.
 Constant expressions are evaluated in two places. pass2 folds a `let`
 initializer or a concrete size or argument in context (`fold_const_leaf` and
 its callers), with names resolved and diagnostics at hand. `const_type_eval`
-evaluates a `TYPE_CONST_EXPR` with no context during substitution, over
-`int64_t` with wrapping and masked shifts, and stashes its errors (see
-[Errors](#errors)).
+evaluates a `TYPE_CONST_EXPR` with no context during substitution, in the
+`int64_t` domain of const arguments and sizes, and stashes its errors (see
+[Errors](#errors)); `const_eval_typed` is its mode for a function body's
+`static_assert` condition, which evaluates each node at the type pass2 gave it,
+as the concrete condition is folded. Both places compute every operator with
+`const_binary_op`, so they agree with each other and with the emitted C.
 
 ## Language server
 

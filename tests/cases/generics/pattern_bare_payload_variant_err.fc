@@ -1,0 +1,12 @@
+// The bare-payload-variant rule holds for a generic union matched in a generic
+// function.
+union maybe =
+    | nothing
+    | just('a)
+
+let has = (m: maybe<'a>) ->
+    match m with
+    | just -> true
+    | nothing -> false
+
+let main = (args: str[]) -> if has(maybe<i32>.just(3)) then 0 else 1

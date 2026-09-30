@@ -1,0 +1,1 @@
+variant 'full' carries a payload; match it as `full(x)`, or `full(_)` to ignore the payload

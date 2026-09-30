@@ -160,7 +160,10 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
                 wrapper.kind = TYPE_CONST_EXPR;
                 wrapper.const_expr.expr = sas[i].cond;
                 int64_t v;
-                if (const_type_eval(&wrapper, type_params, type_args, nbind, &v)) {
+                bool evaluated = sas[i].typed
+                    ? const_eval_typed(sas[i].cond, type_params, type_args, nbind, &v)
+                    : const_type_eval(&wrapper, type_params, type_args, nbind, &v);
+                if (evaluated) {
                     if (v == 0) {
                         char *inst = type_inst_display(disp, type_args, count);
                         diag_error(sas[i].loc,

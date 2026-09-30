@@ -1,0 +1,7 @@
+// A const parameter read as a value in a function body's static_assert is an
+// i32, as it is everywhere else in the body, so the instance's value must fit.
+let positive = <'n>() ->
+    static_assert('n > 0, "n must be positive")
+    0
+
+let main = (args: str[]) -> positive<4000000000>()
