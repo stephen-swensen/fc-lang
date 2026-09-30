@@ -12,6 +12,20 @@ static DiagSink  g_sink = NULL;
 static void     *g_sink_ud = NULL;
 static jmp_buf  *g_abort_env = NULL;
 
+/* Errors held back by a speculative parse (see diag_speculate_begin). */
+typedef struct {
+    SrcLoc loc;
+    char *msg;
+} HeldDiag;
+static HeldDiag *g_held = NULL;
+static int g_held_count = 0, g_held_cap = 0;
+static int g_speculation_depth = 0;
+
+static void drop_held(int from) {
+    for (int i = from; i < g_held_count; i++) free(g_held[i].msg);
+    g_held_count = from;
+}
+
 void diag_set_filename(const char *filename) {
     g_filename = filename;
 }
@@ -27,6 +41,8 @@ void diag_set_sink(DiagSink sink, void *userdata) {
 
 void diag_reset_counts(void) {
     g_error_count = 0;
+    drop_held(0);
+    g_speculation_depth = 0;
 }
 
 void diag_set_abort_jmp(jmp_buf *env) {
@@ -34,43 +50,66 @@ void diag_set_abort_jmp(jmp_buf *env) {
 }
 
 /* Hand the message to the sink, or print it to stderr as
- * "file:line:col: error: msg". A location without a filename gets g_filename. */
-static void emit(SrcLoc loc, const char *fmt, va_list ap) {
+ * "file:line:col: error: msg", and count it. A location without a filename
+ * gets g_filename. */
+static void report(SrcLoc loc, const char *msg) {
     const char *fn = loc.filename ? loc.filename : g_filename;
     if (g_sink) {
-        /* Sized to the message, so the editor shows the same text as the CLI;
-         * the longest messages (deep instantiation chains) need their tail. */
-        char *buf = str_vsprintf(fmt, ap);
         SrcLoc resolved = { .filename = fn, .line = loc.line, .col = loc.col };
-        g_sink(resolved, buf, g_sink_ud);
-        free(buf);
+        g_sink(resolved, msg, g_sink_ud);
     } else {
-        fprintf(stderr, "%s:%d:%d: error: ", fn, loc.line, loc.col);
-        vfprintf(stderr, fmt, ap);
-        fprintf(stderr, "\n");
+        fprintf(stderr, "%s:%d:%d: error: %s\n", fn, loc.line, loc.col, msg);
     }
+    g_error_count++;
+}
+
+/* Report everything a speculation held, in order. */
+static void flush_held(void) {
+    for (int i = 0; i < g_held_count; i++) report(g_held[i].loc, g_held[i].msg);
+    drop_held(0);
+    g_speculation_depth = 0;
+}
+
+int diag_speculate_begin(void) {
+    g_speculation_depth++;
+    return g_held_count;
+}
+
+void diag_speculate_end(int mark, bool keep) {
+    if (!keep) drop_held(mark);
+    if (--g_speculation_depth == 0) flush_held();
 }
 
 void diag_error(SrcLoc loc, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    emit(loc, fmt, ap);
+    /* Sized to the message, so the editor shows the same text as the CLI; the
+     * longest messages (deep instantiation chains) need their tail. */
+    char *msg = str_vsprintf(fmt, ap);
     va_end(ap);
-    g_error_count++;
+    if (g_speculation_depth > 0) {
+        DA_APPEND(g_held, g_held_count, g_held_cap, ((HeldDiag){ loc, msg }));
+        return;
+    }
+    report(loc, msg);
+    free(msg);
 }
 
 _Noreturn void diag_fatal(SrcLoc loc, const char *fmt, ...) {
+    flush_held();
     va_list ap;
     va_start(ap, fmt);
-    emit(loc, fmt, ap);
+    char *msg = str_vsprintf(fmt, ap);
     va_end(ap);
-    g_error_count++;
+    report(loc, msg);
+    free(msg);          /* the sink copies; the longjmp path must not leak */
     /* In server mode, abort this analysis rather than the process. */
     if (g_abort_env) longjmp(*g_abort_env, 1);
     exit(1);
 }
 
 _Noreturn void diag_fatal_simple(const char *fmt, ...) {
+    flush_held();
     va_list ap;
     va_start(ap, fmt);
     char *buf = str_vsprintf(fmt, ap);   /* messages embed unbounded paths */

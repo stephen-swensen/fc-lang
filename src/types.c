@@ -238,10 +238,20 @@ Type *type_deep_copy(Arena *a, Type *t) {
         *c = *t;
         return c;
     }
-    default:
-        /* Primitive singletons, type vars, any*, error, never: never renamed. */
-        return t;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    /* Primitive singletons, type vars, any*, error, never: never renamed. */
+    return t;
 }
 
 /* Drop a top-level `const` (the inverse of type_make_const). Only
@@ -282,9 +292,23 @@ Type *type_read_only(Arena *a, Type *t) {
         c->result.inner = inner;
         return c;
     }
-    default:
-        return t;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_FUNC:
+    case TYPE_STRUCT:
+    case TYPE_UNION:
+    case TYPE_ENUM:
+    case TYPE_TYPE_VAR:
+    case TYPE_FIXED_ARRAY:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_STUB:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return t;
 }
 
 Type *type_slice_elem_read(Arena *a, Type *slice) {
@@ -455,8 +479,14 @@ static bool types_equal(Type *a, Type *b, bool with_const) {
             if (!types_equal(a->func.param_types[i], b->func.param_types[i], with_const))
                 return false;
         return types_equal(a->func.return_type, b->func.return_type, with_const);
-    default: return true;   /* primitives match by kind */
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return true;   /* primitives match by kind */
 }
 
 bool type_eq(Type *a, Type *b) { return types_equal(a, b, true); }
@@ -560,14 +590,11 @@ const char *type_name(Type *t) {
         return "const ?";
     }
     if (t->alias) return t->alias;
-    if (t->kind < TYPE_POINTER) {
-        return primitive_names[t->kind];
-    }
-    /* For compound types, check known aliases */
     if (is_str_type(t)) return "str";
     if (is_cstr_type(t)) return "cstr";
-    /* For compound types, build a recursive name */
     switch (t->kind) {
+    CASE_TYPE_PRIMITIVES:
+        return primitive_names[t->kind];
     case TYPE_POINTER: {
         const char *in = type_name(t->pointer.pointee);
         TN_PUBLISH(4, name_is_const_prefixed(in) ? str_sprintf("(%s)*", in)
@@ -653,8 +680,10 @@ const char *type_name(Type *t) {
     case TYPE_ERROR:     return "<error>";
     case TYPE_NEVER:     return "never";
     case TYPE_UNRESOLVED: return "<unresolved>";
-    default:             return "?";
+    case TYPE_COUNT:
+        break;
     }
+    return "?";
 }
 
 /* Adding `const` to the container lets the element drop its own `const`:
@@ -888,6 +917,10 @@ const char *const_eval_take_error(SrcLoc *loc) {
     return msg;
 }
 
+bool const_eval_error_pending(void) {
+    return g_const_eval_err != NULL;
+}
+
 static void const_eval_fail(Expr *e, const char *msg) {
     /* First failure wins: it names the innermost real cause. */
     if (!g_const_eval_err) { g_const_eval_err = msg; g_const_eval_err_loc = e->loc; }
@@ -1060,9 +1093,20 @@ bool type_needs_eq_func(Type *t) {
         return true;
     case TYPE_STUB:
         return false;  /* unresolved stubs don't need eq functions */
-    default:
-        return false;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_POINTER:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return false;
 }
 
 /* A fully substituted generic struct/union instance shares one subtree between
@@ -1093,10 +1137,10 @@ static void clean_set_add(TypeVarCleanSet *s, Type *t) {
         int ncap = s->cap * 2;
         Type **ni;
         if (s->items == s->inline_buf) {
-            ni = malloc(sizeof(Type*) * (size_t)ncap);
+            ni = xmalloc(sizeof(Type*) * (size_t)ncap);
             memcpy(ni, s->items, sizeof(Type*) * (size_t)s->count);
         } else {
-            ni = realloc(s->items, sizeof(Type*) * (size_t)ncap);
+            ni = xrealloc(s->items, sizeof(Type*) * (size_t)ncap);
         }
         s->items = ni;
         s->cap = ncap;
@@ -1144,8 +1188,16 @@ static bool type_contains_type_var_memo(Type *t, TypeVarCleanSet *clean) {
             if (type_contains_type_var_memo(t->stub.type_args[i], clean)) return true;
         clean_set_add(clean, t);
         return false;
-    default: return false;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return false;
 }
 
 bool type_contains_type_var(Type *t) {
@@ -1216,7 +1268,15 @@ static void walk_vars(VarWalk *w, Type *t, uint8_t pos_kind) {
         for (int i = 0; i < t->stub.type_arg_count; i++)
             walk_vars(w, t->stub.type_args[i], arg_slot_kind(w, t, i));
         return;
-    default: return;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_CONST_INT:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        return;
     }
 }
 
@@ -1248,8 +1308,8 @@ static void var_list_add(const char *name, uint8_t kind, void *ctx) {
     }
     if (*l->count >= *l->cap) {
         *l->cap = *l->cap ? *l->cap * 2 : 8;
-        *l->vars = realloc(*l->vars, (size_t)*l->cap * sizeof(**l->vars));
-        if (l->kinds) *l->kinds = realloc(*l->kinds, (size_t)*l->cap * sizeof(**l->kinds));
+        *l->vars = xrealloc(*l->vars, (size_t)*l->cap * sizeof(**l->vars));
+        if (l->kinds) *l->kinds = xrealloc(*l->kinds, (size_t)*l->cap * sizeof(**l->kinds));
     }
     (*l->vars)[*l->count] = name;
     if (l->kinds) (*l->kinds)[*l->count] = kind;
@@ -1494,10 +1554,19 @@ Type *type_substitute(Arena *a, Type *t, const char **var_names, Type **concrete
         ns->stub.qualified_name = t->stub.qualified_name;
         ns->stub.type_args = new_targs;
         ns->stub.type_arg_count = new_targ_count;
+        ns->stub.base_name = t->stub.base_name;
         return ns;
     }
-    default: return t;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return t;
 }
 
 /* Append a length-prefixed, self-delimiting encoding of `piece` ("3_i32")
@@ -1624,10 +1693,10 @@ char *mangle_type_name(Type *t) {
          * nested in another instance's type args (box<box<i32>>, where the
          * inner arg is still an unresolved stub): mangled as the bare base
          * name, distinct instantiations would collide and resolve the wrong C
-         * type name. Concrete top-level decl field types keep their args as
-         * base-name stubs (never rewritten in place), so this never
-         * double-mangles. */
-        return mangle_with_args(t->stub.name, t->stub.type_args, t->stub.type_arg_count);
+         * type name. A stub already renamed in place to its instance name
+         * spells from its recorded base, so re-mangling it is idempotent. */
+        return mangle_with_args(t->stub.base_name ? t->stub.base_name : t->stub.name,
+                                t->stub.type_args, t->stub.type_arg_count);
     case TYPE_TYPE_VAR: return str_dup(t->type_var.name);
     case TYPE_ANY_PTR: return str_dup("__y");
     case TYPE_ERROR:   return str_dup("__err"); /* defensive: never monomorphized */
@@ -1666,8 +1735,11 @@ char *mangle_type_name(Type *t) {
         if (t->func.is_variadic) r = str_appendf(r, "_v");
         return r;
     }
-    default: return str_dup("__unk"); /* defensive: TYPE_COUNT etc. */
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return str_dup("__unk"); /* defensive: TYPE_COUNT etc. */
 }
 
 const char *mangle_generic_name(InternTable *intern_tbl, const char *base,
@@ -1710,9 +1782,7 @@ Type *type_tuple(Arena *a, Type **elems, int n) {
 }
 
 char *type_inst_display(const char *name, Type **args, int count) {
-    const char *base = name ? name : "?";
-    for (const char *p = base; (p = strstr(p, "__")); p += 2) base = p + 2;
-    char *s = str_sprintf("%s", base);
+    char *s = str_sprintf("%s", name ? mangled_source_name(name) : "?");
     if (count > 0) {
         s = str_appendf(s, "<");
         for (int i = 0; i < count; i++)
@@ -1745,8 +1815,87 @@ int type_arg_depth(Type *t) {
     case TYPE_STRUCT: return 1 + max_arg_depth(t->struc.type_args, t->struc.type_arg_count, 0);
     case TYPE_UNION:  return 1 + max_arg_depth(t->unio.type_args, t->unio.type_arg_count, 0);
     case TYPE_STUB:   return 1 + max_arg_depth(t->stub.type_args, t->stub.type_arg_count, 0);
-    default: return 1; /* primitives, type vars, any* */
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return 1; /* primitives, type vars, any* */
+}
+
+static const char *const SLICE_MEMBERS[]  = { "len", "ptr" };
+static const char *const OPTION_MEMBERS[] = { "is_some", "is_none" };
+static const char *const RESULT_MEMBERS[] = { "is_ok", "is_err" };
+
+const char *const *type_builtin_members(Type *t, int *count) {
+    *count = 2;
+    switch (t ? t->kind : TYPE_ERROR) {
+    case TYPE_SLICE:  return SLICE_MEMBERS;
+    case TYPE_OPTION: return OPTION_MEMBERS;
+    case TYPE_RESULT: return RESULT_MEMBERS;
+    default: *count = 0; return NULL;
+    }
+}
+
+Type *type_builtin_member_type(Arena *a, Type *t, const char *name) {
+    int n;
+    const char *const *members = type_builtin_members(t, &n);
+    for (int i = 0; i < n; i++) {
+        if (strcmp(members[i], name) != 0) continue;
+        if (t->kind != TYPE_SLICE) return type_bool();
+        if (i == 0) return type_int64();                    /* len */
+        Type *p = type_pointer(a, t->slice.elem);            /* ptr */
+        if (t->is_const) p->is_const = true;
+        return p;
+    }
+    return NULL;
+}
+
+int type_fixed_int_bits(Type *t) {
+    if (!t) return 0;
+    switch (t->kind) {
+    case TYPE_INT8:  case TYPE_UINT8:  return 8;
+    case TYPE_INT16: case TYPE_UINT16: return 16;
+    case TYPE_INT32: case TYPE_UINT32: return 32;
+    case TYPE_INT64: case TYPE_UINT64: return 64;
+    default: return 0;
+    }
+}
+
+/* The one list of numeric type properties. Every reader (type checking, the
+ * per-instance check, editor completion) goes through type_property_type. */
+static const struct {
+    const char *name;
+    bool float_only;
+} TYPE_PROPERTIES[] = {
+    { "bits", false }, { "min", false }, { "max", false },
+    { "epsilon", true }, { "nan", true }, { "inf", true }, { "neg_inf", true },
+};
+
+int type_property_count(void) {
+    return (int)(sizeof TYPE_PROPERTIES / sizeof TYPE_PROPERTIES[0]);
+}
+
+const char *type_property_name(int i) {
+    return TYPE_PROPERTIES[i].name;
+}
+
+Type *type_property_type(Type *t, const char *prop) {
+    bool is_var = t->kind == TYPE_TYPE_VAR;
+    if (!is_var && !type_is_integer(t) && !type_is_float(t)) return NULL;
+    for (int i = 0; i < type_property_count(); i++) {
+        if (strcmp(TYPE_PROPERTIES[i].name, prop) != 0) continue;
+        if (TYPE_PROPERTIES[i].float_only && !is_var && !type_is_float(t)) return NULL;
+        return strcmp(prop, "bits") == 0 ? type_int32() : t;
+    }
+    return NULL;
 }
 
 const char *type_property_c(Type *t, const char *prop) {

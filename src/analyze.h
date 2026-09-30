@@ -99,8 +99,8 @@ typedef struct AnalysisResult {
 
     /* Lexer abort-cleanup slots (see lexer.h): hold a tokenization's in-progress
      * arrays so an abort during lexing can free them. NULL on a clean run. */
-    Token           *lex_raw;
-    Token           *lex_layout;
+    Token           *lex_input;
+    Token           *lex_output;
 } AnalysisResult;
 
 /* Analyze `source` (NUL-terminated copy made internally) under `filename`,

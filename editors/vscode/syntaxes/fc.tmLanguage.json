@@ -54,7 +54,7 @@
         },
         {
           "name": "support.function.builtin.fc",
-          "match": "\\b(alloc|alloca|free|sizeof|alignof|default|assert|some|ok|err|error_name|enum_of|bitcast|atomic_load_acquire|atomic_store_release)\\b"
+          "match": "\\b(alloc|alloca|free|sizeof|alignof|default|assert|static_assert|some|ok|err|error_name|enum_of|bitcast|atomic_load_acquire|atomic_store_release)\\b"
         }
       ]
     },

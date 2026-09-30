@@ -23,8 +23,15 @@
 
 /* ---- small helpers ---- */
 
+/* Absolute on either kind of host: /x, and on Windows also \\x, C:\\x and C:/x. */
 static bool path_is_abs(const char *p) {
-    return p[0] == '/';
+    if (p[0] == '/') return true;
+#if defined(_WIN32)
+    if (p[0] == '\\') return true;
+    if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':')
+        return true;
+#endif
+    return false;
 }
 
 /* Directory portion of `path` (everything before the last '/'), malloc'd.
@@ -39,7 +46,7 @@ static char *path_dir(const char *path) {
 /* "dir/rel", malloc'd. */
 static char *path_join(const char *dir, const char *rel) {
     size_t dn = strlen(dir), rn = strlen(rel);
-    char *p = malloc(dn + 1 + rn + 1);
+    char *p = xmalloc(dn + 1 + rn + 1);
     memcpy(p, dir, dn);
     p[dn] = '/';
     memcpy(p + dn + 1, rel, rn);
@@ -54,8 +61,8 @@ static char *path_join(const char *dir, const char *rel) {
 static void emit(ExpandedArgs *out, char *tok, char *dir) {
     if (out->count >= out->cap) {
         out->cap = out->cap ? out->cap * 2 : 16;
-        out->tokens = realloc(out->tokens, (size_t)out->cap * sizeof(char *));
-        out->dirs   = realloc(out->dirs,   (size_t)out->cap * sizeof(char *));
+        out->tokens = xrealloc(out->tokens, (size_t)out->cap * sizeof(char *));
+        out->dirs   = xrealloc(out->dirs,   (size_t)out->cap * sizeof(char *));
     }
     out->tokens[out->count] = tok;
     out->dirs[out->count]   = dir;
@@ -104,9 +111,24 @@ static bool expand_file(ExpandedArgs *out, const char *rsp_path,
             while (*p && *p != '\n') p++;
             continue;
         }
+        /* A token is a run of non-space characters, or everything between a
+         * pair of double quotes (so a path may hold spaces; no escapes). */
         char *s = p;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
-        int len = (int)(p - s);
+        int len;
+        if (*p == '"') {
+            s = ++p;
+            while (*p && *p != '"' && *p != '\n') p++;
+            if (*p != '"') {
+                *err = str_sprintf("unterminated quote in response file '%s'", rsp_path);
+                ok = false;
+                break;
+            }
+            len = (int)(p - s);
+            p++;
+        } else {
+            while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+            len = (int)(p - s);
+        }
 
         if (s[0] == '@' && len > 1) {                      /* nested rsp */
             char *child = str_ndup(s + 1, (size_t)(len - 1));
@@ -284,7 +306,7 @@ static int glob(const char *pattern, int flags, void *errfunc, glob_t *pg) {
 
     int ncomp = 1;
     for (const char *q = pattern; *q; q++) if (*q == '/') ncomp++;
-    char **comp = malloc((size_t)ncomp * sizeof *comp);
+    char **comp = xmalloc((size_t)ncomp * sizeof *comp);
     int k = 0;
     const char *start = pattern;
     for (const char *q = pattern; ; q++) {
@@ -363,7 +385,11 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
     for (int i = 1; i < e->count; i++) {
         const char *a = e->tokens[i];
 
-        if (strcmp(a, "-o") == 0 && i + 1 < e->count) {
+        if ((strcmp(a, "-o") == 0 || strcmp(a, "--flag") == 0) && i + 1 >= e->count) {
+            out->error = str_sprintf(strcmp(a, "-o") == 0 ? "-o requires an output file name"
+                                                          : "--flag requires a name");
+            return false;
+        } else if (strcmp(a, "-o") == 0) {
             i++;
             const char *val = e->tokens[i];
             const char *vdir = e->dirs[i];
@@ -387,7 +413,7 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
             }
         } else if (strcmp(a, "--backtraces") == 0) {
             out->backtraces = true;
-        } else if (strcmp(a, "--flag") == 0 && i + 1 < e->count) {
+        } else if (strcmp(a, "--flag") == 0) {
             const char *arg = e->tokens[++i];      /* borrowed: name/value point into e */
             const char *eq = strchr(arg, '=');
             Flag f = {0};

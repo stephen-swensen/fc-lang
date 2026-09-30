@@ -223,6 +223,9 @@ struct Expr {
             struct Symbol *resolved_member; /* for module-member access (mod.member): the resolved
                                                member Symbol, set in pass2; used by editor queries
                                                (go-to-definition). NULL for plain struct-field access. */
+            struct Symbol *companion_module; /* set in pass2 when the member is a type sharing its
+                                                name with a sibling module (a companion pair), so a
+                                                chain through it (`a.t.m`) reaches the module */
         } field;
 
         /* EXPR_INDEX */
@@ -495,7 +498,7 @@ typedef enum {
                        see a plain integer literal. */
     PAT_VARIANT,
     PAT_STRUCT,
-    PAT_TUPLE, /* { a, b, ... }: positional tuple destructuring (let-bindings only) */
+    PAT_TUPLE, /* { a, b, ... }: positional tuple destructuring */
     PAT_OR,    /* p1 | p2 | ...: disjunction; alternatives must be binding-free */
     PAT_ERROR, /* parse-error placeholder; treated like PAT_WILDCARD (matches anything, binds
                   nothing) so a malformed arm produces no spurious exhaustiveness cascade. */
@@ -755,6 +758,10 @@ struct Decl {
 typedef struct Program {
     Decl **decls;
     int decl_count;
+    /* The declarations the parser's pre-pass read as generic
+     * (parser_collect_generic_names); pass1 checks it saw every generic one. */
+    const char **generic_names;
+    int generic_name_count;
 } Program;
 
 /* One Program holding every file's declarations in order. A file that does

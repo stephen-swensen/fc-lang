@@ -61,11 +61,7 @@ FCC_BUILD_DATE := $(shell date -u +%Y-%m-%d)
 FCC_BUILD_CC   := $(CC) $(shell $(CC) -dumpfullversion 2>/dev/null || $(CC) -dumpversion 2>/dev/null || echo unknown)
 
 # -I$(BUILD_DIR) so generated fcc_version.h is on the include path.
-# -DFCC_DATADIR bakes in the install data dir so `fcc --lsp` can locate the
-# installed stdlib (FCC_STDLIB_DIR env overrides; a repo-relative ./stdlib is
-# the final fallback).
-CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -g $(OPT) -I$(BUILD_DIR) \
-         -DFCC_DATADIR='"$(datadir)"'
+CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -g $(OPT) -I$(BUILD_DIR)
 
 SRCS     := $(wildcard src/*.c)
 HDRS     := $(wildcard src/*.h src/*.inc)
@@ -91,10 +87,12 @@ $(BIN): $(OBJS)
 $(BUILD_DIR)/%.o: src/%.c $(HDRS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Generated version header — depends on FORCE so it re-evaluates every
-# `make` invocation, but cmp-and-replace means we only mv it into place
-# when contents actually change. version.o is the only object that
-# depends on it, so a version-only churn is a one-file rebuild.
+# Generated header: the version, and FCC_DATADIR, the install data dir `fcc
+# --lsp` finds the installed stdlib under (FCC_STDLIB_DIR overrides it; a
+# repo-relative ./stdlib is the final fallback). It depends on FORCE so it is
+# re-evaluated on every `make`, but cmp-and-replace only moves it into place
+# when its contents change, so `make install PREFIX=...` after a plain `make`
+# rebuilds the two objects that read it.
 .PHONY: FORCE
 FORCE:
 
@@ -107,10 +105,11 @@ $(GEN_VERSION_H): FORCE | $(BUILD_DIR)
 	    printf '#define FCC_BUILD_DATE "%s"\n'   "$(FCC_BUILD_DATE)"; \
 	    printf '#define FCC_BUILD_CC "%s"\n'     "$(FCC_BUILD_CC)"; \
 	    printf '#define FCC_BUILD_OPT "%s"\n'    "$(OPT)"; \
+	    printf '#define FCC_DATADIR "%s"\n'      "$(datadir)"; \
 	} > $@.tmp
 	@if cmp -s $@.tmp $@ 2>/dev/null; then rm $@.tmp; else mv $@.tmp $@; fi
 
-$(BUILD_DIR)/version.o: $(GEN_VERSION_H)
+$(BUILD_DIR)/version.o $(BUILD_DIR)/lsp.o: $(GEN_VERSION_H)
 
 $(BUILD_DIR):
 	@mkdir -p $@
@@ -159,17 +158,39 @@ uninstall-vscode:
 # === Tests ===
 # Every suite runs tests/run_tests.sh. CC picks the compiler for the generated
 # C, CC_OPT its optimization flags, FCC_EXTRA_ARGS adds fcc options, and FILTER
-# is a grep pattern over category/test_name.
+# is an awk regular expression over category/test_name.
 RUN_TESTS = FILTER=$(FILTER) bash tests/run_tests.sh
 
-# `check` is the GNU canonical test target.
-check: check-ascii test-all
+# `check` is the GNU canonical test target: everything below that runs in a few
+# minutes. test-all-O2 and test-asan are run separately (see CONTRIBUTING.md).
+check: check-ascii check-warnings check-keywords check-examples test-all test-all-len16 test-lsp
+
+# The compiler builds warning-free under gcc and clang. This recompiles every
+# source with -Werror (syntax only, no objects), so warnings in files an
+# incremental build skipped are caught too.
+check-warnings: $(GEN_VERSION_H)
+	@for cc in gcc clang; do \
+	  command -v $$cc >/dev/null || { echo "check-warnings: $$cc not found"; exit 1; }; \
+	  $$cc $(CFLAGS) -Werror -fsyntax-only $(SRCS) || exit 1; \
+	done
 
 # Compiler sources are plain ASCII. The one exception is src/builtin_docs.inc,
 # user-facing hover markdown that keeps its typography.
 check-ascii:
 	@if LC_ALL=C grep -nH "$$(printf '[\200-\377]')" src/*.c src/*.h; then \
 	  echo "error: non-ASCII bytes in src/ (see lines above)"; exit 1; fi
+
+# Every hand-kept keyword list (token names, the spec, the editor grammars)
+# agrees with the lexer's table.
+check-keywords:
+	@python3 tools/check-keywords.py
+
+# The language tour compiles and runs, asserting as it goes.
+check-examples: $(BIN)
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	  $(BIN) spec/examples.fc -o "$$tmp/examples.c" && \
+	  $(CC) -std=c11 -Wall -Werror -o "$$tmp/examples" "$$tmp/examples.c" -lm && \
+	  "$$tmp/examples" > /dev/null && echo "spec/examples.fc: ok"
 
 test-gcc: $(BIN)
 	@echo "=== Testing with gcc ==="
@@ -198,20 +219,21 @@ test-clang-len16: $(BIN)
 	@CC=clang FCC_EXTRA_ARGS="--len-repr 16" $(RUN_TESTS)
 
 # Run the suite under gcc and clang at the same time and print each log whole.
-# $(1) is CC_OPT for the generated C (empty for the default, unoptimized).
+# $(1) is CC_OPT for the generated C (empty for the default, unoptimized), $(2)
+# extra fcc options for every test.
 define test_both
 	@bash -c '\
 	  start=$$(date +%s%N); \
 	  tmpdir=$$(mktemp -d); \
 	  trap "rm -rf $$tmpdir" EXIT; \
 	  for cc in gcc clang; do \
-	    (CC=$$cc CC_OPT=$(1) $(RUN_TESTS) > "$$tmpdir/$$cc.out" 2>&1; \
+	    (CC=$$cc CC_OPT="$(1)" FCC_EXTRA_ARGS="$(2)" $(RUN_TESTS) > "$$tmpdir/$$cc.out" 2>&1; \
 	      echo $$? > "$$tmpdir/$$cc.rc") & \
 	  done; \
 	  wait; \
 	  rc=0; \
 	  for cc in gcc clang; do \
-	    echo "=== Testing with $$cc$(if $(1), ($(1))) ==="; \
+	    echo "=== Testing with $$cc$(if $(1), ($(1)))$(if $(2), ($(2))) ==="; \
 	    cat "$$tmpdir/$$cc.out"; echo ""; \
 	    [ "$$(cat "$$tmpdir/$$cc.rc")" = 0 ] || rc=1; \
 	  done; \
@@ -226,10 +248,39 @@ test-all: $(BIN)
 test-all-O2: $(BIN)
 	$(call test_both,-O2)
 
-# Language-server wire tests. Kept out of `check` because they need python3.
+test-all-len16: $(BIN)
+	$(call test_both,,--len-repr 16)
+
+# Language-server wire tests.
 test-lsp: $(BIN)
 	@echo "=== Testing LSP server ==="
 	@bash tests/lsp/run_lsp_tests.sh
+
+# The VS Code extension against a real server, with the VS Code API mocked
+# (needs node).
+test-vscode: $(BIN)
+	@echo "=== Testing VS Code extension ==="
+	@NODE_PATH=tests/vscode/mock node tests/vscode/smoke.js "$$(pwd)/$(BIN)"
+
+# fcc built with AddressSanitizer and UBSan in its own build directory, and the
+# compiler and language-server suites run against it. Slower than test-all; run
+# it after changing memory handling. The test runner's memory cap is off
+# because the sanitizer reserves more address space than the cap allows, and
+# leak checking is off for the one-shot compiler, which leaves its arenas to
+# process exit.
+ASAN_DIR := $(BUILD_DIR)-asan
+ASAN_BIN := $(ASAN_DIR)/$(BIN_NAME)
+
+asan:
+	@$(MAKE) --no-print-directory BUILD_DIR=$(ASAN_DIR) \
+	    OPT="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined"
+
+test-asan: asan
+	@echo "=== Testing with gcc (fcc under ASan/UBSan) ==="
+	@CC=gcc FCC=$(ASAN_BIN) FC_TEST_MEM_CAP_KB=0 \
+	    ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(RUN_TESTS)
+	@echo "=== Testing LSP server (ASan/UBSan) ==="
+	@FCC=$(ASAN_BIN) UBSAN_OPTIONS=halt_on_error=1 bash tests/lsp/run_lsp_tests.sh
 
 
 # === Help ===
@@ -250,19 +301,27 @@ help:
 	@echo "  Override PREFIX, DESTDIR, bindir, or datadir to customize install paths."
 	@echo ""
 	@echo "Test:"
-	@echo "  make check        check-ascii, then the full test suite (test-all)"
+	@echo "  make check        Everything CI runs: the check-* targets, test-all,"
+	@echo "                    test-all-len16 and test-lsp"
 	@echo "  make check-ascii  Fail on non-ASCII bytes in src/*.c and src/*.h"
+	@echo "  make check-warnings  Compile src/ with -Werror under gcc and clang"
+	@echo "  make check-keywords  Check every keyword list against the lexer's table"
+	@echo "  make check-examples  Compile and run spec/examples.fc"
 	@echo "  make test-all     Run tests with both gcc and clang"
 	@echo "  make test-gcc     Run tests with gcc only"
 	@echo "  make test-clang   Run tests with clang only"
-	@echo "  make test-{gcc,clang,all}-O2   Same, but compile generated C at -O2"
-	@echo "  make test-{gcc,clang}-len16    Same, but with --len-repr 16 (16-bit slice lens)"
+	@echo "  make test-{gcc,clang,all}-O2     Same, but compile generated C at -O2"
+	@echo "  make test-{gcc,clang,all}-len16  Same, but with --len-repr 16 (16-bit slice lens)"
 	@echo "  make test-lsp     Run the LSP server wire tests (needs python3)"
-	@echo "  ... FILTER=pattern             Run only tests matching pattern"
+	@echo "  make test-vscode  Run the VSCode extension smoke test (needs node)"
+	@echo "  make asan         Build fcc with ASan/UBSan into $(BUILD_DIR)-asan"
+	@echo "  make test-asan    Run the gcc suite and LSP tests against that build"
+	@echo "  ... FILTER=regex               Run only tests whose category/name matches"
 
 
 .PHONY: all dev clean install uninstall install-vscode uninstall-vscode \
-        check check-ascii test-lsp \
+        check check-ascii check-warnings check-keywords check-examples \
+        test-lsp test-vscode asan test-asan test-all-len16 \
         test-gcc test-clang test-gcc-O2 test-clang-O2 \
         test-gcc-len16 test-clang-len16 \
         test-all test-all-O2 help print-bin

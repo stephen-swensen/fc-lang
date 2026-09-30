@@ -1,0 +1,6 @@
+// An explicit type argument for a function's constant parameter is rejected.
+let main = (args: str[]) ->
+    let y = size<i32>()
+    0
+
+let size = <'n>() -> 'n

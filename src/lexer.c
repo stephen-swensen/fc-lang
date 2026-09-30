@@ -24,8 +24,20 @@ void lexer_init(Lexer *l, const char *source, InternTable *intern,
     l->flag_count = flag_count;
     l->prev_kind = TOK_EOF;
     l->prev_prev_kind = TOK_EOF;
-    l->abort_slot_raw = NULL;
-    l->abort_slot_layout = NULL;
+    l->abort_slot_input = NULL;
+    l->abort_slot_output = NULL;
+}
+
+/* Publish the arrays a phase reads and builds (see Lexer.abort_slot_input). */
+static void publish_phase(Lexer *l, Token *input, Token *output) {
+    if (l->abort_slot_input) *l->abort_slot_input = input;
+    if (l->abort_slot_output) *l->abort_slot_output = output;
+}
+
+/* Append to the current phase's output array and republish it. */
+static void append_output(Lexer *l, Token **arr, int *len, int *cap, Token t) {
+    DA_APPEND(*arr, *len, *cap, t);
+    if (l->abort_slot_output) *l->abort_slot_output = *arr;
 }
 
 static char peek(Lexer *l)      { return *l->current; }
@@ -345,6 +357,30 @@ static int check_interp_spec(const char *p) {
     return (int)(s - p);
 }
 
+/* Consume one escape sequence, the current character being the one after its
+ * backslash. Returns NULL, or the message for an invalid escape. The set is
+ * the one decode_str_lit (common.c) decodes: \n \t \r \0 \\ \" \' and \xNN
+ * with exactly two hex digits, which the byte counts built on the decoder
+ * assume. */
+static const char *scan_escape(Lexer *l) {
+    char esc = peek(l);
+    if (esc == 'n' || esc == 't' || esc == 'r' || esc == '\\' ||
+        esc == '"' || esc == '\'' || esc == '0') {
+        advance(l);
+        return NULL;
+    }
+    if (esc == 'x') {
+        advance(l);
+        for (int i = 0; i < 2; i++) {
+            if (!isxdigit((unsigned char)peek(l)))
+                return "\\x escape requires exactly two hex digits";
+            advance(l);
+        }
+        return NULL;
+    }
+    return "unrecognized escape sequence";
+}
+
 /* Scan string literal text (after opening " or after closing } of interp expr).
  * If interpolation %spec{ is found, emits tok_kind and sets up FMT_SPEC state.
  * If closing " is found, emits STRING_LIT/CSTRING_LIT (plain) or INTERP_END.
@@ -362,23 +398,8 @@ static Token scan_string_body(Lexer *l, TokenKind tok_kind) {
         if (peek(l) == '\\') {
             advance(l); /* skip backslash */
             if (at_end(l)) break;
-            char esc = peek(l);
-            if (esc == 'n' || esc == 't' || esc == 'r' || esc == '\\' ||
-                esc == '"' || esc == '\'' || esc == '0') {
-                advance(l);
-            } else if (esc == 'x') {
-                advance(l); /* skip 'x' */
-                /* \xNN takes two hex digits (spec); decode_str_lit and the
-                 * byte counts built on it assume two. */
-                if (!isxdigit((unsigned char)peek(l)))
-                    return error_token(l, "\\x escape requires exactly two hex digits");
-                advance(l);
-                if (!isxdigit((unsigned char)peek(l)))
-                    return error_token(l, "\\x escape requires exactly two hex digits");
-                advance(l);
-            } else {
-                return error_token(l, "unrecognized escape sequence");
-            }
+            const char *err = scan_escape(l);
+            if (err) return error_token(l, err);
             continue;
         }
         if (peek(l) == '%') {
@@ -459,22 +480,8 @@ static Token scan_char_lit(Lexer *l) {
     advance(l); /* opening ' */
     if (peek(l) == '\\') {
         advance(l); /* skip backslash */
-        char esc = peek(l);
-        if (esc == 'n' || esc == 't' || esc == 'r' || esc == '\\' ||
-            esc == '"' || esc == '\'' || esc == '0') {
-            advance(l);
-        } else if (esc == 'x') {
-            advance(l); /* skip 'x' */
-            /* \xNN takes two hex digits, as in scan_string_body. */
-            if (!isxdigit((unsigned char)peek(l)))
-                return error_token(l, "\\x escape requires exactly two hex digits");
-            advance(l);
-            if (!isxdigit((unsigned char)peek(l)))
-                return error_token(l, "\\x escape requires exactly two hex digits");
-            advance(l);
-        } else {
-            return error_token(l, "unrecognized escape sequence");
-        }
+        const char *err = scan_escape(l);
+        if (err) return error_token(l, err);
     } else {
         /* Same one-line rule as strings: a raw newline ends the literal rather
          * than being taken as its byte (use '\n'). */
@@ -636,13 +643,9 @@ static Token scan_token(Lexer *l) {
 static Token *raw_tokenize(Lexer *l, int *out_count) {
     Token *tokens = NULL;
     int len = 0, cap = 0;
+    publish_phase(l, NULL, NULL);
 
     for (;;) {
-        /* Publish the latest array pointer so a lex fatal (longjmp) can free it
-         * in server mode. Set before any fatal-capable scan in this iteration;
-         * the previous iteration's DA_APPEND has already settled `tokens`. */
-        if (l->abort_slot_raw) *l->abort_slot_raw = tokens;
-
         /* Skip spaces and comments but not newlines */
         for (;;) {
             if (peek(l) == ' ' || peek(l) == '\r') { advance(l); continue; }
@@ -665,7 +668,7 @@ static Token *raw_tokenize(Lexer *l, int *out_count) {
             diag_fatal(loc, "%.*s", t.length, t.start);
         }
 
-        DA_APPEND(tokens, len, cap, t);
+        append_output(l, &tokens, &len, &cap, t);
         l->prev_prev_kind = l->prev_kind;
         l->prev_kind = t.kind;
         if (t.kind == TOK_EOF) break;
@@ -823,7 +826,7 @@ static bool eval_cond_expr(Token *tokens, int count, int *i,
 
 /* Filter out tokens in inactive #if/#else if/#else/#end branches.
  * Directive tokens are always stripped from output. */
-static Token *filter_conditionals(Token *tokens, int count,
+static Token *filter_conditionals(Lexer *l, Token *tokens, int count,
                                    const Flag *flags, int flag_count,
                                    int *out_count) {
     Token *out = NULL;
@@ -907,7 +910,7 @@ static Token *filter_conditionals(Token *tokens, int count,
 
         /* Copy token if in an active branch */
         if (active[depth]) {
-            DA_APPEND(out, olen, ocap, t);
+            append_output(l, &out, &olen, &ocap, t);
         }
     }
 
@@ -942,14 +945,13 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
 
     /* Filter conditional compilation directives */
     int filtered_count;
-    Token *filtered = filter_conditionals(raw, raw_count,
+    publish_phase(l, raw, NULL);
+    Token *filtered = filter_conditionals(l, raw, raw_count,
         l->flags, l->flag_count, &filtered_count);
+    publish_phase(l, filtered, NULL);
     free(raw);
     raw = filtered;
     raw_count = filtered_count;
-    /* raw_tokenize published the pre-filter array, which was just freed.
-     * Re-point the cleanup slot at the filtered array. */
-    if (l->abort_slot_raw) *l->abort_slot_raw = raw;
 
     Token *out = NULL;
     int olen = 0, ocap = 0;
@@ -965,10 +967,6 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
     int bracket_depth = 0;            /* depth inside () [] {}; suppresses layout */
 
     for (int i = 0; i < raw_count; i++) {
-        /* Publish the layout array so an indentation fatal (longjmp) can free
-         * it in server mode; `out` is re-pointed each iteration after growth. */
-        if (l->abort_slot_layout) *l->abort_slot_layout = out;
-
         Token t = raw[i];
 
         if (t.kind == TOK_NEWLINE) {
@@ -1003,7 +1001,7 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
                     break; /* still in match block: peer arm */
                 indent_depth--;
                 Token dedent = make_layout_token(TOK_DEDENT, t.line, t.col);
-                DA_APPEND(out, olen, ocap, dedent);
+                append_output(l, &out, &olen, &ocap, dedent);
             }
 
             if (block_former && next_col > indent_stack[indent_depth]) {
@@ -1015,7 +1013,7 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
                 indent_stack[indent_depth] = next_col;
                 is_match_block[indent_depth] = false;
                 Token indent_tok = make_layout_token(TOK_INDENT, raw[j].line, raw[j].col);
-                DA_APPEND(out, olen, ocap, indent_tok);
+                append_output(l, &out, &olen, &ocap, indent_tok);
             } else if (last_kind == TOK_WITH &&
                        next_col == indent_stack[indent_depth] &&
                        raw[j].kind == TOK_PIPE) {
@@ -1027,19 +1025,19 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
                 indent_stack[indent_depth] = next_col;
                 is_match_block[indent_depth] = true;
                 Token indent_tok = make_layout_token(TOK_INDENT, raw[j].line, raw[j].col);
-                DA_APPEND(out, olen, ocap, indent_tok);
+                append_output(l, &out, &olen, &ocap, indent_tok);
             } else if (next_col == indent_stack[indent_depth]) {
                 /* Peer separator, but not after INDENT or at the start */
                 if (olen > 0 && out[olen-1].kind != TOK_INDENT && out[olen-1].kind != TOK_NEWLINE) {
                     Token nl = make_layout_token(TOK_NEWLINE, t.line, t.col);
-                    DA_APPEND(out, olen, ocap, nl);
+                    append_output(l, &out, &olen, &ocap, nl);
                 }
             } else if (next_col < indent_stack[indent_depth]) {
                 /* Dedent: pop until we match */
                 while (indent_depth > 0 && next_col < indent_stack[indent_depth]) {
                     indent_depth--;
                     Token dedent = make_layout_token(TOK_DEDENT, t.line, t.col);
-                    DA_APPEND(out, olen, ocap, dedent);
+                    append_output(l, &out, &olen, &ocap, dedent);
                 }
                 /* After dedent, close any match block we landed on */
                 while (indent_depth > 0 && is_match_block[indent_depth] &&
@@ -1048,7 +1046,7 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
                         break;
                     indent_depth--;
                     Token dedent2 = make_layout_token(TOK_DEDENT, t.line, t.col);
-                    DA_APPEND(out, olen, ocap, dedent2);
+                    append_output(l, &out, &olen, &ocap, dedent2);
                 }
                 if (next_col != indent_stack[indent_depth]) {
                     SrcLoc loc = { .line = raw[j].line, .col = raw[j].col };
@@ -1057,7 +1055,7 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
                 /* Emit newline after dedents for peer separation */
                 if (olen > 0 && out[olen-1].kind != TOK_NEWLINE) {
                     Token nl = make_layout_token(TOK_NEWLINE, t.line, t.col);
-                    DA_APPEND(out, olen, ocap, nl);
+                    append_output(l, &out, &olen, &ocap, nl);
                 }
             } else {
                 /* next_col > indent_stack top but not a block former: a
@@ -1081,7 +1079,7 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
         }
 
         /* Non-newline token: emit it */
-        DA_APPEND(out, olen, ocap, t);
+        append_output(l, &out, &olen, &ocap, t);
         last_kind = t.kind;
 
         /* Track context for the `=` block-former detection */
@@ -1099,12 +1097,13 @@ Token *lexer_tokenize(Lexer *l, int *out_count) {
     while (indent_depth > 0) {
         indent_depth--;
         Token dedent = make_layout_token(TOK_DEDENT, raw_eof.line, raw_eof.col);
-        DA_APPEND(out, olen, ocap, dedent);
+        append_output(l, &out, &olen, &ocap, dedent);
     }
 
     Token eof = make_layout_token(TOK_EOF, raw_eof.line, raw_eof.col);
-    DA_APPEND(out, olen, ocap, eof);
+    append_output(l, &out, &olen, &ocap, eof);
 
+    publish_phase(l, NULL, out);
     free(raw);
     *out_count = olen;
     return out;

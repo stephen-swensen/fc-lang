@@ -1,0 +1,12 @@
+// A type given for a constant parameter is reported at the variant that names
+// the instance. Regression: the error had no source location.
+struct wide =
+    limbs: u32['n]
+
+union maybe_wide =
+    | got(wide<'n>)
+    | nothing
+
+let main = (args: str[]) ->
+    let b = maybe_wide<i32>.nothing
+    0

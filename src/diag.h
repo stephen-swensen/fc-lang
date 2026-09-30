@@ -2,6 +2,7 @@
 #include "token.h"
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <setjmp.h>
 
 typedef struct SrcLoc {
@@ -30,6 +31,15 @@ _Noreturn void diag_fatal_simple(const char *fmt, ...);
 
 int diag_error_count(void);
 
+/* Speculative parsing. Between diag_speculate_begin() and the matching
+ * diag_speculate_end(), errors are held back and not counted. end(mark, true)
+ * keeps them: they are reported (and counted) once the outermost speculation
+ * ends. end(mark, false) drops the ones held since `mark`: the caller
+ * backtracked, so they describe a reading it abandoned. Speculations nest. A
+ * fatal reports everything held first. */
+int diag_speculate_begin(void);
+void diag_speculate_end(int mark, bool keep);
+
 /* ---- Server mode (fcc --lsp) ----
  *
  * By default diagnostics print to stderr and diag_fatal* calls exit(1). The
@@ -46,7 +56,8 @@ typedef void (*DiagSink)(SrcLoc loc, const char *msg, void *userdata);
  * here instead of stderr. Pass NULL to restore stderr printing. */
 void diag_set_sink(DiagSink sink, void *userdata);
 
-/* Zero the error count before starting a fresh analysis. */
+/* Zero the error count (and drop anything a speculation held) before starting
+ * a fresh analysis. */
 void diag_reset_counts(void);
 
 /* Register a recovery point: while set (non-NULL), diag_fatal/diag_fatal_simple

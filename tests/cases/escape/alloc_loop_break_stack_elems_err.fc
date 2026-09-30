@@ -1,0 +1,11 @@
+// A loop's value is its break value, including what it holds.
+let bad = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    let s = loop
+        break ptrs
+    alloc(s)!
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

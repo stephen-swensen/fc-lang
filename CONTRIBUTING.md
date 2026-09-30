@@ -11,14 +11,17 @@ conventions the code follows, and the principles behind design decisions.
 |---------|--------------|
 | `make` | Release build (`-O2`) of `build/<os>/fcc`. |
 | `make dev` | Clean rebuild at `-O0`, for debugging and readable sanitizer output. |
-| `make OPT="-O0 -fsanitize=address,undefined"` | Any other flags. Run `make clean` first when changing `OPT`; Make does not track flag changes. |
+| `make OPT=-O3` | Any other flags. Run `make clean` first when changing `OPT`; Make does not track flag changes. |
+| `make asan` | `fcc` built with AddressSanitizer and UBSan, in its own directory (`build/<os>-asan`), so it does not disturb the normal build. |
 | `make print-bin` | Print the binary's path. Scripts use this instead of hard-coding it. |
-| `make install` / `make uninstall` | Install `fcc` and the stdlib under `PREFIX` (default `/usr/local`); `DESTDIR`, `bindir` and `datadir` work as usual. |
+| `make install` / `make uninstall` | Install `fcc` and the stdlib under `PREFIX` (default `/usr/local`); `DESTDIR`, `bindir` and `datadir` work as usual. The stdlib path the language server uses is compiled in from `datadir`, and changing it rebuilds what embeds it. |
 | `make install-vscode` | Build and install the VSCode extension. |
 | `make help` | List every target. |
 
 The compiler is plain C11 and builds warning-free with
-`-std=c11 -Wall -Wextra -Wpedantic`. Keep it that way.
+`-std=c11 -Wall -Wextra -Wpedantic` under both gcc and clang;
+`make check-warnings` enforces it. The C it emits is C11 plus the GNU
+extensions listed in the spec (§Why C as a target), so it needs GCC or Clang.
 
 `./run.sh file.fc` compiles a program with the stdlib, runs it, and prints the
 exit code.
@@ -27,20 +30,35 @@ exit code.
 
 | Command | What it does |
 |---------|--------------|
-| `make check` | The ASCII check on `src/`, then `test-all`. Run this before sending a change. |
+| `make check` | Everything below that runs in a few minutes: the source checks, `test-all`, `test-all-len16` and `test-lsp`. Run this before sending a change; CI (`.github/workflows/check.yml`) runs it, and `test-vscode`, on every push. |
+| `make check-ascii`, `check-warnings`, `check-keywords`, `check-examples` | The source checks: `src/` is ASCII; the compiler builds warning-free under gcc and clang; every hand-kept keyword list (token names, the spec, both editor grammars) matches the lexer's table (`tools/check-keywords.py`); `spec/examples.fc` compiles and runs. |
 | `make test-all` | The suite under gcc and clang, in parallel. |
 | `make test-gcc` / `make test-clang` | One compiler. |
 | `make test-all-O2` (and `test-gcc-O2`, `test-clang-O2`) | Compile the generated C at `-O2`, which surfaces undefined behavior the optimizer exploits. |
-| `make test-gcc-len16` / `make test-clang-len16` | The whole suite with 16-bit stored slice lengths (`--len-repr 16`). Keep these green when touching slice code. |
-| `make test-lsp` | Language server tests (needs `python3`). Not part of `check`. |
+| `make test-all-len16` (and `test-gcc-len16`, `test-clang-len16`) | The whole suite with 16-bit stored slice lengths (`--len-repr 16`). Keep these green when touching slice code. |
+| `make test-lsp` | Language server tests (needs `python3`). |
+| `make test-asan` | The compiler suite (gcc) and the language server tests against the `make asan` build. Slower; run it after changing memory handling. |
+| `make test-vscode` | The VSCode extension against a real server, with the VSCode API mocked (needs `node`). Run it after changing `editors/vscode/extension.js`. |
 
-Add `FILTER=pattern` to run the tests whose `category/name` matches a grep
-pattern: `make test-gcc FILTER=closures`, `make test-gcc FILTER=stdlib/data`.
-`JOBS=1` runs the suite serially.
+Add `FILTER=pattern` to run the tests whose `category/name` matches an awk
+(extended) regular expression: `make test-gcc FILTER=closures`,
+`make test-gcc FILTER='^stdlib/data'`. `JOBS=1` runs the suite serially.
 
 The runner (`tests/run_tests.sh`) compiles each test to C with `fcc`,
 compiles the C with `-std=c11 -Wall -Werror`, runs it and checks the result.
-Because of `-Werror`, a test program must use every variable it declares.
+Because of `-Werror`, every test also checks that `fcc`'s output compiles
+warning-free. Its environment variables are listed at the top of the script;
+the useful ones besides `FILTER` and `JOBS`:
+
+- `FCC=path` tests another build of the compiler, such as an old one to
+  confirm a new test fails on it.
+- `KEEP=1` keeps the work directory, with every test's C file and output.
+- `FC_TEST_MEM_CAP_KB=0` lifts the memory cap on `fcc` (3 GB by default, so a
+  runaway instantiation fails instead of swapping). A sanitizer build needs
+  it; `make test-asan` sets it.
+
+A failing test prints the `fcc` or C compiler command that failed, rewritten
+to write under `/tmp`, so it can be rerun by hand.
 
 ### Test layout
 
@@ -65,6 +83,7 @@ together, plus any of these files (note: no leading dot):
 | `flags` | Conditional-compilation names, one per line; each becomes `--flag <name>`. |
 | `fcc_args` | Literal extra `fcc` arguments, one per line; `#` starts a comment line. For example `--backtraces`, or `@file.rsp`. |
 | `expected_stderr_contains` | Lines that must each appear in the program's stderr (fixed-string); `#` starts a comment line. For output whose exact layout varies, such as backtraces. |
+| `*.h` | C headers the test's `extern` declarations include; the test's directory is on the C include path. |
 | `skip_windows` | Skip on Windows (MSYS2/UCRT). The backtrace tests use it: frames come from `execinfo`, which that platform lacks. |
 | `skip_o2` | Skip in the `-O2` runs. For assertions that only hold unoptimized, such as a full backtrace that tail-call optimization would shorten. |
 | `only_o2` | Run only in the `-O2` runs. |
@@ -119,40 +138,96 @@ particular:
   lookahead.
 - **Update the spec** when a feature adds or changes a language rule.
 
+### Language server tests
+
+`tests/lsp/lsp_test.py` drives `fcc --lsp` over stdio. Each scenario builds a
+list of JSON-RPC messages, runs them through one server process with
+`run_session`, and asserts on the responses with `check(name, cond)`. To add a
+case, add a scenario at the end in the same style: write any files it needs
+into a `tmpdir(...)` directory, and give each request a unique id. The script
+has no single-scenario mode; it runs the whole file in a few seconds.
+
+Every session also checks that the server survived: a session whose process
+crashed, or printed a sanitizer report, fails the run at the end even if its
+assertions passed. `make test-asan` runs the file against the sanitizer build,
+which is how memory errors in the server are found.
+
 ### Refactoring
 
 A refactor that shouldn't change behavior should leave the emitted C
-unchanged. Compile the test suite, the demos and any other FC code you have to
-C (and capture `fcc`'s error output for the error tests) before and after the
-change, and compare the two sets byte for byte. Every difference needs an
-explanation. Paths and line numbers embedded in the output change when the
-sources move, so change one thing at a time.
+unchanged. `tools/emit-corpus.sh OUTDIR` compiles every test and demo to C
+and captures `fcc`'s error output for the error tests; run it before and after
+the change and compare the two directories (`diff -r`). Every difference
+needs an explanation. Extra programs can be added with a response file
+argument (`tools/emit-corpus.sh OUTDIR @../other/program.rsp`). Paths and
+line numbers embedded in the output change when the sources move, so change
+one thing at a time.
+
+### Debugging a wrong build
+
+- **`fcc` crashes.** Build `make asan` and rerun the command with
+  `build/<os>-asan/fcc`; the report points at the bad access.
+- **An internal compiler error.** `internal compiler error: ...` (codegen) or
+  `internal: ...` / `unsupported expression kind` (pass2) means a node reached
+  a pass in a shape an earlier pass should have rejected or rewritten. The fix
+  is usually in the earlier pass: find where that shape should have been
+  caught.
+- **Wrong output.** Keep the C (`KEEP=1`, or the rerun command) and read it;
+  the emitted C mirrors the source closely. Compile it with
+  `-O0 -g -fsanitize=address,undefined` to catch undefined behavior in the
+  generated code. If only a generic or only a concrete version misbehaves,
+  compare the C for the two.
+
+### Adding a built-in
+
+A keyword-shaped built-in (`sizeof`, `alloc`, `static_assert`, an atomic
+operation, ...) touches these places:
+
+1. `token.h` (the token kind), `lexer.c` (its `KW` entry) and `token.c`
+   (`token_kind_name`).
+2. The parser: its prefix-parse case, `token_starts_prefix_expr` if it starts
+   an expression, and `parse_type_arg`'s list if it may appear as a generic
+   argument.
+3. The expression kind, if it gets one (see the next section).
+4. The language server: a `BUILTIN_DOCS` entry in `src/builtin_docs.inc`,
+   keyed by the spelling, and a `consider_builtin` call in `lsp.c`'s node
+   finder so hovering the keyword shows it.
+5. The spec's reserved-words list, and both editor grammars
+   (`editors/vscode/syntaxes/fc.tmLanguage.json`, `editors/vim/fc.vim`).
+   `make check-keywords` fails until these match the lexer.
 
 ### Adding an expression, pattern, declaration or type kind
 
 1. Add the kind to its enum (`ExprKind`, `PatternKind`, `DeclKind` in
    `ast.h`; `TypeKind` in `types.h`) and its payload to the node.
 2. Build. Every `switch` over the kind that has no `default` now warns
-   (`-Wswitch`): the child visitors in `ast.c`, the LSP's node finder, and the
-   other whole-tree walkers. Handle each one.
+   (`-Wswitch`), and those are the ones that must handle every kind: the
+   child visitors in `ast.c`, the two dispatchers (`check_expr_inner` in
+   pass2, `emit_expr` in codegen), the LSP's node finder, the whole-tree
+   predicates in pass2 (such as `expr_may_yield_stack`), and for a type kind
+   printing, equality, substitution and mangling in `types.c` and `emit_type`
+   / `emit_type_ident` / `type_ident_eq` in codegen, which must agree on what
+   distinguishes two types. Handle each one; a kind that cannot reach a
+   dispatcher gets an explicit internal error there, not a silent default.
 3. Then go through the switches that do have a `default`, since the compiler
    can't point you at those: `grep -n 'case EXPR_' src/*.c` (or `TYPE_`,
-   `PAT_`, `DECL_`). The ones that matter most:
-   - `check_expr_inner` in pass2 fails with "unsupported expression kind" on
-     a kind it doesn't handle, so a test catches it;
-   - `emit_expr` in codegen silently emits nothing for an unhandled kind, so
-     check it by hand;
-   - for a type kind: printing (`type_name`), equality, substitution and
-     mangling in `types.c`, and `emit_type`, `emit_type_ident` and
-     `type_ident_eq` in codegen, which must agree on what distinguishes two
-     types.
-4. Write the tests (above), including the error paths.
+   `PAT_`, `DECL_`). They answer a question about a few kinds and default the
+   rest; decide whether the new kind belongs in the few.
+4. In pass2, check a child whose value the new node consumes (an operand, an
+   argument, an element) with `check_operand`, not `check_expr`: it rejects a
+   self-recursive call with no base case at that point. A child whose value
+   becomes the node's own (a branch, a block's last statement) uses
+   `check_expr`.
+5. Write the tests (above), including the error paths.
 
 ### Code conventions
 
 - Declare stack structs with `= {0}` before calling their init function
-  (`Parser parser = {0};`), so a field added later starts zeroed.
-  `arena_alloc` already zero-fills.
+  (`Lexer lexer = {0};`), or with a designated initializer, so a field added
+  later starts zeroed. `arena_alloc` and `xcalloc` already zero-fill.
+- Allocate with `xmalloc`, `xcalloc` and `xrealloc` (`common.h`), which exit
+  with a message when memory runs out, and with the arena for anything that
+  lives as long as the AST. `DA_APPEND` grows arrays with `xrealloc`.
 - Build any string that embeds a name, type spelling, path or diagnostic with
   the exact-size helpers in `common.h` (`str_sprintf`, `arena_sprintf`,
   `str_appendf`, `intern_sprintf`), never a fixed buffer. See "No fixed
@@ -167,6 +242,37 @@ sources move, so change one thing at a time.
   of code stay in sync; if they must, make the compiler or a test check it.
 - Diagnostics are errors; the compiler has no warnings. A check either
   matters enough to fail the build or isn't made.
+
+### The standard library
+
+The stdlib (`stdlib/*.fc`) is FC code compiled with each program, one file
+per module, all in `namespace std::`. Conventions:
+
+- A module's documentation is the comment between the `namespace` line and
+  `module x =`; it is what the language server shows on hover. Each public
+  definition has a doc comment directly above it: a capitalized sentence,
+  not prefixed with the name. Examples go in a fenced ```` ```fc ```` block.
+- Failures return results (`T!`). A module names the failure conditions a
+  caller can act on in an `error` group (`io.file.not_found`) and passes
+  other platform codes through raw.
+- Tests go under `tests/cases/stdlib/`, as multi-file tests whose `deps` file
+  lists the stdlib files they use.
+
+### Editing the spec
+
+`spec/fc-spec.html` is one Markdown document inside a
+`<script type="text/markdown">` tag, rendered in the browser; edit the
+Markdown. State rules in the present tense, as rules of the language rather
+than consequences of how the compiler works, and keep the whole rule in the
+spec rather than pointing to design notes elsewhere. `make check-keywords`
+checks its reserved-word lists against the lexer.
+
+### Releases
+
+The version is `VERSION` (a SemVer string such as `1.0.0-rc.7`); `fcc
+--version` adds the commit hash and date at build time. A release updates
+`VERSION` and every other spelling of the old version, which `README.md` and
+`spec/fc-spec.html` repeat (`grep -rn` for it).
 
 ### Commits
 
@@ -197,13 +303,20 @@ something new.
   FC has is the shape of the C it emits.
 - **The generated C must not assume the width of `int`.** FC targets include
   16-bit-`int` platforms; check codegen changes against both 16- and 32-bit
-  `int`.
+  `int`. No 16-bit compiler is in the test matrix, so this is a review step:
+  read the new C asking what each literal, promotion and shift does when
+  `int` is 16 bits. Arithmetic on types narrower than `int` goes through
+  `unsigned` (the emitted `(unsigned)(uint16_t)a * (unsigned)(uint16_t)b`),
+  and sizes narrow to `size_t` or `int` through `fc_to_size` / `fc_to_int`.
 - **Completeness over partiality.** A restriction that is right in every case
   is better than a feature that works in common cases and is unsound at the
   edges. Don't ship a partial fix: solve the whole problem, or keep the
   restriction until you can.
 - **FC is general-purpose.** Justify features by general systems-programming
   patterns, not by one program that wants them.
+- **Look at precedents first.** Before deciding a language question, lay out
+  how C, Rust, Zig and similar languages handle it, and check the spec for an
+  existing rule that already settles it or constrains the answer.
 - **The spec and the compiler are the only authorities** on what FC is. There
   is no grammar file. When a question isn't settled by the spec, settle it
   and write the answer into the spec, stated as a rule rather than as a

@@ -1,0 +1,16 @@
+// Loop-carried taint through a let inside an if branch.
+let bad = () ->
+    let mut p = default(i32*)
+    let mut saved = default(i32*)
+    for i in 0..2 do
+        saved = p
+        let mut x = 5
+        p = if i > 0 then
+            let q = &x
+            q
+        else p
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad()
+    0

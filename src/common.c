@@ -61,9 +61,27 @@ int decode_str_lit(const char *s, int slen, unsigned char *out) {
     return n;
 }
 
-static _Noreturn void out_of_memory(void) {
+_Noreturn void out_of_memory(void) {
     fprintf(stderr, "fcc: out of memory\n");
     exit(1);
+}
+
+void *xmalloc(size_t n) {
+    void *p = malloc(n ? n : 1);
+    if (!p) out_of_memory();
+    return p;
+}
+
+void *xcalloc(size_t count, size_t size) {
+    void *p = calloc(count ? count : 1, size ? size : 1);
+    if (!p) out_of_memory();
+    return p;
+}
+
+void *xrealloc(void *p, size_t n) {
+    void *r = realloc(p, n ? n : 1);
+    if (!r) out_of_memory();
+    return r;
 }
 
 /* ---- Arena allocator ---- */
@@ -300,6 +318,26 @@ const char *intern_sprintf(InternTable *t, const char *fmt, ...) {
     return result;
 }
 
+char *ns_display_dup(const char *ns) {
+    /* Each "__" (2 bytes) becomes "::" (2 bytes), so the length is unchanged. */
+    char *buf = str_dup(ns);
+    char *w = buf;
+    for (const char *r = ns; *r; ) {
+        if (r[0] == '_' && r[1] == '_') { *w++ = ':'; *w++ = ':'; r += 2; }
+        else *w++ = *r++;
+    }
+    *w = '\0';
+    return buf;
+}
+
+const char *ns_display(InternTable *t, const char *ns) {
+    if (!ns || !strstr(ns, "__")) return ns;
+    char *buf = ns_display_dup(ns);
+    const char *out = intern_cstr(t, buf);
+    free(buf);
+    return out;
+}
+
 /* ---- C identifier hygiene ---- */
 
 /* C reserved spellings that must be escaped before reaching C. Covers the C11
@@ -339,4 +377,16 @@ const char *c_safe_ident(InternTable *t, const char *name) {
  * predicate gates. */
 bool is_mangled_root_name(const char *name) {
     return name && strncmp(name, "fc__", 4) == 0;
+}
+
+/* Split non-overlapping from the left, the way the mangler joins components:
+ * a component may start with `_`, so scanning for the last "__" would take
+ * `fc__a___x` (component `_x`) apart one character off. */
+const char *mangled_source_name(const char *cname) {
+    const char *tail = cname;
+    for (const char *p = cname; p[0] && p[1]; ) {
+        if (p[0] == '_' && p[1] == '_') { tail = p + 2; p += 2; }
+        else p++;
+    }
+    return tail;
 }

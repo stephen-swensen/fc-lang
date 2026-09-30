@@ -1,0 +1,6 @@
+// A self-call with no base case as a field access's object is reported as
+// such. Regression: "field access on non-struct type <unresolved>".
+let h = (x: u32) ->
+    h(x).a
+
+let main = (args: str[]) -> 0

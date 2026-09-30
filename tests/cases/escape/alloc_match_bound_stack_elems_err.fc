@@ -1,0 +1,12 @@
+// A match binding holds what the payload holds: a slice of stack pointers
+// stays one, so heap-copying it is an error.
+let bad = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    match some(ptrs) with
+    | some(s) -> alloc(s)!
+    | none -> alloc(i32*[1] {})!
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

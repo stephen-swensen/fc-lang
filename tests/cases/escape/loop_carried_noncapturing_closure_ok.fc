@@ -1,0 +1,14 @@
+// A lambda that captures nothing has no context, so reassigning it in a loop
+// and returning it is fine.
+let bad = () ->
+    let mut f = () -> 0
+    let mut saved = () -> 0
+    for i in 0..2 do
+        saved = f
+        f = () -> 7
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad()
+    assert(r() == 7)
+    0

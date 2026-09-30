@@ -1,0 +1,6 @@
+// A self-call with no base case under ignore is reported: ignore still
+// evaluates it. Regression: accepted.
+let h = (x: u32) ->
+    ignore h(x)
+
+let main = (args: str[]) -> 0

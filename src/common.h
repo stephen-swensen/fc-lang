@@ -16,6 +16,15 @@
 #error "FC on Windows requires the UCRT runtime; msvcrt is not supported."
 #endif
 
+/* ---- Checked allocation ---- */
+
+/* Report "fcc: out of memory" and exit. The x* allocators call it on failure,
+ * so their results are never NULL. */
+_Noreturn void out_of_memory(void);
+void *xmalloc(size_t n);
+void *xcalloc(size_t count, size_t size);
+void *xrealloc(void *p, size_t n);
+
 /* ---- Arena allocator ---- */
 
 #define ARENA_PAGE_SIZE (64 * 1024)
@@ -101,6 +110,13 @@ const char *intern_cstr(InternTable *t, const char *s);
  * Sized to the result like str_sprintf, so no component is clipped. */
 const char *intern_sprintf(InternTable *t, const char *fmt, ...);
 
+/* A namespace as the program writes it ("acme::gfx") from the joined form the
+ * compiler keys it by ("acme__gfx"). The parser joins a nested namespace's
+ * parts with "__", which no identifier contains, so the split is exact. */
+const char *ns_display(InternTable *t, const char *ns);
+/* The same, as a malloc'd string the caller frees (for a diagnostic). */
+char *ns_display_dup(const char *ns);
+
 /* ---- Slice length representation (--len-repr) ----
  *
  * Every slice/string length has type i64 on every profile; the type checker
@@ -147,12 +163,16 @@ const char *c_safe_ident(InternTable *t, const char *name);
  * identifiers, and the parser rejects an extern C name with this prefix. */
 bool is_mangled_root_name(const char *name);
 
+/* The last path component of a mangled name (`fc__m__point` -> `point`), the
+ * declaration's source spelling; a name with no "__" is returned as is. */
+const char *mangled_source_name(const char *cname);
+
 /* ---- Dynamic array ---- */
 
 #define DA_APPEND(arr, len, cap, val) do {          \
     if ((len) >= (cap)) {                           \
         (cap) = (cap) ? (cap) * 2 : 8;             \
-        (arr) = realloc((arr), (cap) * sizeof(*(arr))); \
+        (arr) = xrealloc((arr), (size_t)(cap) * sizeof(*(arr))); \
     }                                               \
     (arr)[(len)++] = (val);                         \
 } while (0)

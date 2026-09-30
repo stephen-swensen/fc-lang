@@ -14,8 +14,10 @@ runnable tour of it. For building, testing and the contribution checklist, see
 FC is a systems language that compiles to C11. `fcc` is a whole-program
 compiler written in C11 with no dependencies beyond the C library: it reads
 every source file of a program at once, type-checks them together, and writes
-one C file that the user compiles with any C11 compiler (the test suite uses
-gcc and clang with `-Wall -Werror`).
+one C file that the user compiles with GCC or Clang. The emitted C is C11 plus
+a few GNU extensions (statement expressions, `__attribute__`, `__builtin_*`),
+listed in the spec under "Why C as a target"; the test suite compiles it with
+gcc and clang under `-Wall -Werror`.
 
 The same binary is also the language server (`fcc --lsp`), which runs the front
 end in-process on every edit.
@@ -33,21 +35,22 @@ The command-line driver is `main()` in `src/main.c`:
    `--backtraces`, host auto-detection of `os`/`arch`/`env` flags).
 2. **Lex** every input file. Conditional compilation (`#if`) is evaluated here,
    against the flag set.
-3. **Collect generic names** across all token streams
-   (`parser_collect_generic_names`). In expression position, `name<...>` is
+3. **Parse** (`parse_files`, which also does steps 4 and 5). First it
+   collects generic names across all token streams
+   (`parser_collect_generic_names`): in expression position, `name<...>` is
    read as an instantiation only when `name` is a generic declaration, and any
    file may use a generic declared in any other, so this needs the whole
    program before parsing starts.
-4. **Parse** each file into a `Program`. Syntax errors are reported and
-   recovered from; if there are any, the driver stops here.
-5. **Merge** the per-file programs (`program_merge`).
+4. Each file is parsed into a `Program`. Syntax errors are reported and
+   recovered from; if there are any, the driver stops after step 5.
+5. The per-file programs are merged into one (`program_merge`).
 6. **pass1** (`pass1_collect`): declarations, layouts, signatures, imports.
 7. **pass2** (`pass2_check`): type checking. It runs even when pass1 reported
    errors, so name errors and type errors come out together. The driver stops
    if anything was reported.
 8. **Monomorphization**: `mono_discover_transitive` finds every generic
    instance reachable from the ones pass2 registered; `mono_finalize_types`
-   resolves names and orders instances so by-value dependencies come first.
+   resolves every instance's type names to their C names.
    Instance-level errors (a failed `static_assert`, a const-eval error, an
    infinite instance family) stop the driver.
 9. **codegen** (`codegen_emit`) writes the C file.
@@ -63,7 +66,7 @@ The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 |------|----------------|
 | `main.c` | CLI driver (above). |
 | `args.c/h` | `@response` expansion and argument parsing, shared with the language server. Paths inside a response file resolve against that file's directory, and globs in it are expanded. |
-| `token.c/h` | Token kinds and the intern table. Identifier and keyword strings are interned, so names compare by pointer. |
+| `token.c/h` | Token kinds and their display names (`token_kind_name`). |
 | `lexer.c/h` | Tokenizer, the `#if` evaluator, and the layout pass that turns indentation into `INDENT`/`DEDENT`/`NEWLINE` tokens (the offside rule; a leading `\|` of a match arm is a same-level delimiter). |
 | `ast.c/h` | AST node types (`Expr`, `Pattern`, `Decl`, `Program`) and the shared child visitors `expr_for_each_child`, `expr_any_child` and `pattern_for_each_child`. |
 | `parser.c/h` | Pratt parser with error recovery. Produces the AST, including desugared forms (an `error` group becomes a module of constants). |
@@ -71,10 +74,10 @@ The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 | `pass1.c/h` | Symbol tables. Collects every top-level and module-level name, type layout and function signature so declarations can refer to each other in any order; resolves imports; assigns C names; numbers error codes; checks that no two declarations claim one C name. |
 | `pass2.c/h` | The type checker: inference, name resolution, widening, casts, match exhaustiveness, provenance (escape) analysis, constant folding, generic validation, and registration of generic instances. |
 | `facts.c/h` | Facts about values that pass2 judges by and codegen emits by, so the two agree: whether a pointer or integer is provably null/non-zero, error-constant values, and how interpolated-string format specs are read and sized. |
-| `monomorph.c/h` | The instance table (`mono_register`), transitive discovery, and the finalize step that resolves and orders instances. |
+| `monomorph.c/h` | The instance table (`mono_register`), transitive discovery, and the finalize step that resolves instance type names. |
 | `codegen.c/h` | The C emitter. |
 | `diag.c/h` | Error reporting. In server mode it reports to a sink and turns a fatal error into a `longjmp`. |
-| `common.c/h` | Arena allocator, growable arrays (`DA_APPEND`), exact-size string builders, file reading. |
+| `common.c/h` | The arena allocator; the `xmalloc`/`xcalloc`/`xrealloc` wrappers, which exit on out-of-memory; growable arrays (`DA_APPEND`); exact-size string builders; the intern table (the parser interns every name, so names compare by pointer); file reading; name helpers shared by several passes (`c_safe_ident`, `is_mangled_root_name`, `mangled_source_name`, `ns_display`); string-literal decoding; and `g_len_repr`, the `--len-repr` setting. |
 | `analyze.c/h` | The non-fatal front end used by the language server. |
 | `lsp.c/h`, `json.c/h` | The language server and its JSON-RPC value model. |
 | `builtin_docs.inc` | Hover documentation for built-in intrinsics (user-facing markdown). |
@@ -86,10 +89,12 @@ The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 ### Lexer
 
 The lexer scans the source, then runs a layout pass that converts indentation
-into block tokens. Tabs are a compile error. Unrecoverable lexical errors
-(tabs, an unterminated string or comment, inconsistent indentation) are the
-only fatal errors in the compiler: they call `diag_fatal`, which exits in the
-CLI and aborts the analysis in the server.
+into block tokens. Tabs are a compile error. Every lexical error (a tab, an
+unterminated string or comment, inconsistent indentation, a bad `#if`) is
+fatal: it calls `diag_fatal`, which exits in the CLI and aborts the analysis
+in the server. The only other fatal errors are I/O failures in the driver,
+running out of memory, and internal errors: a node reaching a pass in a shape
+an earlier pass should have ruled out.
 
 ### Parser
 
@@ -104,7 +109,12 @@ statements, patterns and declarations. It never aborts:
 - Progress is guaranteed by the leaf rule (the prefix and pattern-atom
   parsers consume the offending token unless it is a hard stop) and by a
   progress check in every item loop. The top-level and module-body loops also
-  resynchronize at the next declaration (`recover_to`).
+  resynchronize at the next declaration (`recover_to_decl`); `DECL_PARSERS`
+  is the one table of declaration-starting keywords.
+- Where the parser tries one reading and may back out (a parenthesized type
+  that might be a cast, a `<` that might open type arguments), the attempt runs
+  inside `diag_speculate_begin`/`diag_speculate_end`: its errors are held and
+  dropped if the parser backtracks, so an abandoned reading reports nothing.
 
 ### pass1: declarations
 
@@ -118,8 +128,10 @@ Name resolution, which pass1 sets up and pass2 carries out, looks in this
 order: local scopes, then for the current module its members and then its
 imports, then the same for each enclosing module in turn, then the importing
 file's file-level imports, then global declarations. File-level imports are
-visible only to the file that wrote them. `resolve_symbol` in pass2 is the one
-implementation of this order.
+visible only to the file that wrote them. `resolve_name` in pass2 is the one
+implementation of this order; it also reports where it found the name, so a
+caller looking for the companion half of a type/module pair looks in the same
+place.
 
 ### pass2: type checking
 
@@ -144,8 +156,11 @@ Besides typing, pass2 does:
   stack, freeing non-heap memory, and storing stack pointers in heap objects.
 - **Constant folding** for top-level initializers and const-generic arguments.
 - **Generics.** A generic body is checked once, with type variables abstract.
-  Each instantiation is registered with the mono table and checked against
-  the concrete rules (see [Invariants](#invariants)).
+  Each instantiation is registered with the mono table, and the checks that
+  depend on the concrete types (operator operands, sizes, const arguments) are
+  made per instance by `validate_generic_expr`, which walks the body under
+  that instance's bindings and reports through the chain of instantiations
+  that led to it (see [Invariants](#invariants)).
 
 ### Monomorphization
 
@@ -154,8 +169,10 @@ mangles the instance name, evaluates the instance's `static_assert`s, and caps
 the number of instances per template: a template that instantiates itself
 with a growing const argument (`f<'n + 1>` inside `f`) would otherwise never
 terminate. After pass2, discovery walks instantiated bodies to a fixpoint,
-and finalize resolves every type name to its mangled C name and sorts
-instances so a by-value struct field's type is emitted before the struct.
+and finalize resolves every type name to its mangled C name. Codegen's
+`emit_types` sorts every struct and union definition, instances and
+top-level declarations together, so a by-value field's type is defined before
+the struct that holds it.
 
 ### Code generation
 
@@ -178,17 +195,29 @@ anything nearby.
   made.
 - Codegen never runs after an error. pass2 does run after recoverable parse
   and pass1 errors in the language server, and after pass1 errors in the CLI.
-- Any error channel that stashes an error to report later (const evaluation
-  inside instantiation is the main one) must be drained at the end of the
-  pipeline. The worst failure is `fcc` exiting 0 with broken output.
+- Codegen reports a form it cannot emit with `internal_error`, which is an
+  ordinary error: the driver checks the count after codegen and deletes the C
+  file (and its `.errcodes` map), so a compiler bug never leaves broken output
+  behind.
+- Any error channel that stashes an error to report later must be drained by
+  a caller that owns a diagnostic site. The main one is the const evaluator
+  (`const_type_eval` in `types.c`), which runs inside type substitution with no
+  diagnostic context and stashes its first failure; `const_eval_take_error`
+  reports it and `const_eval_error_pending` asks whether one is waiting. The
+  worst failure is `fcc` exiting 0 with broken output.
 
 ### Single resolution
 
 Each name is resolved once, in pass2, and the result is stored on the AST
-(`EXPR_IDENT.resolved_sym`, `companion_module`, `EXPR_FIELD.resolved_member`,
-and the call's resolved callee). Later code reads the stored pointer instead of
+(`EXPR_IDENT.resolved_sym` and `companion_module`, `EXPR_FIELD.resolved_member`
+and `companion_module`, and the call's resolved callee). Later code reads the
+stored result, through `expr_symbol` and `expr_module` in pass2, instead of
 looking the name up again. Resolving twice in different contexts is how a
 parameter that shares a name with a module ends up meaning the module.
+
+After pass2 every type name carried by a `Type` is canonical: the key it has
+in the global symbol table. Mono and codegen look types up there by that key,
+which is a table read, not a second resolution through scopes.
 
 ### C name spaces
 
@@ -204,16 +233,20 @@ emitted C apart:
   `fc__`.
 - `fc_<kind>_...` for names the compiler derives: `fc_str`, `fc_main`,
   `fc_eq_*`, `fc_fn_*`, `fc_tag_*` (a union's tag enum), `fc_tv_*` (its
-  enumerators), `fc_slice_*`, `fc_option_*`, `fc_result_*`. A derived name is
-  never built by suffixing a user name, and every join of two names must be
-  shown injective: an FC identifier can start or end with `_`, so `a__b` can
-  split two ways. (That is why tag enumerators put the variant first.) A name
-  derived from a type must distinguish exactly what the emitted C type
-  distinguishes; `type_ident_eq` in codegen is that relation.
+  enumerators), `fc_slice_*`, `fc_option_*`, `fc_result_*`. The kind prefix
+  is what keeps these apart from user names, and every join of two names must
+  be shown injective: an FC identifier can start or end with `_`, so `a__b`
+  can split two ways. (That is why tag enumerators put the variant first.) A
+  suffix is added only after a prefixed name, where it stays inside that
+  kind's space (`fc_enum_of_<E>_i`). A name derived from a type must
+  distinguish exactly what the emitted C type distinguishes; `type_ident_eq`
+  in codegen is that relation.
 - `_l_<name>_<id>` for every function-local binding (let, parameter, loop
   variable, pattern binding), assigned by `local_c_name` in pass2, plus
-  `_<temp><n>` for codegen temporaries. Source names never reach C directly,
-  so a local can be named after a libc function or a C keyword.
+  `_<temp><n>` for codegen temporaries and compiler-made file-scope functions
+  (a lifted lambda's `_fn_<n>`, suffixed `__<instance>` inside a generic
+  instance, and `_fc_back_<n>`). Source names never reach C directly, so a
+  local can be named after a libc function or a C keyword.
 
 Struct fields and union payloads keep their FC names (escaped by
 `c_safe_ident` if they are C keywords); they live in per-type name spaces.
@@ -258,7 +291,8 @@ cannot make is made per instance by the concrete rule.
   clang. Helpers are emitted `static __attribute__((unused))`, so unused ones
   don't warn and the C compiler drops them.
 - It must not assume the width of `int`; FC targets include 16-bit-int
-  platforms.
+  platforms. Arithmetic on types narrower than `int` goes through `unsigned`,
+  and lengths narrow to `size_t` or `int` through `fc_to_size`/`fc_to_int`.
 - Signed arithmetic goes through unsigned to define overflow:
   `(int32_t)((uint32_t)a + (uint32_t)b)`. Shift counts are masked
   (`a << (b & 31)`). Integer division aborts on a zero divisor and handles
@@ -271,10 +305,37 @@ cannot make is made per instance by the concrete rule.
 
 ### Walkers
 
-Every whole-tree walk over expressions goes through `expr_for_each_child` or
-has a `switch` with no `default`. Adding an `ExprKind` therefore produces a
-`-Wswitch` warning at every site that must handle it, and the build warns
-until they all do.
+A walk that must handle every kind has a `switch` with no `default`, so adding
+a kind produces a `-Wswitch` warning at every such site, and
+`make check-warnings` fails until each one handles it. These are the child
+visitors in `ast.c` (`expr_for_each_child` and friends, which every other
+whole-tree walk goes through), the dispatchers `check_expr_inner` (pass2) and
+`emit_expr` (codegen), the whole-tree predicates in pass2 (such as
+`expr_may_yield_stack`, which decides whether a loop's value can point into
+its own frame), and the type-kind walkers in `types.c` and codegen. A kind
+that must never reach one of them gets an explicit case that reports an
+internal error. A `switch` with a `default` answers a question about a few
+kinds and is fine to leave alone.
+
+Facts that pass2 and codegen both need (a type property's result type, a
+built-in member's type, the width of a fixed-size integer, an interpolation
+segment's size budget) live in one table or function, in `types.c` or
+`facts.c`, that both read.
+
+### Memory and re-entry
+
+Everything that lives as long as one compilation (the AST, types, interned
+names, diagnostic text) is allocated from the arena and freed with it; the
+analysis result in the language server owns its arena. Symbol tables, growable
+arrays, token arrays and source buffers are `malloc`ed (through the `x*`
+wrappers) and freed by their owner.
+
+The language server runs the front end many times in one process, so a
+module-level static in the front end must not carry state from one analysis
+into the next. Each one is reset where its pass starts (pass1's error-code
+table, the diagnostic counters in `diag_reset_counts`), is drained by its
+reader (the const-eval stash), or is a counter whose value only needs to be
+unique (`local_c_name`'s id).
 
 ### Const generics
 
@@ -285,13 +346,20 @@ expression), and a fixed array's size can be symbolic until substitution
 folds it with `const_type_eval`. Parameter kinds (`GenParamKind`) sit in
 arrays parallel to `type_params`.
 
+Constant expressions are evaluated in two places. pass2 folds a `let`
+initializer or a concrete size or argument in context (`fold_const_leaf` and
+its callers), with names resolved and diagnostics at hand. `const_type_eval`
+evaluates a `TYPE_CONST_EXPR` with no context during substitution, over
+`int64_t` with wrapping and masked shifts, and stashes its errors (see
+[Errors](#errors)).
+
 ## Language server
 
 `fcc --lsp` speaks the Language Server Protocol over stdio. `lsp_main` in
 `src/lsp.c` is the message loop. The server is single-threaded and analyzes
 lazily: edits only mark documents dirty, and the dirty units are re-analyzed
-when the input queue drains or a type-aware request arrives, so a burst of
-keystrokes costs one analysis.
+when the input queue drains or any request arrives, so a burst of keystrokes
+costs one analysis.
 
 ### Analysis
 
@@ -350,10 +418,22 @@ stored. Completion is scope-aware (`complete_scope`), handles member access
 (`complete_import`). Built-in intrinsics have no declaration to read, so their
 hover text comes from `builtin_docs.inc`.
 
+The AST records a location for each node but not for every token in it, so
+a few queries read the source text around a node: the type name inside a
+written annotation (`consider_type_annotation`), the name after a declaration
+keyword (`kw_name_col`, `let_name_col`), the keyword a built-in was spelled
+with, and the statement being typed during `import` completion. Every such
+scan is bounded by the line index (`line_start`), because the AST may come
+from an older version of the text than the one being scanned.
+
 If the lexer aborted (a stray tab, an unterminated string), the fresh
 analysis has no types. Queries then use the unit's last analysis that did
 type-check (`query_result`), whose positions may be off for the line being
 edited; diagnostics always come from the fresh analysis.
 
+On Windows, the server does not discover `lsp.rsp` files, sibling files or
+the installed standard library (those need POSIX directory walking), so each
+document is its own unit.
+
 The editor extension in `editors/vscode/` is a thin client that starts
-`fcc --lsp`.
+`fcc --lsp` and restarts it if it exits.

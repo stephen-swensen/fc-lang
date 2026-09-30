@@ -7,7 +7,8 @@
  *
  * fcc accepts gcc-style response files: a `@file` token on the command line is
  * replaced in place by the whitespace-separated tokens read from `file`
- * (newlines count as whitespace). `#` and `//` begin line comments. Response
+ * (newlines count as whitespace; a token in double quotes may hold spaces, with
+ * no escapes). `#` and `//` begin line comments. Response
  * files may reference other response files (`@nested`), expanded recursively;
  * a cycle (or excessive nesting) is an error.
  *

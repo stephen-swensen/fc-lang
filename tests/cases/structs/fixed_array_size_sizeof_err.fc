@@ -1,0 +1,7 @@
+// sizeof is not a compile-time constant in a fixed array size: the C compiler
+// decides a type's size. Reported once. Regression: the field line fell apart
+// into eleven errors.
+struct s =
+    b: u8[sizeof(i32)]
+
+let main = (args: str[]) -> 0

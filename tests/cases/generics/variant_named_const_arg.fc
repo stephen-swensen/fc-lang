@@ -1,0 +1,25 @@
+// A named module constant is a constant generic argument in every spelling of
+// an instance: a type, a payload variant and a no-payload variant.
+// Regression: the payload variant resolved its arguments as types only and
+// rejected `cfg.n`.
+module cfg =
+    let n = 2
+
+struct wide =
+    limbs: u32['n]
+
+union maybe_wide =
+    | got(wide<'n>)
+    | nothing
+
+let main = (args: str[]) ->
+    let a = default(wide<cfg.n>)
+    let x = maybe_wide<cfg.n>.got(a)
+    let y = maybe_wide<cfg.n>.nothing
+    match x with
+    | got(w) -> assert(w.limbs.len == 2)
+    | nothing -> assert(false)
+    match y with
+    | got(w) -> assert(false)
+    | nothing -> void()
+    0

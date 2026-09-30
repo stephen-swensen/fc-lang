@@ -1,0 +1,15 @@
+// A payload pattern on a variant that carries no payload is an error, as `ok(v)`
+// is on a `void!`. Regression: it was accepted, and a use of the binding then
+// reported a misleading "undefined name".
+union u =
+    | empty
+    | full(i32)
+
+let f = (x: u) ->
+    match x with
+    | empty(y) -> 0
+    | full(v) -> v
+
+let main = (args: str[]) ->
+    assert(f(u.full(3)) == 3)
+    0

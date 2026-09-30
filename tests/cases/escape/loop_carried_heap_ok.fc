@@ -1,0 +1,16 @@
+// Heap values carried across iterations stay returnable, including through a
+// let in the body.
+let keep = () ->
+    let mut p = alloc(i32)!
+    let mut saved = p
+    for i in 0..2 do
+        saved = p
+        let q = alloc(i32)!
+        p = q
+    free(p)
+    return saved
+
+let main = (args: str[]) ->
+    let r = keep()
+    free(r)
+    0

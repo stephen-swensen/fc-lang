@@ -39,8 +39,10 @@ MonoInstance *mono_find(MonoTable *t, const char *mangled_name);
  * to get canonical names without symtab re-lookup. */
 void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type);
 
-/* Finalize monomorphized types: ensure all concrete_types are built and
- * topologically sort entries so by-value struct dependencies are emitted first. */
+/* Finalize monomorphized types: give every instance a private concrete type,
+ * discover the instances their fields and payloads name, resolve every type
+ * name to its C name, and reject a truncated infinite instance family. The
+ * order definitions are emitted in is codegen's (emit_types). */
 void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab);
 
 /* Discover all transitive monomorphized instances by walking template function

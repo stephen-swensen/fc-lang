@@ -9,12 +9,14 @@ endif
 
 " Keywords
 syn keyword fcKeyword let mut struct union enum error module namespace import from as
-syn keyword fcKeyword extern private match with if then else for in loop do
+syn keyword fcKeyword extern private match with when if then else for in loop do
 syn keyword fcKeyword break continue return defer ignore define
+syn keyword fcKeyword guarded unguarded checked unchecked
 
 " Built-in operators (reserved identifiers)
 syn keyword fcBuiltin alloc free sizeof alignof default assert some ok err
-syn keyword fcBuiltin error_name enum_of bitcast
+syn keyword fcBuiltin error_name enum_of bitcast alloca static_assert
+syn keyword fcBuiltin atomic_load_acquire atomic_store_release
 
 " Boolean and none literals
 syn keyword fcBoolean true false

@@ -72,6 +72,12 @@ root). Override the editor CLI with `FC_CODE_CLI=codium` (or `cursor`, …); if 
 CLI is found it falls back to unpacking into `~/.vscode/extensions` (then fully
 restart the editor). Linux is the supported target.
 
+If the server can't be started (a wrong `fc.serverPath`, say), the extension
+shows an error instead of waiting on it. If the server exits while you work,
+the extension restarts it and re-sends the open documents, up to three times in
+three minutes; after that it shows an error and stops, and reloading the window
+starts it again.
+
 ## Settings
 
 - `fc.serverPath` (default `"fcc"`) — path to the `fcc` binary. Set this to an

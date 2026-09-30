@@ -1,0 +1,4 @@
+// An import of a missing name names the nested namespace as written.
+import nothing_here from acme::gfx::
+
+let main = (args: str[]) -> 0

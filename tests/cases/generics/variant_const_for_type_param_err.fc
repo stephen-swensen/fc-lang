@@ -1,0 +1,13 @@
+// A constant given for a type parameter is rejected however the instance is
+// spelled, including a no-payload variant. Regression: the variant spelling
+// skipped the kind check and codegen failed with an internal error.
+union opt =
+    | got('a)
+    | nothing
+
+let main = (args: str[]) ->
+    let b = opt<4>.nothing
+    match b with
+    | got(v) -> assert(false)
+    | nothing -> void()
+    0

@@ -1,0 +1,13 @@
+// Loop-carried taint through alloca: each iteration's alloca is released when
+// the next one reuses the frame, and the saved copy is returned after the loop.
+let bad = (name: const str) ->
+    let mut p = default(cstr)
+    let mut saved = default(cstr)
+    for i in 0..2 do
+        saved = p
+        p = alloca(c"%s{name}")
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad("x")
+    0

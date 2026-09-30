@@ -1,0 +1,9 @@
+// An explicit constant argument for a function's type parameter is rejected,
+// also when the parameter's kind is decided only by the body (default('a)),
+// and when the call comes before the definition. Regression: the constant
+// reached codegen and failed with an internal error.
+let main = (args: str[]) ->
+    let x = make<4>()
+    0
+
+let make = <'a>() -> default('a)

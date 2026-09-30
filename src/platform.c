@@ -55,8 +55,10 @@ const char *platform_get_arch(void) {
     return "aarch64";
 #elif defined(__arm__) || defined(_M_ARM)
     return "arm";
-#elif defined(__riscv)
+#elif defined(__riscv) && defined(__riscv_xlen) && __riscv_xlen == 64
     return "riscv64";
+#elif defined(__riscv)
+    return "riscv32";
 #elif defined(__wasm32__)
     return "wasm32";
 #else
@@ -95,8 +97,7 @@ char *platform_realpath(const char *path) {
      * both uses (cycle-detection keys and path-dedup keys). */
     DWORD need = GetFullPathNameA(path, 0, NULL, NULL);
     if (need == 0) return NULL;
-    char *buf = malloc(need);
-    if (!buf) return NULL;
+    char *buf = xmalloc(need);
     DWORD wrote = GetFullPathNameA(path, need, buf, NULL);
     if (wrote == 0 || wrote >= need) { free(buf); return NULL; }
     for (char *p = buf; *p; p++) if (*p == '\\') *p = '/';

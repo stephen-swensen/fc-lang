@@ -1,0 +1,28 @@
+// A module may instantiate a generic declared in a later module whose field
+// or payload names a type that module imports. Regression: the later module's
+// imported field types were resolved only when that module itself was checked,
+// so the earlier use failed with "unknown type name 'box'".
+module c =
+    struct box =
+        v: 'a
+
+module a =
+    import holder, either from b
+    let get = () ->
+        let h = holder { inner = c.box { v = 5 } }
+        let e = either<i32>.left(c.box { v = 6 })
+        match e with
+        | left(b) -> h.inner.v + b.v
+        | right -> 0
+
+module b =
+    import box from c
+    struct holder =
+        inner: box<'a>
+    union either =
+        | left(box<'a>)
+        | right
+
+let main = (args: str[]) ->
+    assert(a.get() == 11)
+    0

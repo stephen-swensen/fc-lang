@@ -1,0 +1,14 @@
+// Loop-carried taint through a let in the loop body: the body is not checked yet when the taint is computed, so its own bindings are tracked by name.
+let bad = () ->
+    let mut p = default(i32*)
+    let mut saved = default(i32*)
+    for i in 0..2 do
+        saved = p
+        let mut x = 5
+        let q = &x
+        p = q
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad()
+    0

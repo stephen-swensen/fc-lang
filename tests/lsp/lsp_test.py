@@ -6,9 +6,20 @@ publishDiagnostics notifications. Kept separate from the compiler suite. The
 most important assertion is server survival: a syntactically broken document
 (which makes the lexer diag_fatal) must NOT kill the server.
 """
-import json, subprocess, sys, tempfile
+import atexit, glob, json, os, re, select, shutil, subprocess, sys, tempfile, time
+import urllib.parse
 
 BIN = sys.argv[1]
+
+TMPDIRS = []
+
+def tmpdir(prefix):
+    """A fresh directory for one scenario, removed when the run ends."""
+    d = tempfile.mkdtemp(prefix=prefix)
+    TMPDIRS.append(d)
+    return d
+
+atexit.register(lambda: [shutil.rmtree(d, ignore_errors=True) for d in TMPDIRS])
 
 def frame(obj):
     b = json.dumps(obj).encode()
@@ -19,7 +30,7 @@ def note(method, params):    return {"jsonrpc": "2.0", "method": method, "params
 
 # Use a fresh empty directory so the server's same-directory compilation-unit
 # scan finds no unrelated sibling .fc files.
-URI = "file://" + tempfile.mkdtemp(prefix="fc_lsp_") + "/doc.fc"
+URI = "file://" + tmpdir("fc_lsp_") + "/doc.fc"
 
 # Programs (0-based lines noted where used by positions below).
 CLEAN = (
@@ -47,9 +58,9 @@ UNICODE = (
 )
 ASSERT_NOPAREN = (
     "let main = (args: str[]) ->\n"
-    "    assert 1 == 1\n"                # missing parens: recovery once made the
-    "    return 0\n"                     # assert text capture exit(1) ("out of
-)                                        # memory") -- must not kill the server
+    "    assert 1 == 1\n"                # missing parens: the assert text capture
+    "    return 0\n"                     # must recover, not exit the server
+)
 
 def open_doc(v, text):  return note("textDocument/didOpen",
     {"textDocument": {"uri": URI, "languageId": "fc", "version": v, "text": text}})
@@ -87,6 +98,7 @@ msgs = [
     note("exit", None),
 ]
 
+CRASHES = []  # (n, returncode, stderr) of every session that crashed or tripped a sanitizer
 PUBS = []   # (uri, [messages]) of every publishDiagnostics of the LAST run_session,
             # in order — for assertions about the URI itself, which the basename
             # keys of `diags_by_file` cannot distinguish.
@@ -98,6 +110,11 @@ def run_session(messages, env=None):
     inp = b"".join(frame(m) for m in messages)
     p = subprocess.run([BIN, "--lsp"], input=inp, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE, timeout=60, env=env)
+    # A signal (crash) or a sanitizer report fails the run, whatever the
+    # scenario's own checks say.
+    err_text = p.stderr.decode(errors="replace")
+    if p.returncode < 0 or "Sanitizer" in err_text or "runtime error:" in err_text:
+        CRASHES.append((len(CRASHES) + 1, p.returncode, err_text[:2000]))
     responses, diags, by_file = {}, [], {}
     out, i = p.stdout, 0
     while True:
@@ -172,10 +189,9 @@ check("completion includes keywords", "let" in labels and "match" in labels,
       str(labels[:10]))
 # Completion reads the lexer's own keyword table, so every keyword is offered,
 # including ones a hand-kept list had missed (static_assert).
-import os as _os, re as _re
-_lexer_src = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+_lexer_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "src", "lexer.c")).read()
-_lexer_kws = _re.findall(r'KW\("([a-z_]+)"', _lexer_src)
+_lexer_kws = re.findall(r'KW\("([a-z_]+)"', _lexer_src)
 check("completion offers every lexer keyword (incl. static_assert)",
       len(_lexer_kws) > 40 and "static_assert" in labels and
       all(k in labels for k in _lexer_kws),
@@ -230,8 +246,7 @@ if stderr.strip():
     sys.stderr.write("server stderr:\n" + stderr.decode() + "\n")
 
 # --- multi-file compilation unit (sibling .fc files in the same directory) ---
-import os
-proj = tempfile.mkdtemp(prefix="fc_lsp_proj_")
+proj = tmpdir("fc_lsp_proj_")
 with open(os.path.join(proj, "prelude.fc"), "w") as f:
     f.write("module prelude =\n    let double = (n: i32) ->\n        n * 2\n")
 with open(os.path.join(proj, "main.fc"), "w") as f:
@@ -260,7 +275,7 @@ check("multi-file: prelude.fc OK (let main provided by sibling)",
 # text: `let` below sits at byte column 17 but UTF-16 character 14, because
 # each "é" before it is two bytes and one UTF-16 unit. lib.fc is not open, so
 # its text comes from disk. ---
-xdir = tempfile.mkdtemp(prefix="fc_lsp_xdef_")
+xdir = tmpdir("fc_lsp_xdef_")
 with open(os.path.join(xdir, "lib.fc"), "w", encoding="utf-8") as f:
     f.write("module lib =\n    /* \u00e9t\u00e9 */ let helper = (n: i32) -> n + 1\n")
 with open(os.path.join(xdir, "main.fc"), "w") as f:
@@ -285,12 +300,11 @@ check("definition in another file uses that file's UTF-16 column",
 
 # --- cross-file diagnostic propagation: editing prelude.fc must refresh the
 # diagnostics of the *other* open file (main.fc) that depends on it, WITHOUT
-# main.fc itself being touched. Regression for the bug where a fix in prelude.fc
-# left a stale error on main.fc until main.fc was edited: the idle flush now
-# re-analyzes every open document when any one is dirty. Each edit below is
+# main.fc itself being touched: the idle flush re-analyzes every unit that lists
+# a dirty file, so a fix in prelude.fc clears main.fc's error. Each edit below is
 # followed by a request, forcing a discrete flush so we observe one
 # publishDiagnostics per state (main.fc is never edited after didOpen). ---
-proj2 = tempfile.mkdtemp(prefix="fc_lsp_xprop_")
+proj2 = tmpdir("fc_lsp_xprop_")
 PRE_OK  = "module prelude =\n    let double = (n: i32) ->\n        n * 2\n"
 PRE_BAD = "module prelude =\n    let triple = (n: i32) ->\n        n * 2\n"  # no `double`
 MAIN2   = ("import double from prelude\n\nlet main = (args: str[]) ->\n"
@@ -333,7 +347,7 @@ check("cross-file: fixing prelude.fc clears main.fc's error without touching mai
 # edits to the file it depends on). Here ONLY lib.fc is opened; app.fc lives on
 # disk and depends on lib.fc. Breaking lib.fc must surface an error on app.fc even
 # though app.fc was never opened; fixing lib.fc must clear it. ---
-proj3 = tempfile.mkdtemp(prefix="fc_lsp_pw_")
+proj3 = tmpdir("fc_lsp_pw_")
 LIB_OK  = "module lib =\n    let val = (n: i32) ->\n        n * 2\n"
 LIB_BAD = "module lib =\n    let valx = (n: i32) ->\n        n * 2\n"   # `val` renamed away
 APP     = ("import val from lib\n\nlet main = (args: str[]) ->\n"
@@ -375,7 +389,7 @@ check("project-wide: the edited (open) file stays clean; the error lands on the 
 
 # --- project-wide: a non-open file with its OWN pre-existing error is surfaced as
 # soon as a sibling is opened (not only after an edit). ---
-proj4 = tempfile.mkdtemp(prefix="fc_lsp_pw2_")
+proj4 = tmpdir("fc_lsp_pw2_")
 with open(os.path.join(proj4, "broken.fc"), "w") as f:
     f.write("module broken =\n    let f = (n: i32) ->\n        n + n\n    let g = nope\n")  # `nope` undefined
 with open(os.path.join(proj4, "clean.fc"), "w") as f:
@@ -399,7 +413,7 @@ check("project-wide: the opened clean file has no diagnostics of its own",
 # --- didClose with project-wide diagnostics: closing a file that still has an
 # error and is still a unit member must NOT hide the error (it is republished for
 # the now-unopened file); closing the LAST document clears everything. ---
-proj5 = tempfile.mkdtemp(prefix="fc_lsp_close_")
+proj5 = tmpdir("fc_lsp_close_")
 with open(os.path.join(proj5, "err.fc"), "w") as f:
     f.write("module err =\n    let g = nope\n")          # `nope` undefined -> err.fc errors
 with open(os.path.join(proj5, "ok.fc"), "w") as f:
@@ -431,8 +445,8 @@ check("didClose: a still-broken, still-referenced closed file keeps its error",
 check("didClose: closing the last document clears project-wide diagnostics",
       cerr and cerr[-1] == [], str(cerr))
 
-# --- stdlib feed: every module resolves (regression for the hardcoded list) ---
-sd = tempfile.mkdtemp(prefix="fc_lsp_std_")
+# --- stdlib feed: every module resolves, whichever modules the stdlib holds ---
+sd = tmpdir("fc_lsp_std_")
 sprog = ("import io from std::\nimport random from std::\nimport text from std::\n\n"
          "let main = (args: str[]) ->\n    return 0\n")
 sl = [
@@ -450,7 +464,7 @@ check("stdlib feed resolves std::random / io / text",
 # --- library mode: a document with no `let main` is tolerated (no entry point) ---
 # The CLI requires `let main`, but the server analyzes library code (e.g. a stdlib
 # module being edited) that has no entry point. It must not be flagged.
-libns = tempfile.mkdtemp(prefix="fc_lsp_libns_")
+libns = tmpdir("fc_lsp_libns_")
 LIBNS = (
     "namespace mylib::\n\n"
     "module util =\n"
@@ -472,7 +486,7 @@ check("library module (no `let main`) is not flagged as missing entry point",
 # A global file with top-level `let` bindings and no main: the entry-point-file
 # restriction can't apply (there is no entry file), so it must be suppressed too,
 # rather than flagging every top-level `let`.
-libg = tempfile.mkdtemp(prefix="fc_lsp_libg_")
+libg = tmpdir("fc_lsp_libg_")
 LIBG = (
     "let answer = 42\n"
     "let greet = (name: str) ->\n"
@@ -496,7 +510,6 @@ check("library globals (top-level `let`, no main) are not flagged",
 # same module would be analyzed twice -> pass1 "redefinition" -> pass2 never runs
 # -> no diagnostics AND no type info (hover / CodeLens silently empty). The feed
 # must drop the entry that is the SAME on-disk file as the open document.
-import glob
 std_dir = os.path.abspath("stdlib")
 cand = next((f for f in sorted(glob.glob(os.path.join(std_dir, "*.fc")))
              if "let " in open(f).read()), None)
@@ -525,7 +538,7 @@ if cand:
 # Dedup keys on canonical path, not basename: a workspace `data.fc` is a DIFFERENT
 # on-disk file than the stdlib's `data.fc`, so the feed's `std::data` must survive.
 # (Basename dedup would drop it and break `import data from std::`.)
-ns = tempfile.mkdtemp(prefix="fc_lsp_ownname_")
+ns = tmpdir("fc_lsp_ownname_")
 with open(os.path.join(ns, "data.fc"), "w") as f:        # same basename as std's data.fc
     f.write("module mydata =\n    let f = (x: i32) ->\n        x\n")
 with open(os.path.join(ns, "main.fc"), "w") as f:
@@ -547,10 +560,9 @@ check("own file named like a stdlib module: `import data from std::` still resol
 # realpath), so a path-only dedup would miss it -> the module is merged twice ->
 # pass1 redefinition -> pass2 gated -> empty CodeLens/hover with the error filtered
 # out (a silently blank editor). Content-identity dedup collapses the two copies.
-# This is the regression guard for the former "-O0 data.fc CodeLens empty" issue,
-# which was really a path-mismatch dedup miss (installed stdlib vs. opened file).
+# An installed stdlib and an opened copy of one of its files differ only in path.
 if cand:
-    cpdir = tempfile.mkdtemp(prefix="fc_lsp_copy_")
+    cpdir = tmpdir("fc_lsp_copy_")
     cpath = os.path.join(cpdir, os.path.basename(cand))      # same basename, different dir
     with open(cpath, "w") as f:
         f.write(open(cand).read())                           # byte-identical content
@@ -573,13 +585,12 @@ if cand:
           isinstance(clenses, list) and len(clenses) > 0,
           str(len(clenses) if isinstance(clenses, list) else clenses))
 
-# --- ungated pass2 (Item 2): an error in a MERGED sibling file no longer blanks the
-# open file. pass2 now runs past a recoverable pass1 error (here, a duplicate top-level
-# name in the sibling), so the open document still type-checks — its overlays stay live
-# and there is NO "analysis incomplete" diagnostic. The sibling's own error lives in
-# another file and is filtered out of the open file's diagnostics. (This is the payoff
-# the old "safety net" diagnostic existed only to explain.)
-sndir = tempfile.mkdtemp(prefix="fc_lsp_ungated_")
+# --- an error in a MERGED sibling file does not blank the open file. pass2 runs past
+# a recoverable pass1 error (here, a duplicate top-level name in the sibling), so the
+# open document still type-checks: its overlays stay live and there is no "analysis
+# incomplete" diagnostic. The sibling's own error lives in another file and is
+# filtered out of the open file's diagnostics.
+sndir = tmpdir("fc_lsp_ungated_")
 with open(os.path.join(sndir, "broken.fc"), "w") as f:       # duplicate top-level name -> pass1 error
     f.write("let dup = (n: i32) ->\n    n\nlet dup = (n: i32) ->\n    n\n")
 with open(os.path.join(sndir, "main.fc"), "w") as f:         # clean; must still type-check despite the sibling
@@ -596,17 +607,16 @@ sn = [
 ]
 snresp, _, snbf, _, _ = run_session(sn)
 sn_msgs = snbf.get("main.fc", [[]])[-1]
-check("ungated pass2: a merged sibling's recoverable error no longer blanks the open file (no 'analysis incomplete')",
+check("a merged sibling's recoverable error does not blank the open file (no 'analysis incomplete')",
       not any("analysis incomplete" in m for m in sn_msgs), str(sn_msgs))
 sn_lenses = snresp.get(2, {}).get("result") or []
-check("ungated pass2: the open file still type-checks despite the sibling error (CodeLens present)",
+check("the open file still type-checks despite the sibling error (CodeLens present)",
       isinstance(sn_lenses, list) and len(sn_lenses) > 0,
       str(len(sn_lenses) if isinstance(sn_lenses, list) else sn_lenses))
 
-# --- ungated pass2 + error-recovery parsing (the headline payoff): a buffer with a
-# syntactically broken line mid-function still answers hover / CodeLens on the OTHER,
-# well-formed lines — served from the FRESH analysis (not stale fallback). Before this
-# work the broken line aborted the parse (or gated pass2), blanking the whole file.
+# --- error-recovery parsing: a buffer with a syntactically broken line mid-function
+# still answers hover / CodeLens on the OTHER, well-formed lines, served from the
+# fresh analysis (not the stale fallback).
 brkuri = "file:///tmp/fc_lsp_broken_live.fc"
 BROKEN_LIVE = (
     "let helper = (n: i32) ->\n"   # line 0
@@ -631,19 +641,19 @@ bl = [
 blresp, _, blbf, _, _ = run_session(bl)
 bl_hover = (blresp.get(2, {}).get("result") or {}).get("contents", {})
 bl_hover = bl_hover.get("value", "") if isinstance(bl_hover, dict) else str(bl_hover)
-check("recovery payoff: hover on a valid line works despite a broken line in the same file",
+check("recovery: hover on a valid line works despite a broken line in the same file",
       "i32" in bl_hover, repr(bl_hover))
 bl_lenses = blresp.get(3, {}).get("result") or []
-check("recovery payoff: CodeLens still provided for a file with a broken line",
+check("recovery: CodeLens still provided for a file with a broken line",
       isinstance(bl_lenses, list) and len(bl_lenses) > 0,
       str(len(bl_lenses) if isinstance(bl_lenses, list) else bl_lenses))
 bl_msgs = blbf.get("fc_lsp_broken_live.fc", [[]])[-1]
-check("recovery payoff: the broken line still produces a diagnostic (squiggle stays live)",
+check("recovery: the broken line still produces a diagnostic (squiggle stays live)",
       len(bl_msgs) > 0, str(bl_msgs))
 
 # --- go-to-definition beyond plain identifiers: module members, struct-literal
 # type names, and union variant constructors all resolve to their declarations.
-gd = tempfile.mkdtemp(prefix="fc_lsp_gotodef_")
+gd = tmpdir("fc_lsp_gotodef_")
 GOTODEF = (
     "module mathx =\n"                          # line 0
     "    let twice = (n: i32) ->\n"           # line 1: def of twice
@@ -671,7 +681,7 @@ gm = [
     gdef(2, 10, 19),   # 'twice'  -> module member decl, line 1
     gdef(3, 11, 13),   # 'point'  -> struct decl, line 3
     gdef(4, 12, 20),   # 'circle' -> union decl, line 6
-    gdef(5, 10, 13),   # 'mathx'  -> module decl, line 0 (regression guard)
+    gdef(5, 10, 13),   # 'mathx'  -> module decl, line 0
     req(9, "shutdown", None),
     note("exit", None),
 ]
@@ -690,7 +700,7 @@ check("go-to-def on module name 'mathx' -> module declaration (line 0)",
 
 # --- go-to-definition for block-locals: parameters, lets, and uses resolve to
 # the binding's own name location (not just module-level symbols).
-ld = tempfile.mkdtemp(prefix="fc_lsp_locals_")
+ld = tmpdir("fc_lsp_locals_")
 LOCALS = (
     "let f = (x: i32) ->\n"             # line 0: param 'x' name at char 9
     "    x + 1\n"                        # line 1: 'x' use at char 4
@@ -726,7 +736,7 @@ check("go-to-def on local use 'r' -> let binding (line 4)",
 
 # --- exact field-name targeting + plain-struct-field go-to-definition + the
 # field's trailing doc comment. Spacing around the dot must not mislocate.
-fd = tempfile.mkdtemp(prefix="fc_lsp_fields_")
+fd = tmpdir("fc_lsp_fields_")
 FIELDS = (
     "struct point =\n"                       # line 0
     "    x: i32  // the abscissa\n"           # line 1: field 'x' + trailing comment
@@ -792,7 +802,7 @@ check("hover on a generic struct's field includes its doc comment",
 
 # --- doc-comment hover: a run of `//` lines above a definition is shown on hover
 # (top-level symbol and block-local binding).
-dd = tempfile.mkdtemp(prefix="fc_lsp_docs_")
+dd = tmpdir("fc_lsp_docs_")
 DOCS = (
     "// returns n doubled\n"              # line 0
     "// (second line of the doc)\n"       # line 1
@@ -828,10 +838,9 @@ check("hover on block-local 'total' shows the comment above its let binding",
 # --- parameter hover: a function parameter renders as `name: type` with NO
 # doc-comment scan, consistently whether it sits on the function's decl line or a
 # continuation line. A param has no doc of its own — the line above it holds the
-# function decl or an earlier param, never the param's doc — so the old behavior
-# of decl-line params "inheriting" the function's doc (while continuation-line
-# params didn't) was an accident of layout. Go-to-def still resolves the param.
-pd = tempfile.mkdtemp(prefix="fc_lsp_param_")
+# function decl or an earlier param, never the param's doc. Go-to-def still
+# resolves the param.
+pd = tmpdir("fc_lsp_param_")
 PARAMS = (
     "// doubles and offsets\n"                   # line 0: function doc comment
     "// (second line of the doc)\n"              # line 1
@@ -882,9 +891,8 @@ check("go-to-def on continuation-line param 'extra' -> its declaration (line 3)"
 # (a parse abort, or a pass1 error that gates pass2) must NOT blank type-aware
 # overlays. The fresh analysis still drives diagnostics (the squiggle stays
 # live), but hover / CodeLens fall back to the last analysis that type-checked,
-# so they don't flicker off every other keystroke. Regression guard for the
-# "type info disappears while typing `let r2 = ...`" report.
-st = tempfile.mkdtemp(prefix="fc_lsp_stale_")
+# so they don't flicker off every other keystroke (while typing `let r2 = ...`).
+st = tmpdir("fc_lsp_stale_")
 STALE_BASE = (
     "let helper = (n: i32) ->\n"     # line 0
     "    n + 1\n"                      # line 1
@@ -959,7 +967,7 @@ def open_main_session(proj):
     ]
 
 # 1) with lsp.rsp globbing src/ and lib/, the cross-dir import resolves cleanly.
-rp = tempfile.mkdtemp(prefix="fc_lsp_rsp_")
+rp = tmpdir("fc_lsp_rsp_")
 rwrite(os.path.join(rp, "src", "main.fc"), MAIN)
 rwrite(os.path.join(rp, "lib", "util.fc"), UTIL)
 rwrite(os.path.join(rp, "lsp.rsp"), "# project unit\nsrc/*.fc\nlib/*.fc\n")
@@ -969,7 +977,7 @@ check("lsp.rsp: cross-directory import resolves (no diagnostics)", rmsgs == [], 
 
 # 2) negative control: identical layout WITHOUT lsp.rsp — the sibling glob sees
 # only src/, so the import into lib/ is unresolved (proves the rsp did the work).
-npj = tempfile.mkdtemp(prefix="fc_lsp_norsp_")
+npj = tmpdir("fc_lsp_norsp_")
 rwrite(os.path.join(npj, "src", "main.fc"), MAIN)
 rwrite(os.path.join(npj, "lib", "util.fc"), UTIL)
 _, _, nbf, _, _ = run_session(open_main_session(npj))
@@ -978,7 +986,7 @@ check("no lsp.rsp: cross-directory import is unresolved (control)", len(nmsgs) >
 
 # 3) a broken lsp.rsp (references a missing @file) must not silently behave as if
 # absent: fall back to the heuristic AND surface one 'lsp.rsp ignored' note.
-bp = tempfile.mkdtemp(prefix="fc_lsp_rspbad_")
+bp = tmpdir("fc_lsp_rspbad_")
 rwrite(os.path.join(bp, "src", "main.fc"), "let main = (args: str[]) ->\n    return 0\n")
 rwrite(os.path.join(bp, "lsp.rsp"), "@does_not_exist.rsp\n")
 _, _, bbf, _, _ = run_session(open_main_session(bp))
@@ -990,7 +998,7 @@ check("broken lsp.rsp surfaces an 'lsp.rsp ignored' diagnostic (fallback)",
 # ONLY lib.fc; app.fc is a unit member via the rsp glob but never opened. Breaking
 # lib.fc must surface app.fc's resulting error even though app.fc is not open, and
 # fixing lib.fc must clear it — the lsp.rsp path, distinct from the sibling glob. ---
-pwr = tempfile.mkdtemp(prefix="fc_lsp_rsp_pw_")
+pwr = tmpdir("fc_lsp_rsp_pw_")
 rwrite(os.path.join(pwr, "lsp.rsp"), "*.fc\n")
 rwrite(os.path.join(pwr, "lib.fc"), LIB_OK)          # reused from the heuristic test
 rwrite(os.path.join(pwr, "app.fc"), APP)             # imports `val` from lib; not opened
@@ -1023,7 +1031,7 @@ check("lsp.rsp project-wide: the unopened member's error clears when the dep is 
 # --- built-in intrinsic hover: alloc/alloca/free/some/none/default/sizeof/
 # alignof/assert/atomics and the stdin/stdout/stderr globals are not user
 # declarations, so they carry curated documentation surfaced on hover.
-bid = tempfile.mkdtemp(prefix="fc_lsp_builtins_")
+bid = tmpdir("fc_lsp_builtins_")
 BUILTIN_LINES = [
     "struct point =",                                  # 0
     "    x: i32",                                       # 1
@@ -1153,8 +1161,6 @@ check("coalescing: only the final revision's diagnostic is published (unterminat
 # a pause must publish SEPARATELY (the inverse of the coalescing test above).
 # Skipped on Windows, where input_pending() is a no-op (every message flushes
 # immediately) and select() on a pipe is unavailable.
-import os, select, time
-
 if sys.platform.startswith("win"):
     check("interactive idle-flush (skipped on Windows)", True)
 else:
@@ -1209,7 +1215,7 @@ else:
                 pubs.append(msg["params"]["diagnostics"])
         return pubs
 
-    idir = tempfile.mkdtemp(prefix="fc_lsp_interactive_")
+    idir = tmpdir("fc_lsp_interactive_")
     iuri = "file://" + os.path.join(idir, "doc.fc")
     proc = subprocess.Popen([BIN, "--lsp"], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
@@ -1275,7 +1281,7 @@ else:
 # stays clean only if the cached stdlib still resolves `math.sqrt`, so [] across
 # many consecutive cache hits — with an error revision in the middle and a return
 # to clean — proves the cache doesn't corrupt resolution as edits accumulate.
-lcd = tempfile.mkdtemp(prefix="fc_lsp_lexcache_")
+lcd = tmpdir("fc_lsp_lexcache_")
 lcuri = "file://" + os.path.join(lcd, "doc.fc")
 def lc_doc(n, bad=False):
     return ("import math from std::\n\n"
@@ -1321,7 +1327,7 @@ check("lex cache: hover still resolves a cached-stdlib-typed value (f64) after e
 # changes its content; analyzing A again must re-lex B (slot replace + free old)
 # rather than reuse stale tokens. Exercises the replacement/free path (ASan-relevant)
 # and confirms the importer keeps resolving against B's current definition.
-sib = tempfile.mkdtemp(prefix="fc_lsp_lexcache_sib_")
+sib = tmpdir("fc_lsp_lexcache_sib_")
 ap = os.path.join(sib, "a.fc"); bp = os.path.join(sib, "b.fc")
 auri = "file://" + ap; buri = "file://" + bp
 def a_src(n):  return ("import triple from bee\n\nlet main = (args: str[]) ->\n"
@@ -1484,7 +1490,7 @@ check("completion: a module-internal local does not leak to a top-level scope",
 # Completion offers a function's bindings of every form (for-loop variables,
 # destructured names, match-arm bindings), even ones never referenced, and both
 # completion and inlay hints reach a `let` inside a lambda inside a tuple literal.
-LOCALS = (
+BINDING_FORMS = (
     "let main = (args: str[]) ->\n"                                        # 0
     "    let t = { (x: i32) -> let doubled = x * 2 in doubled, 0 }\n"       # 1
     "    for i, item in args do\n"                                         # 2
@@ -1498,7 +1504,7 @@ LOCALS = (
 )
 lo = [
     req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
-    open_doc(1, LOCALS),
+    open_doc(1, BINDING_FORMS),
     req(2, "textDocument/completion", {"textDocument": {"uri": URI}, "position": {"line": 7, "character": 4}}),
     req(3, "textDocument/inlayHint", {"textDocument": {"uri": URI},
         "range": {"start": {"line": 0, "character": 0}, "end": {"line": 10, "character": 0}}}),
@@ -1523,8 +1529,8 @@ check("inlayHint: a let inside a lambda inside a tuple literal gets a hint",
 # the open file's module in the decl list; the scope walk must ignore foreign and
 # synthetic decls (match filename + real line) or that sentinel wins the line race
 # and no in-scope names are offered. `zz.fc` sorts after `data.fc` under src/*.fc,
-# so its sentinel reproduces exactly the wolf-fc regression.
-rsp_proj = tempfile.mkdtemp(prefix="fc_lsp_scope_rsp_")
+# so its sentinel lands in exactly that position.
+rsp_proj = tmpdir("fc_lsp_scope_rsp_")
 rwrite(os.path.join(rsp_proj, "src", "data.fc"),
        "module vgagraph =\n"
        "    let huff_expand = (n: i32) ->\n"
@@ -1927,7 +1933,7 @@ CM_MAIN = (
     "let main = (args: str[]) ->\n"              # 9
     "    (i32) app.go()\n"                       # 10
 )
-cmdir = tempfile.mkdtemp(prefix="fc_lsp_comp_")
+cmdir = tmpdir("fc_lsp_comp_")
 with open(os.path.join(cmdir, "wide.fc"), "w") as f: f.write(CM_LIB)
 with open(os.path.join(cmdir, "main.fc"), "w") as f: f.write(CM_MAIN)
 cmuri = "file://" + os.path.join(cmdir, "main.fc")
@@ -2043,7 +2049,7 @@ IMP_BAD = (
     "let main = (args: str[]) ->\n"
     "    return 0\n"
 )
-impdir = tempfile.mkdtemp(prefix="fc_lsp_imp_")
+impdir = tmpdir("fc_lsp_imp_")
 with open(os.path.join(impdir, "lib.fc"), "w") as f:   f.write(IMP_LIB)
 with open(os.path.join(impdir, "nslib.fc"), "w") as f: f.write(IMP_NSLIB)
 with open(os.path.join(impdir, "main.fc"), "w") as f:  f.write(IMP_MAIN)
@@ -2234,7 +2240,7 @@ CIMP_NS2 = (
     "namespace acme::deeper::\n\n"
     "module gadget =\n    let go = () ->\n        1\n"
 )
-cimpdir = tempfile.mkdtemp(prefix="fc_lsp_cimp_")
+cimpdir = tmpdir("fc_lsp_cimp_")
 for nm, txt in (("clib.fc", CIMP_LIB), ("cnslib.fc", CIMP_NS), ("cns2.fc", CIMP_NS2)):
     with open(os.path.join(cimpdir, nm), "w") as f:
         f.write(txt)
@@ -2346,7 +2352,7 @@ check("import completion: SERVER SURVIVED every half-typed import",
 # server restarted). Also covers the path-spelling half: the rsp's `../shared/...`
 # route must be recognized as the open document, so the LIVE (unsaved) buffer wins
 # over the file on disk.
-xroot = tempfile.mkdtemp(prefix="fc_lsp_xunit_")
+xroot = tmpdir("fc_lsp_xunit_")
 xproj = os.path.join(xroot, "proj"); xshared = os.path.join(xroot, "shared")
 os.mkdir(xproj); os.mkdir(xshared)
 xmain = os.path.join(xproj, "main.fc"); xlib = os.path.join(xshared, "lib.fc")
@@ -2439,8 +2445,7 @@ check("cross-unit: a non-open member's error is published at all",
 # The target sits in a directory whose name has a space and is reached through
 # an lsp.rsp route containing `..`. The client must get the same, properly
 # percent-encoded URI it would build for that file itself.
-import urllib.parse
-droot = tempfile.mkdtemp(prefix="fc lsp space ")
+droot = tmpdir("fc lsp space ")
 os.makedirs(os.path.join(droot, "app"))
 os.makedirs(os.path.join(droot, "shared"))
 with open(os.path.join(droot, "shared", "lib.fc"), "w") as f:
@@ -2481,7 +2486,7 @@ OMAIN = (
     "module user =\n"
     "    import a, nope1, nope2, nope3 from m\n"
 )
-ouri = "file://" + tempfile.mkdtemp(prefix="fc_lsp_order_") + "/main.fc"
+ouri = "file://" + tmpdir("fc_lsp_order_") + "/main.fc"
 om = [
     req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
     note("textDocument/didOpen", {"textDocument": {"uri": ouri, "languageId": "fc",
@@ -2504,8 +2509,8 @@ LRSRC = (
     "    let big = u8[40000] { }\n"
     "    (i32) big.len\n"
 )
-lr16 = tempfile.mkdtemp(prefix="fc_lsp_lr16_")
-lr64 = tempfile.mkdtemp(prefix="fc_lsp_lr64_")
+lr16 = tmpdir("fc_lsp_lr16_")
+lr64 = tmpdir("fc_lsp_lr64_")
 with open(os.path.join(lr16, "lsp.rsp"), "w") as f:
     f.write("--len-repr 16\nmain.fc\n")
 for d in (lr16, lr64):
@@ -2524,6 +2529,100 @@ check("lsp.rsp --len-repr 16 reports the over-capacity literal",
       any("--len-repr 16" in m for m in lrpubs.get(os.path.basename(lr16), [])), str(lrpubs))
 check("--len-repr from one unit's lsp.rsp does not leak into the next",
       not lrpubs.get(os.path.basename(lr64)), str(lrpubs))
+
+# --- an unclosed #if at every array-growth boundary --------------------------
+# A lex error ends the analysis, and the arrays the lexer had in progress are
+# freed. The file grows a line at a time so the error lands on each size at
+# which the token arrays reallocate; a stale pointer there was freed twice.
+ifuri = "file://" + os.path.join(tmpdir("fc_lsp_unclosed_if_"), "main.fc")
+ifmsgs = [req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+          note("textDocument/didOpen", {"textDocument": {"uri": ifuri, "languageId": "fc",
+               "version": 1, "text": "#if foo\n"}})]
+for n in range(80):
+    body = "".join(f"let a{i} = {i}\n" for i in range(n)) + "#if foo\nlet z = 1\n"
+    ifmsgs.append(note("textDocument/didChange", {"textDocument": {"uri": ifuri, "version": 2 + n},
+                  "contentChanges": [{"text": body}]}))
+    ifmsgs.append(req(100 + n, "textDocument/hover", {"textDocument": {"uri": ifuri},
+                  "position": {"line": 0, "character": 4}}))
+ifmsgs += [req(9, "shutdown", None), note("exit", None)]
+ifresp, _, _, ifrc, _ = run_session(ifmsgs)
+check("an unclosed #if at every file size leaves the server running",
+      9 in ifresp and ifrc == 0, f"exit {ifrc}")
+
+# --- a query served from an older, longer analysis -----------------------------
+# After a lex error the server answers from the last analysis that type-checked,
+# whose positions can lie past the end of the shorter current text. (A read
+# past the line table here shows up under `make test-asan`.)
+lguri = "file://" + os.path.join(tmpdir("fc_lsp_long_stale_"), "main.fc")
+LONG = "".join(f"let f{i} = (n: i32) ->\n    n + {i}\n" for i in range(3000)) + \
+       "let main = (args: str[]) ->\n    return 0\n"
+lg = [req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+      note("textDocument/didOpen", {"textDocument": {"uri": lguri, "languageId": "fc",
+           "version": 1, "text": LONG}}),
+      req(2, "textDocument/hover", {"textDocument": {"uri": lguri}, "position": {"line": 0, "character": 4}}),
+      note("textDocument/didChange", {"textDocument": {"uri": lguri, "version": 2},
+           "contentChanges": [{"text": 'let s = "unterminated\n'}]}),
+      req(3, "textDocument/hover", {"textDocument": {"uri": lguri}, "position": {"line": 0, "character": 4}}),
+      req(4, "textDocument/codeLens", {"textDocument": {"uri": lguri}}),
+      req(9, "shutdown", None), note("exit", None)]
+lgresp, _, _, lgrc, _ = run_session(lg)
+check("hover and CodeLens from an older, longer analysis leave the server running",
+      9 in lgresp and lgrc == 0, f"exit {lgrc}")
+
+# --- an lsp.rsp appearing beside an open file that is not being edited --------
+# The open file's unit changes; its new unit is analyzed on the next flush even
+# though the edit that triggers the flush is in another file.
+rsproot = tmpdir("fc_lsp_rsp_appears_")
+for d in ("d1", "d2"):
+    os.makedirs(os.path.join(rsproot, d))
+RSRC = "let main = (args: str[]) ->\n    let x = 41\n    return x\n"
+ra = "file://" + os.path.join(rsproot, "d1", "a.fc")
+rb = "file://" + os.path.join(rsproot, "d2", "b.fc")
+for u in (ra, rb):
+    with open(u[len("file://"):], "w") as f: f.write(RSRC)
+def ropen(u): return note("textDocument/didOpen", {"textDocument": {"uri": u, "languageId": "fc",
+                          "version": 1, "text": RSRC}})
+def rhover(i, u): return req(i, "textDocument/hover", {"textDocument": {"uri": u},
+                             "position": {"line": 1, "character": 8}})
+p1 = subprocess.Popen([BIN, "--lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE)
+for m in [req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+          ropen(ra), ropen(rb), rhover(2, ra)]:
+    p1.stdin.write(frame(m))
+p1.stdin.flush()
+time.sleep(1.0)                                    # let the first analysis finish
+with open(os.path.join(rsproot, "d1", "lsp.rsp"), "w") as f: f.write("a.fc\n")
+for m in [note("textDocument/didChange", {"textDocument": {"uri": rb, "version": 2},
+                                          "contentChanges": [{"text": RSRC + "\n"}]}),
+          rhover(3, ra), req(9, "shutdown", None), note("exit", None)]:
+    p1.stdin.write(frame(m))
+rout, _ = p1.communicate(timeout=60)
+rres, i = {}, 0
+while True:
+    h = rout.find(b"\r\n\r\n", i)
+    if h < 0: break
+    n = int(rout[i:h].decode().split(":")[1])
+    o = json.loads(rout[h + 4:h + 4 + n]); i = h + 4 + n
+    if "id" in o and "method" not in o: rres[o["id"]] = o.get("result")
+check("an lsp.rsp appearing beside an open, unedited file keeps its hover working",
+      rres.get(3) is not None and "i32" in json.dumps(rres.get(3)), json.dumps(rres.get(3)))
+
+# --- a declaration name that begins with an underscore -------------------------
+# The mangled C name (`fc__m___x`) splits into the component `_x`, not `x`.
+uuri = "file://" + os.path.join(tmpdir("fc_lsp_underscore_"), "main.fc")
+USRC = "module m =\n    struct _x =\n        v: i32\n\nlet main = (args: str[]) -> 0\n"
+ur, _, _, _, _ = run_session([req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": uuri, "languageId": "fc",
+         "version": 1, "text": USRC}}),
+    req(2, "textDocument/hover", {"textDocument": {"uri": uuri}, "position": {"line": 1, "character": 12}}),
+    req(9, "shutdown", None), note("exit", None)])
+urng = (ur.get(2, {}).get("result") or {}).get("range", {})
+check("hover on a declaration named `_x` covers both characters",
+      urng.get("start", {}).get("character") == 11 and urng.get("end", {}).get("character") == 13,
+      json.dumps(ur.get(2, {}).get("result"))[:300])
+
+check("no session crashed or reported a sanitizer error",
+      not CRASHES, "\n".join(f"session {n}: exit {rc}\n{err}" for n, rc, err in CRASHES))
 
 print(f"\n{len(failures)} failure(s)" if failures else "\nall LSP tests passed")
 sys.exit(1 if failures else 0)

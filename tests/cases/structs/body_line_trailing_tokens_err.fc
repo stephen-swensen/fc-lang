@@ -1,0 +1,12 @@
+// Tokens left over on a field or variant line are reported once and skipped,
+// so the next line parses normally. Regression: every leftover token was read
+// as the start of another field and reported three times.
+struct s =
+    a: i32 5 6 7
+    b: i32
+
+union u =
+    | x(i32) junk more
+    | y
+
+let main = (args: str[]) -> 0

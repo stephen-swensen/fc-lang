@@ -1,0 +1,5 @@
+// A response-file token in double quotes may hold spaces. Regression: the
+// path split at the space into two tokens.
+let main = (args: str[]) ->
+    assert(helper.two() == 2)
+    0

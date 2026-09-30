@@ -1,0 +1,14 @@
+// Loop-carried taint through a loop's value: `break &x` makes the loop yield a stack pointer.
+let bad = () ->
+    let mut p = default(i32*)
+    let mut saved = default(i32*)
+    for i in 0..2 do
+        saved = p
+        let mut x = 5
+        p = loop
+            break &x
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad()
+    0

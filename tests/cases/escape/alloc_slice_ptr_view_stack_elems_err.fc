@@ -1,0 +1,10 @@
+// A slice rebuilt from another slice's .ptr views the same elements.
+let bad = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    let view = i32*[] { ptr = ptrs.ptr, len = 1 }
+    alloc(view)!
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

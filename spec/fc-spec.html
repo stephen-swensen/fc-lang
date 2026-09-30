@@ -485,7 +485,7 @@ The one nuance is mutually recursive top-level functions: since the first compil
 
 Targeting C is a deliberate design choice. Most platforms already have a C compiler — GCC, Clang, and cross-compilation toolchains for embedded targets — and by targeting C, FC inherits all of these backends, including niche embedded toolchains that have no LLVM backend. The generated C is human-readable and debuggable with standard C tools, and can be submitted directly to platforms that only accept C source.
 
-FC targets **C11** specifically, plus a small set of GNU extensions supported by GCC and Clang. Key C features used by the compiler: `_Alignof`, `<stdint.h>` fixed-width types, compound literals, and designated initializers. (`_Static_assert` is *not* emitted by the compiler; it appears only in programmer-authored extern C headers — see §C Interop.)
+FC targets **C11** specifically, plus a small set of GNU extensions supported by GCC and Clang. Key C features used by the compiler: `_Alignof`, `<stdint.h>` fixed-width types, compound literals, and designated initializers. (The compiler emits `_Static_assert` only to reject a target where an atomic operation would not be lock-free — see §Atomics & Memory Model; otherwise it appears only in programmer-authored extern C headers — see §C Interop.)
 
 #### GNU extensions required
 
@@ -676,11 +676,11 @@ Type variable names begin with an apostrophe (`'`) followed by a letter, then ze
 
 The following are **reserved words** and may not be used as identifiers:
 
-`let`, `mut`, `const`, `struct`, `union`, `error`, `module`, `namespace`, `import`, `from`, `as`, `extern`, `private`, `match`, `with`, `when`, `if`, `then`, `else`, `for`, `in`, `loop`, `break`, `continue`, `return`, `defer`, `ignore`, `some`, `true`, `false`, `none`, `ok`, `err`, `void`
+`let`, `mut`, `const`, `struct`, `union`, `enum`, `error`, `module`, `namespace`, `import`, `from`, `as`, `extern`, `private`, `match`, `with`, `when`, `if`, `then`, `else`, `for`, `in`, `do`, `loop`, `break`, `continue`, `return`, `defer`, `ignore`, `some`, `true`, `false`, `none`, `ok`, `err`, `void`, `guarded`, `unguarded`, `checked`, `unchecked`
 
 The following are **reserved identifiers** — built-in compile-time operators that may not be shadowed by user-defined bindings:
 
-`alloc`, `free`, `sizeof`, `alignof`, `bitcast`, `default`, `assert`, `error_name`, `atomic_load_acquire`, `atomic_store_release`
+`alloc`, `alloca`, `free`, `sizeof`, `alignof`, `bitcast`, `enum_of`, `default`, `assert`, `static_assert`, `error_name`, `atomic_load_acquire`, `atomic_store_release`
 
 The following are **built-in globals** — predefined identifiers typed `any*` that refer to the standard C streams:
 
@@ -2122,6 +2122,8 @@ match some_node with
 A name may be bound only once per pattern. `{ a, a }` and `both({ x = n, y = n })` are compile errors, not a last-wins rebinding — the same rule holds for a `let` or `for` destructuring pattern. Distinct arms may of course reuse a name, and a pattern binding may shadow an outer binding of the same name; only two bindings *within one pattern* collide. (A repeated no-payload variant name is not a binding at all, so `{ a = red, b = red }` is unaffected.)
 
 When matching on a union type, a bare identifier in pattern position is first checked against the union's no-payload variant names. If it matches a variant, it is a variant pattern (not a binding). If it does not match any variant, it is a binding pattern. This means variant names take precedence over bindings — you cannot bind a union value to a variable that shares a name with one of its no-payload variants. Inside an or-pattern alternative this rule is further constrained: because alternatives must be binding-free, a lone identifier must resolve to a no-payload variant (or be `_`); an unresolved bare name is a compile error rather than a binding.
+
+A variant pattern's shape must match the variant: a no-payload variant is matched bare (`| empty`), and giving it a payload pattern (`| empty(y)`) is a compile error, as `ok(v)` is on a `void!`.
 
 Negative integer literals such as `-1`, `-42i8`, and `-100i64` are valid in pattern position. The `-` is part of the literal, not a unary operator — the parser treats a minus sign immediately followed by digits as a single integer literal token in pattern context.
 
@@ -3797,6 +3799,8 @@ get_align<i32>()   // 4
 get_align<i64>()   // 8
 ```
 
+Transpiles to `(i64_t) _Alignof(...)` in C11.
+
 ### bitcast
 
 `bitcast(T, x)` reinterprets the raw bytes of `x` as type `T`, changing no bits. It is the tool for crossing the integer/float boundary at the bit level — hashing a float, serializing one deterministically, or picking apart its sign/exponent/mantissa — where the value-preserving cast `(T) x` is the wrong operation:
@@ -3825,8 +3829,6 @@ It lowers to a C11 union type-pun, which compilers fold to a plain register move
 ```fc
 let packed = (u32) c.r | ((u32) c.g << 8) | ((u32) c.b << 16) | ((u32) c.a << 24)
 ```
-
-Transpiles to `(i64_t) _Alignof(...)` in C11.
 
 ### Equality
 
@@ -4841,7 +4843,7 @@ FC auto-detects its host platform at the time the `fcc` binary itself is built, 
 | Flag | Typical values |
 |---|---|
 | `os` | `linux`, `macos`, `windows`, `freebsd` |
-| `arch` | `x86_64`, `aarch64`, `arm`, `riscv64`, `wasm32` |
+| `arch` | `x86_64`, `aarch64`, `arm`, `riscv64`, `riscv32`, `wasm32` |
 | `env` | `gnu` |
 
 The `env` axis exists to disambiguate the cases where a single OS supports multiple incompatible C ABIs. It is meaningful on Linux and Windows, and intentionally absent on macOS and FreeBSD:
@@ -5012,7 +5014,7 @@ Five built-in compile-time operators handle memory and runtime checking operatio
 
 These are not functions — they cannot be stored in bindings or passed as arguments. They are resolved entirely at compile time.
 
-`alloc`, `free`, `sizeof`, `alignof`, `default`, `assert`, `atomic_load_acquire`, and `atomic_store_release` are **reserved identifiers** — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
+These operators are **reserved identifiers** (§Identifiers lists them all) — they cannot be used as user-defined binding or function names anywhere in FC code. Attempting to define a binding with one of these names is a compile error. This ensures that bare calls to these operators are always unambiguous, regardless of what names are in scope.
 
 The idiomatic name for a type's cleanup function is `destroy`, mirroring the C ecosystem's convention for releasing compound resources (`pthread_mutex_destroy`, `SDL_DestroyWindow`, and so on). `T.destroy` should free any heap memory the value owns and release any other resources it holds (file handles, connections, and so on). Nothing in the language enforces this name, but it is the expected convention.
 

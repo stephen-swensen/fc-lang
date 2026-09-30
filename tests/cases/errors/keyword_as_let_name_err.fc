@@ -1,0 +1,5 @@
+// A keyword used as a name is reported once, as a keyword, and the rest of the
+// declaration still parses. Regression: `let bitcast = 1` gave eight errors.
+let bitcast = 1
+
+let main = (args: str[]) -> 0

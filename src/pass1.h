@@ -10,7 +10,7 @@ typedef struct Symbol {
     const char *ns_prefix;  /* namespace prefix (mangled), NULL = global */
     DeclKind kind;
     Decl *decl;
-    Type *type;             /* NULL until pass2 resolves it */
+    Type *type;             /* set by pass1 for types and externs, by pass2 for lets */
     SymbolTable *members;   /* non-NULL for DECL_MODULE */
     struct ImportTable *imports; /* non-NULL for modules with internal imports */
     struct Symbol *parent;  /* enclosing module's Symbol, for every member kind
@@ -26,13 +26,23 @@ typedef struct Symbol {
                                     inference refine GP_UNKNOWN entries in place. */
 } Symbol;
 
+/* Give `dst`, another symbol for the same declaration, `src`'s generic
+ * signature (the fields from is_generic through param_kinds above). The arrays
+ * are shared, so kind inference refining one is seen through both. */
+static inline void symbol_share_generic(Symbol *dst, const Symbol *src) {
+    dst->is_generic = src->is_generic;
+    dst->type_params = src->type_params;
+    dst->type_param_count = src->type_param_count;
+    dst->explicit_type_param_count = src->explicit_type_param_count;
+    dst->param_kinds = src->param_kinds;
+}
+
 struct SymbolTable {
     Symbol *symbols;
     int count;
     int capacity;
 };
 
-/* Import reference: transparent alias pointing to a source module's member */
 /* One name an import brings into scope: the name as written there (an `as`
  * alias, or the source name) and the symbol it resolved to. The symbol is held
  * directly, resolved once where the import is processed; every symbol exists

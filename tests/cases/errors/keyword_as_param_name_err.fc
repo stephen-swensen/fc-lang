@@ -1,0 +1,5 @@
+// A keyword used as a parameter name is reported once. Regression: the lambda
+// was not recognized and the line fell apart into a cascade of errors.
+let f = (sizeof: i32) -> 1
+
+let main = (args: str[]) -> 0

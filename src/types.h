@@ -39,8 +39,16 @@ typedef enum {
                         to the concrete inferred type (or `never` if no base case exists).
                         Absorbed by any branch sibling, like TYPE_NEVER. */
 
-    TYPE_COUNT
+    TYPE_COUNT       /* the number of kinds, not a kind */
 } TypeKind;
+
+/* The case labels of the scalar primitive kinds, for a switch that lists every
+ * TypeKind: `CASE_TYPE_PRIMITIVES: return ...;` */
+#define CASE_TYPE_PRIMITIVES                                              \
+    case TYPE_INT8: case TYPE_INT16: case TYPE_INT32: case TYPE_INT64:   \
+    case TYPE_UINT8: case TYPE_UINT16: case TYPE_UINT32: case TYPE_UINT64: \
+    case TYPE_ISIZE: case TYPE_USIZE: case TYPE_FLOAT32: case TYPE_FLOAT64: \
+    case TYPE_BOOL: case TYPE_VOID
 
 typedef struct Type Type;
 typedef struct StructField StructField;
@@ -136,6 +144,11 @@ struct Type {
             const char *qualified_name;
             Type **type_args;
             int type_arg_count;
+            /* Set when monomorphization renames a concrete generic stub in
+             * place to its instance name (box<i32> -> box__3_i32, keeping the
+             * arguments): the template's base name, so the instance name can
+             * be derived again without mangling twice. NULL otherwise. */
+            const char *base_name;
         } stub;
     };
 };
@@ -212,6 +225,27 @@ const char *type_name(Type *t);
  * no such property. */
 const char *type_property_c(Type *t, const char *prop);
 
+/* The built-in members of a value: a slice's `len` and `ptr`, an option's
+ * `is_some` and `is_none`, a result's `is_ok` and `is_err`. None is
+ * assignable. type_builtin_members lists `t`'s (NULL when it has none);
+ * type_builtin_member_type types one (NULL when `t` has no such member). */
+const char *const *type_builtin_members(Type *t, int *count);
+Type *type_builtin_member_type(Arena *a, Type *t, const char *name);
+
+/* The width in bits of a fixed-width integer type (i8..u64), or 0 for any
+ * other type, including isize/usize, whose width is the target's. */
+int type_fixed_int_bits(Type *t);
+
+/* The static properties of the numeric types (i32.min, f64.nan, 'a.bits), by
+ * index, for listing them. */
+int type_property_count(void);
+const char *type_property_name(int i);
+
+/* The type of property `prop` of `t`: i32 for `bits`, `t` itself for the
+ * others. NULL when `t` has no such property. For a type variable, whether any
+ * numeric type has it (each instance is checked again with its own type). */
+Type *type_property_type(Type *t, const char *prop);
+
 /* The C header a type property's spelling needs beyond <stdint.h>: float.h for
  * a float's min, max and epsilon, math.h for its nan, inf and neg_inf. */
 typedef enum { PROP_HEADER_NONE, PROP_HEADER_FLOAT, PROP_HEADER_MATH } PropHeader;
@@ -276,6 +310,11 @@ bool const_type_eval(Type *t, const char **var_names, Type **concrete,
 /* Take (and clear) the last const-generic evaluation error, or NULL if none.
  * The caller owning a diagnostic site reports it with the returned loc. */
 const char *const_eval_take_error(SrcLoc *loc);
+
+/* Whether an error is waiting in that slot. The slot keeps the first failure,
+ * so a site that substitutes only for a message drains the slot afterwards
+ * exactly when it was empty before, leaving another site's error in place. */
+bool const_eval_error_pending(void);
 
 /* Does this type need a generated eq function (as opposed to C native ==)? */
 bool type_needs_eq_func(Type *t);

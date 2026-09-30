@@ -1,0 +1,13 @@
+// Loop-carried taint through a bounded (cstr[N]) cast, which copies into a
+// stack buffer.
+let bad = (name: const str) ->
+    let mut p = default(cstr)
+    let mut saved = default(cstr)
+    for i in 0..2 do
+        saved = p
+        p = (cstr[16]) name
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad("x")
+    0

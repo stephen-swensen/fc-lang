@@ -1,0 +1,36 @@
+// A defer after a block's last value statement still runs at the block's end:
+// the defer makes the block void, and the statement before it is an ordinary
+// discarded value. Regression: codegen took that statement as the block's
+// value and never emitted the defer, in function bodies, match arms and for
+// bodies.
+let mut counter = 0
+let bump = () -> counter = counter + 1
+let one = () -> 1
+
+let f = () ->
+    one()
+    defer bump()
+
+let g = (x: i32) ->
+    match x with
+    | 1 ->
+        one()
+        defer bump()
+    | _ -> void()
+
+let k = () ->
+    for i in 0..3 do
+        one()
+        defer bump()
+
+let main = (args: str[]) ->
+    f()
+    let a = counter
+    g(1)
+    let b = counter
+    k()
+    let c = counter
+    assert(a == 1)
+    assert(b == 2)
+    assert(c == 5)
+    0

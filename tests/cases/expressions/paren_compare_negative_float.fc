@@ -1,0 +1,16 @@
+// A parenthesized comparison whose left side is a plain name reads as an
+// expression even when it looks like the start of a generic cast `(box<i32>) e`.
+// Regression: the tentative type parse reported "expected a const generic
+// expression, got float literal" and the error survived the backtrack.
+let main = (args: str[]) ->
+    let x = 1.0
+    let y = 3
+    let r = (x < -1.5)
+    let s = (y < -2)
+    let t = (y < 2)
+    let u = (y < y + 1)
+    assert(!r)
+    assert(!s)
+    assert(!t)
+    assert(u)
+    0

@@ -1,0 +1,11 @@
+// A tuple element read keeps what the element holds.
+let bad = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    let t = { ptrs, 1 }
+    let s = t[0]
+    alloc(s)!
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

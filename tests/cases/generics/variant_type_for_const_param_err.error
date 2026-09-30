@@ -1,0 +1,1 @@
+:11:23: error: parameter 'n of 'maybe_wide' is a constant, but a type argument was given (i32)

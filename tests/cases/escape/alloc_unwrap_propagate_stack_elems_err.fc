@@ -1,0 +1,14 @@
+// `o?` passes the payload through unchanged, including what it holds: a slice
+// of stack pointers stays one after the unwrap, so heap-copying it is an
+// error, as it is after `o!`. Regression: the ? form dropped the element
+// provenance and the stack pointers escaped (ASan: stack-use-after-return).
+let bad = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    let o = some(ptrs)
+    let s = o?
+    alloc(s)
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

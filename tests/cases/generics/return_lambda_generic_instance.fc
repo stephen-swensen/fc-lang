@@ -1,0 +1,20 @@
+// A generic function's result can be a function value whose signature names an
+// instance of a generic struct, in its return type or in a parameter.
+// Regression: the instance inside the function type was not registered, and
+// the emitted C declared the function-value typedef twice.
+struct box =
+    v: 'a
+
+let make_default = (x: 'a) ->
+    (y: i32) -> default(box<'a>)
+
+let make_getter = (x: 'a) ->
+    (b: box<'a>) -> b.v
+
+let main = (args: str[]) ->
+    let f = make_default(3u8)
+    let b = f(1)
+    assert(b.v == 0u8)
+    let g = make_getter(1i64)
+    assert(g(box { v = 7i64 }) == 7i64)
+    0

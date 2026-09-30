@@ -20,10 +20,12 @@ assistant.
 - Never commit, and never invoke `/commit`; the user commits. The user may
   also commit or change branches outside the session, so don't assume the
   repository state stays put.
-- Run `make check` (or at least `make test-all`) before presenting a final
-  summary of compiler changes, and `make test-gcc-len16` /
-  `make test-clang-len16` when touching slice code. Changes only to `demos/`
-  or `spec/` (other than `spec/examples.fc`) don't need the suite.
+- Run `make check` before presenting a final summary of compiler changes; it
+  covers both C compilers, 16-bit slice lengths, the LSP tests and
+  `spec/examples.fc`. Also run `make test-asan` after changing memory handling
+  and `make test-vscode` after changing `editors/vscode/extension.js`. Changes
+  only to `demos/` or `spec/` (other than `spec/examples.fc`) don't need the
+  suite.
 - `spec/fc-spec.html` and `src/` are the only authorities on the language.
   There is no grammar file; don't create one, and don't treat `spec/hist/` as
   current. If the spec doesn't settle a question, ask the user and then write

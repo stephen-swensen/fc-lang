@@ -106,5 +106,5 @@ Eight modules, written in FC ([`stdlib/`](stdlib/)):
 ## Platform contract
 
 - **Requires a GCC-compatible C11 compiler** (GCC, Clang with the GNU driver, MinGW-w64, or a GCC-derived cross-compiler). MSVC is not supported
-- **Runtime dependency is six libc symbols** — `malloc`, `free`, `abort`, `memcmp`, `strlen`, `snprintf` — which covers desktop, mobile, and libc-bearing embedded targets (Cortex-M, RISC-V, ESP32, AVR)
+- **Runtime dependency is a handful of libc functions** — `malloc`, `calloc`, `free`, `abort`, `memcmp`, `memcpy`, `memset`, `strlen`, `snprintf`, and `fprintf` to stderr for runtime-failure messages (plus `strcmp` under `--backtraces`) — which covers desktop, mobile, and libc-bearing embedded targets (Cortex-M, RISC-V, ESP32, AVR)
 - **Emitted C is int-width-agnostic**, so 16-bit-`int` targets are in scope

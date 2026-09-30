@@ -7,8 +7,8 @@ history behind the follow-ups below, is in `spec/hist/archived-todos.md`.
 
 ## Slice length representation: follow-ups
 
-`--len-repr` itself is done (spec §Length representation). Full record in the archive
-under "Slice length representation `--len-repr` — IMPLEMENTED 2026-08-22; follow-ups open".
+`--len-repr` itself is done (spec §Length representation). Full record in the archive's
+slice length representation entry.
 
 **As-if narrowing of range-form `for` counters.** `for i in 0..s.len` binds a
 user-visible `i64` and emits an `int64_t` counter, the main remaining 64-bit cost in
@@ -19,7 +19,7 @@ no spec change (§Length representation already grants the latitude). Do it only
 real gcc-ia16/djgpp measurements show it matters, and check first what the C optimizer
 already recovers (see the guard-elision note below).
 
-**The freestanding profile (Lane 1 gates).** The dependency half of small-target
+**The freestanding profile for GCC-toolchain targets.** The dependency half of small-target
 support: what the emitted C assumes about its runtime (stdio-printing guards, malloc,
 snprintf, …) and how each assumption becomes a hook or a compile-error gate. Planned in
 **`spec/freestanding.md`** — eight items (`fc_trap` keystone → allocator hook →
@@ -30,12 +30,13 @@ stays the single primitive knob). Per-target needs and ordering live there.
 ## Not doing: as-if elision of provably-dead bounds guards
 
 Tried and reverted: a pass2 value-range analysis that omitted bounds guards it could
-prove never fire. On wolf-fc, gcc and clang value-range propagation already removed about
+prove never fire. On wolf-fc (the Wolfenstein 3D port,
+https://github.com/stephen-swensen/wolf-fc, FC's largest program), gcc and clang value-range propagation already removed about
 98% of the same guards (four enum-indexed table accesses were left for pass2), and the
 gcc -O3 build got slower. A wrongly elided guard is a silent out-of-bounds, so ~800 lines
 of interval analysis for four guards is a poor trade. Reopen only against a measurement
 on a C compiler without range propagation (Watcom/Borland class). Full record in the
-archive under "As-if elision of provably-dead bounds guards — TRIED AND REVERTED 2026-09-05".
+archive's entry on as-if elision of provably-dead bounds guards.
 
 ## Guarded-access emission shape
 
@@ -57,7 +58,7 @@ song gets denser with N). Byte-identical C is not the oracle here; wolf-fc's gol
 ## Const generics: follow-ups
 
 Const generics and `static_assert` are done (spec §Const Parameters). Full record in the
-archive under "Const generics (value parameters) — IMPLEMENTED 2026-07-17 …".
+archive's const generics entry.
 
 - **Struct literals for const-param structs.** `wide { limbs = ... }` cannot infer `'n`
   from a slice-typed field value, so construction goes through `default(wide<N>)` plus
@@ -77,7 +78,7 @@ archive under "Const generics (value parameters) — IMPLEMENTED 2026-07-17 …"
 ## std::wideint: follow-ups
 
 std::wideint is done as the const-generic `uwide<'n>`/`iwide<'n>` (spec §std::wideint).
-Full record in the archive under "std::wideint (né fixint) wide integers — …".
+Full record in the archive's std::wideint entry.
 
 - **Cross-width conversions**: widening (`uwide<128>`→`uwide<256>`), truncating, and
   signed↔unsigned reinterpretation at the same width. Today the only cross-width paths
@@ -90,8 +91,7 @@ Full record in the archive under "std::wideint (né fixint) wide integers — �
 
 ## Enums: follow-ups
 
-Enums are done (spec §Enums). Full record in the archive under "Enum declarations —
-IMPLEMENTED 2026-07-10".
+Enums are done (spec §Enums). Full record in the archive's enum declarations entry.
 
 - **Reflection-lite**: `enum_name(e)` (a static name table, paid for only when used —
   the `error_name` design) and variant iteration; wanted for logging and CLI/config
@@ -150,8 +150,8 @@ be complete regardless of any one program's needs. These two close it out:
 op: it's the idiomatic **snapshot-and-reset counter** (`let hits = atomic_exchange(&counter, 0)`
 — a stats thread drains the count while writers keep `fetch_add`-ing, no lost increments), the
 one-shot claim flag (`if !atomic_exchange(&claimed, true) then /* we got here first */`), and —
-once pointer pointees land (TODO above) — the pointer steal (`atomic_exchange(&queue_head,
-null)`). Simpler than CAS (no comparison, no failure path: it's an unconditional acq_rel RMW)
+once pointer pointees land (TODO above) — the pointer steal (swap an empty marker into
+`queue_head` and take the list that was there). Simpler than CAS (no comparison, no failure path: it's an unconditional acq_rel RMW)
 and useful independently; it can ship with `fetch_add` rather than waiting for CAS.
 
 **`atomic_compare_exchange(p, expected, desired)`** — conditional RMW, the primitive for
@@ -274,5 +274,6 @@ this section is the open-item backlog. None of these block release.
   `analyze()` still re-*parses* the cached tokens into a fresh AST each time. Caching the
   parsed AST (token→AST) is the remaining, lower-value win now that lexing — the dominant
   cost — is cached.
-- **Install targets are Linux-only** — `make install` / `install-vscode` assume a Linux
-  layout; Windows/macOS packaging is unwritten.
+- **`install-vscode` is Linux-only** — it installs into `~/.vscode/extensions` and
+  registers the extension in VSCode's Linux layout. `make install` itself is the generic
+  GNU layout; packaging for Windows and macOS is unwritten.

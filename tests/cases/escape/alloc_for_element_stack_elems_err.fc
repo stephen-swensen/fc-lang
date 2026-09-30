@@ -1,0 +1,14 @@
+// A for element read out of a container of slices holds what the container's
+// elements hold (tracked one level deep, as indexing is).
+let bad = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    let nested = (i32*[])[1] { ptrs }
+    let mut out = alloc(i32*[1] {})!
+    for s in nested do
+        out = alloc(s)!
+    out
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

@@ -214,9 +214,8 @@ int interp_literal_len(InterpSegment *seg) {
 
 /* Upper bound on the bytes a non-string conversion can emit, for buffer sizing.
  * A field width is a minimum, not a maximum, so it can only widen the bound;
- * flags may add a sign, a space, or a `#` prefix. Used by codegen's buffer-size
- * emitter and by interp_const_buffer_size, so both budget the same bytes. */
-int64_t interp_numeric_bound(char conv, Type *t, const char *flags_text,
+ * flags may add a sign, a space, or a `#` prefix. */
+static int64_t interp_numeric_bound(char conv, Type *t, const char *flags_text,
                                     int64_t explicit_width, int64_t explicit_prec) {
     int64_t bound;
     switch (conv) {
@@ -303,43 +302,39 @@ int64_t interp_numeric_bound(char conv, Type *t, const char *flags_text,
     return bound;
 }
 
-/* If the interpolation buffer length is a compile-time constant (no segment
- * contributes a runtime length; the only such segment is a %s of str or cstr
- * without an explicit precision), store that byte budget in *out_size and
- * return true. It equals the value the emitted _flen sums to, since both use
- * the helpers above. Otherwise return false: the buffer stays runtime-sized
- * and keeps its alloca/malloc allocation. */
-bool interp_const_buffer_size(Expr *e, int64_t *out_size) {
-    int seg_count = e->interp_string.segment_count;
-    InterpSegment *segs = e->interp_string.segments;
+/* One segment's share of an interpolation's byte budget. `t` is the segment
+ * operand's type as the caller sees it: codegen passes the instance's, so a %T
+ * of a type variable budgets the bound type's name. */
+InterpSegBudget interp_seg_budget(InterpSegment *seg, Type *t) {
+    if (seg->is_literal)
+        return (InterpSegBudget){ false, interp_literal_len(seg) };
+    if (seg->conversion == 'T')
+        return (InterpSegBudget){ false, (int64_t)strlen(type_name(t)) };
+    int64_t width = 0, prec = -1;
+    parse_format_width_prec(seg->text, &width, &prec);
+    if (seg->conversion == 's' && t && (is_str_type(t) || is_cstr_type(t))) {
+        /* Precision is a hard maximum; width is a minimum field. */
+        if (prec >= 0) return (InterpSegBudget){ false, prec > width ? prec : width };
+        return (InterpSegBudget){ true, width };
+    }
+    return (InterpSegBudget){ false, interp_numeric_bound(seg->conversion, t, seg->text,
+                                                         width, prec) };
+}
+
+/* If the interpolation's byte budget is a compile-time constant (no segment
+ * contributes a runtime string length), store it in *out_size and return true.
+ * It is the sum the emitted _flen computes, since both take each segment's
+ * share from interp_seg_budget. `resolve` maps an operand's type to the one
+ * the caller sees (NULL: as written). */
+bool interp_const_buffer_size(Expr *e, Type *(*resolve)(Type *), int64_t *out_size) {
     int64_t total = 0;
-    for (int i = 0; i < seg_count; i++) {
-        if (segs[i].is_literal) {
-            total += interp_literal_len(&segs[i]);
-            continue;
-        }
-        if (segs[i].conversion == 'T') {
-            total += (int64_t)strlen(type_name(segs[i].expr->type));
-            continue;
-        }
-        char conv = segs[i].conversion;
-        int64_t explicit_width = 0, explicit_prec = -1;
-        parse_format_width_prec(segs[i].text, &explicit_width, &explicit_prec);
-        Type *t = segs[i].expr->type;
-        bool is_str_arg = (conv == 's' && t && is_str_type(t));
-        bool is_cstr_arg = (conv == 's' && t && is_cstr_type(t));
-        if (is_str_arg || is_cstr_arg) {
-            if (explicit_prec >= 0) {
-                int64_t b = explicit_prec;
-                if (explicit_width > b) b = explicit_width;
-                total += b;
-            } else {
-                return false;  /* runtime string length */
-            }
-        } else {
-            total += interp_numeric_bound(conv, t, segs[i].text,
-                                          explicit_width, explicit_prec);
-        }
+    for (int i = 0; i < e->interp_string.segment_count; i++) {
+        InterpSegment *seg = &e->interp_string.segments[i];
+        Type *t = seg->is_literal ? NULL : seg->expr->type;
+        if (t && resolve) t = resolve(t);
+        InterpSegBudget b = interp_seg_budget(seg, t);
+        if (b.runtime) return false;
+        total += b.bytes;
     }
     *out_size = total;
     return true;
@@ -347,5 +342,5 @@ bool interp_const_buffer_size(Expr *e, int64_t *out_size) {
 
 bool interp_is_runtime_sized(const Expr *e) {
     int64_t dummy = 0;
-    return !interp_const_buffer_size((Expr *)e, &dummy);
+    return !interp_const_buffer_size((Expr *)e, NULL, &dummy);
 }

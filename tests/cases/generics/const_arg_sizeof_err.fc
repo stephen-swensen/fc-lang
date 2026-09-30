@@ -1,0 +1,8 @@
+// sizeof is not a compile-time constant in a generic argument. Regression: the
+// argument list was read as a comparison and gave three unrelated errors.
+struct w =
+    b: u8['n]
+
+let main = (args: str[]) ->
+    let x = default(w<sizeof(i32)>)
+    0

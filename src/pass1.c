@@ -30,69 +30,57 @@ static void diag_kind_conflict(SrcLoc loc, const char *var, const char *owner_na
                var, owner_name);
 }
 
-/* Detect generics: scan fields/params for type variables */
+/* The generic-parameter fields a struct and a union declaration each carry. */
+typedef struct {
+    bool *is_generic;
+    const char ***type_params;
+    int *type_param_count;
+    uint8_t **param_kinds;
+} GenericFields;
+
+static Type *struct_member_type(Decl *d, int i) { return d->struc.fields[i].type; }
+static Type *union_member_type(Decl *d, int i)  { return d->unio.variants[i].payload; }
+
+/* Detect a generic struct or union: its type variables, in order of first
+ * appearance in its field or payload types, are its type parameters. A second
+ * registration of the same declaration (a mangled twin) shares the decl's
+ * arrays, so kind-inference updates are visible through every Symbol. */
+static void detect_generic(Arena *arena, Decl *d, GenericFields g,
+                           Type *(*member_type)(Decl *, int), int member_count, Symbol *sym) {
+    if (!*g.is_generic || !*g.param_kinds) {
+        const char **vars = NULL;
+        uint8_t *kinds = NULL;
+        int vcount = 0, vcap = 0;
+        const char *conflict = NULL;
+        for (int i = 0; i < member_count; i++)
+            type_collect_vars_kinds(member_type(d, i), &vars, &kinds, &vcount, &vcap, &conflict);
+        (void)conflict;  /* reported once by the infer_param_kinds fixpoint */
+        if (vcount > 0) {
+            *g.is_generic = true;
+            *g.type_params = arena_dup_names(arena, vars, vcount);
+            *g.type_param_count = vcount;
+            *g.param_kinds = arena_dup_kinds(arena, kinds, vcount);
+        }
+        free(vars);
+        free(kinds);
+        if (vcount == 0) return;
+    }
+    sym->is_generic = true;
+    sym->type_params = *g.type_params;
+    sym->type_param_count = *g.type_param_count;
+    sym->param_kinds = *g.param_kinds;
+}
+
 static void detect_generic_struct(Arena *arena, Decl *d, Symbol *sym) {
-    if (d->struc.is_generic && d->struc.param_kinds) {
-        /* Twin registration (mangled alias / global twin): share the decl's
-         * arrays so kind-inference updates are visible through every Symbol. */
-        sym->is_generic = true;
-        sym->type_params = d->struc.type_params;
-        sym->type_param_count = d->struc.type_param_count;
-        sym->param_kinds = d->struc.param_kinds;
-        return;
-    }
-    const char **vars = NULL;
-    uint8_t *kinds = NULL;
-    int vcount = 0, vcap = 0;
-    const char *conflict = NULL;
-    for (int i = 0; i < d->struc.field_count; i++)
-        type_collect_vars_kinds(d->struc.fields[i].type, &vars, &kinds, &vcount, &vcap, &conflict);
-    (void)conflict;  /* reported once by the infer_param_kinds fixpoint */
-    if (vcount > 0) {
-        const char **av = arena_dup_names(arena, vars, vcount);
-        uint8_t *ak = arena_dup_kinds(arena, kinds, vcount);
-        d->struc.is_generic = true;
-        d->struc.type_params = av;
-        d->struc.type_param_count = vcount;
-        d->struc.param_kinds = ak;
-        sym->is_generic = true;
-        sym->type_params = av;
-        sym->type_param_count = vcount;
-        sym->param_kinds = ak;
-    }
-    free(vars);
-    free(kinds);
+    GenericFields g = { &d->struc.is_generic, &d->struc.type_params,
+                        &d->struc.type_param_count, &d->struc.param_kinds };
+    detect_generic(arena, d, g, struct_member_type, d->struc.field_count, sym);
 }
 
 static void detect_generic_union(Arena *arena, Decl *d, Symbol *sym) {
-    if (d->unio.is_generic && d->unio.param_kinds) {
-        sym->is_generic = true;
-        sym->type_params = d->unio.type_params;
-        sym->type_param_count = d->unio.type_param_count;
-        sym->param_kinds = d->unio.param_kinds;
-        return;
-    }
-    const char **vars = NULL;
-    uint8_t *kinds = NULL;
-    int vcount = 0, vcap = 0;
-    const char *conflict = NULL;
-    for (int i = 0; i < d->unio.variant_count; i++)
-        type_collect_vars_kinds(d->unio.variants[i].payload, &vars, &kinds, &vcount, &vcap, &conflict);
-    (void)conflict;  /* reported once by the infer_param_kinds fixpoint */
-    if (vcount > 0) {
-        const char **av = arena_dup_names(arena, vars, vcount);
-        uint8_t *ak = arena_dup_kinds(arena, kinds, vcount);
-        d->unio.is_generic = true;
-        d->unio.type_params = av;
-        d->unio.type_param_count = vcount;
-        d->unio.param_kinds = ak;
-        sym->is_generic = true;
-        sym->type_params = av;
-        sym->type_param_count = vcount;
-        sym->param_kinds = ak;
-    }
-    free(vars);
-    free(kinds);
+    GenericFields g = { &d->unio.is_generic, &d->unio.type_params,
+                        &d->unio.type_param_count, &d->unio.param_kinds };
+    detect_generic(arena, d, g, union_member_type, d->unio.variant_count, sym);
 }
 
 /* ---- Reject non-uniform recursive type definitions ----
@@ -146,6 +134,12 @@ static Type *find_nonuniform_self_ref(Type *t, const char *self_name,
             if ((r = find_nonuniform_self_ref(t->stub.type_args[i], self_name, params, pc))) return r;
         return NULL;
     case TYPE_STRUCT:
+        if (t->struc.is_tuple) {
+            for (int i = 0; i < t->struc.field_count; i++)
+                if ((r = find_nonuniform_self_ref(t->struc.fields[i].type, self_name, params, pc)))
+                    return r;
+            return NULL;
+        }
         if (t->struc.name == self_name && t->struc.type_arg_count > 0 &&
             !self_ref_is_uniform(t->struc.type_args, t->struc.type_arg_count, params, pc))
             return t;
@@ -159,8 +153,19 @@ static Type *find_nonuniform_self_ref(Type *t, const char *self_name,
         for (int i = 0; i < t->unio.type_arg_count; i++)
             if ((r = find_nonuniform_self_ref(t->unio.type_args[i], self_name, params, pc))) return r;
         return NULL;
-    default: return NULL;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return NULL;
 }
 
 /* Build the one legal self-reference form, "name<'a, 'b>", for the diagnostic.
@@ -272,7 +277,10 @@ static void check_builtin_type_name_decls(Decl **decls, int count) {
             name = d->ns.name;
             what = "a namespace";
             break;
-        default:
+        case DECL_LET:
+        case DECL_IMPORT:
+        case DECL_EXTERN:
+        case DECL_ERROR:
             break;
         }
         if (is_builtin_type_name(name))
@@ -295,8 +303,8 @@ static void detect_generic_func(Arena *arena, Decl *d, Symbol *sym) {
     for (int i = 0; i < fn->func.explicit_type_var_count; i++) {
         if (vcount >= vcap) {
             vcap = vcap ? vcap * 2 : 8;
-            vars = realloc(vars, (size_t)vcap * sizeof(*vars));
-            kinds = realloc(kinds, (size_t)vcap * sizeof(*kinds));
+            vars = xrealloc(vars, (size_t)vcap * sizeof(*vars));
+            kinds = xrealloc(kinds, (size_t)vcap * sizeof(*kinds));
         }
         vars[vcount] = fn->func.explicit_type_vars[i];
         kinds[vcount] = GP_UNKNOWN;
@@ -617,7 +625,12 @@ static const char *mangle_root(InternTable *intern, const char *ns) {
  * type_arg_count > 0, updates the stub's name to the canonical mangled form
  * from the module's symbol table. Only the name changes: type_args are kept
  * and the stub is not replaced by the full type, so no circular references
- * arise. Mutates the type in place. */
+ * arise. Mutates the type in place.
+ *
+ * This early pass covers only a module's own members, which is what pass1's
+ * kind inference needs to find a referenced generic by name. pass2's
+ * canonicalize_field_stubs completes the job (imported names, unknown-type
+ * errors, size folding) before any body is checked. */
 static void canonicalize_stub_names(Type *t, SymbolTable *members) {
     if (!t) return;
     switch (t->kind) {
@@ -654,7 +667,17 @@ static void canonicalize_stub_names(Type *t, SymbolTable *members) {
         return;
     case TYPE_UNION:
         return;
-    default: return;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        return;
     }
 }
 
@@ -785,7 +808,7 @@ static Type *register_type_decl(SymbolTable *tab, InternTable *intern, Decl *d,
         t->unio.variants = d->unio.variants;
         t->unio.variant_count = d->unio.variant_count;
         break;
-    default:
+    case DECL_ENUM:
         t->kind = TYPE_ENUM;
         t->enu.name = mangled;
         t->enu.qualified_name = qualified;
@@ -793,6 +816,13 @@ static Type *register_type_decl(SymbolTable *tab, InternTable *intern, Decl *d,
         t->enu.variants = d->enu.variants;
         t->enu.variant_count = d->enu.variant_count;
         break;
+    case DECL_LET:
+    case DECL_MODULE:
+    case DECL_IMPORT:
+    case DECL_EXTERN:
+    case DECL_NAMESPACE:
+    case DECL_ERROR:
+        diag_fatal(d->loc, "internal: register_type_decl given a non-type declaration");
     }
 
     const char *names[2] = { src_name, mangled };
@@ -810,13 +840,7 @@ static Type *register_type_decl(SymbolTable *tab, InternTable *intern, Decl *d,
 /* Format an enum variant's canonical bits as a signed/unsigned decimal for
  * diagnostics. */
 static void enum_val_str(char *buf, size_t cap, uint64_t bits, Type *repr) {
-    uint64_t w = 0;
-    switch (repr->kind) {
-    case TYPE_INT8: case TYPE_UINT8:  w = 8;  break;
-    case TYPE_INT16: case TYPE_UINT16: w = 16; break;
-    case TYPE_INT64: case TYPE_UINT64: w = 64; break;
-    default: w = 32; break;
-    }
+    int w = type_fixed_int_bits(repr);   /* a repr is a fixed-width integer */
     uint64_t mask = (w == 64) ? UINT64_MAX : ((1ULL << w) - 1);
     if (type_is_signed(repr) && bits > (mask >> 1)) {
         snprintf(buf, cap, "-%llu", (unsigned long long)((mask - bits) + 1));
@@ -839,13 +863,7 @@ static void resolve_enum_values(Decl *d) {
     if (!d->enu.repr) d->enu.repr = type_int32();
     Type *repr = d->enu.repr;
     const char *ename = d->enu.name;
-    int w;
-    switch (repr->kind) {
-    case TYPE_INT8: case TYPE_UINT8:  w = 8;  break;
-    case TYPE_INT16: case TYPE_UINT16: w = 16; break;
-    case TYPE_INT64: case TYPE_UINT64: w = 64; break;
-    default: w = 32; break;
-    }
+    int w = type_fixed_int_bits(repr);   /* a repr is a fixed-width integer */
     bool sign = type_is_signed(repr);
     uint64_t mask = (w == 64) ? UINT64_MAX : ((1ULL << w) - 1);
     uint64_t max_pos = sign ? (mask >> 1) : mask;   /* largest positive value */
@@ -858,7 +876,7 @@ static void resolve_enum_values(Decl *d) {
 
     bool have_prev = false;
     uint64_t prev = 0;
-    bool *any_poisoned = calloc((size_t)d->enu.variant_count, sizeof(bool));
+    bool *any_poisoned = xcalloc((size_t)d->enu.variant_count, sizeof(bool));
     for (int i = 0; i < d->enu.variant_count; i++) {
         EnumVariant *v = &d->enu.variants[i];
         uint64_t bits = 0;
@@ -1036,6 +1054,20 @@ static bool same_import_statement(const Decl *a, const Decl *b) {
            a->loc.line == b->loc.line && a->loc.col == b->loc.col;
 }
 
+/* Imports come before every other declaration of a file or module body. One
+ * step of a walk over a body in order, `prev` the declaration before `d` (a
+ * namespace line is neither): true when `d` is an import placed after another
+ * declaration, other than a later name of the import statement just before it
+ * (`import a, b from m` parses to one import per name). */
+static bool import_out_of_place(const Decl *d, const Decl *prev, bool *seen_other) {
+    if (d->kind == DECL_NAMESPACE) return false;
+    if (d->kind != DECL_IMPORT) {
+        *seen_other = true;
+        return false;
+    }
+    return *seen_other && !(prev && same_import_statement(prev, d));
+}
+
 /* The rules on what a module body may hold: a module `from` a C library holds
  * only extern declarations and every other module none, and imports come
  * before all other declarations. */
@@ -1062,22 +1094,13 @@ static void validate_module_body(Decl *d) {
                 child->struc.is_c_union ? "union" : "struct", mod_name);
         }
     }
-    /* Validate: imports must come before all other declarations in a module */
-    {
-        bool seen_non_import = false;
-        for (int j = 0; j < d->module.decl_count; j++) {
-            Decl *child = d->module.decls[j];
-            if (child->kind == DECL_IMPORT) {
-                if (seen_non_import &&
-                    !(j > 0 && same_import_statement(d->module.decls[j - 1], child))) {
-                    diag_error(child->loc,
-                        "imports must appear at the top of module '%s', before other declarations",
-                        mod_name);
-                }
-            } else {
-                seen_non_import = true;
-            }
-        }
+    bool seen_other = false;
+    for (int j = 0; j < d->module.decl_count; j++) {
+        Decl *child = d->module.decls[j];
+        if (import_out_of_place(child, j > 0 ? d->module.decls[j - 1] : NULL, &seen_other))
+            diag_error(child->loc,
+                "imports must appear at the top of module '%s', before other declarations",
+                mod_name);
     }
 }
 
@@ -1116,8 +1139,8 @@ static void finish_module_members(SymbolTable *members, InternTable *intern,
 
     /* Canonicalize generic stub names in struct/union field types.
      * Updates parser names (e.g., "inner") to canonical mangled names (e.g.,
-     * "fc__m__inner") so downstream code doesn't need module context to
-     * resolve them. */
+     * "fc__m__inner") so pass1's kind inference finds them without module
+     * context (see canonicalize_stub_names). */
     for (int j = 0; j < members->count; j++) {
         Symbol *msym = &members->symbols[j];
         if (!msym->type) continue;
@@ -1155,11 +1178,7 @@ static void finish_module_members(SymbolTable *members, InternTable *intern,
                                              : msym->type->enu.name;
             Symbol *gsym = symtab_add(global_symtab, mangled_name, msym->kind, msym->decl);
             gsym->type = msym->type;
-            gsym->is_generic = msym->is_generic;
-            gsym->type_params = msym->type_params;
-            gsym->type_param_count = msym->type_param_count;
-            gsym->explicit_type_param_count = msym->explicit_type_param_count;
-            gsym->param_kinds = msym->param_kinds;
+            symbol_share_generic(gsym, msym);
         }
     }
 }
@@ -1269,7 +1288,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             Symbol *sub_sym = symtab_add(members, sub_name, DECL_MODULE, child);
             sub_sym->is_private = child->is_private;
             sub_sym->ns_prefix = ns_prefix;
-            SymbolTable *sub_members = malloc(sizeof(SymbolTable));
+            SymbolTable *sub_members = xmalloc(sizeof(SymbolTable));
             symtab_init(sub_members);
             sub_sym->members = sub_members;
             register_module_members(child, make_mangled(intern, mangle_prefix, sub_name),
@@ -1277,7 +1296,9 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
                                     sub_members, intern, global_symtab, ns_prefix);
             break;
         }
-        default:
+        case DECL_IMPORT:
+        case DECL_NAMESPACE:
+        case DECL_ERROR:
             break;
         }
     }
@@ -1299,7 +1320,7 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab)
     }
     if (!has_imports) return;
 
-    ImportTable *imports = malloc(sizeof(ImportTable));
+    ImportTable *imports = xmalloc(sizeof(ImportTable));
     memset(imports, 0, sizeof(ImportTable));
     ms->imports = imports;
 
@@ -1327,7 +1348,9 @@ static void process_module_level_imports(Symbol *ms, SymbolTable *global_symtab)
             const char *name = d->import.name;
             Symbol *src = symtab_lookup_module(global_symtab, name, imp_ns);
             if (!src || src->kind != DECL_MODULE) {
-                diag_error(d->loc, "unknown module '%s' in namespace '%s'", name, imp_ns);
+                char *shown = ns_display_dup(imp_ns);
+                diag_error(d->loc, "unknown module '%s' in namespace '%s'", name, shown);
+                free(shown);
                 continue;
             }
             const char *import_name = d->import.alias ? d->import.alias : name;
@@ -1422,7 +1445,8 @@ static void assign_error_codes(Program *prog, InternTable *intern) {
         if (d->kind != DECL_MODULE) continue;
         const char *display;
         if (d->module.ns_prefix) {  /* stamped in register_modules */
-            display = intern_sprintf(intern, "%s::%s", d->module.ns_prefix, d->module.name);
+            display = intern_sprintf(intern, "%s::%s", ns_display(intern, d->module.ns_prefix),
+                                     d->module.name);
         } else {
             display = d->module.name;
         }
@@ -1588,13 +1612,15 @@ static void kind_finalize_table(SymbolTable *t) {
     }
 }
 
+/* Propagate kinds to a fixpoint. This terminates: a round that changes
+ * anything tightens some parameter's kind, and a kind only tightens (unknown,
+ * then type or const, then conflict), so each parameter changes at most twice. */
 static void infer_param_kinds(SymbolTable *global) {
     KindInferCtx kc = { global, NULL, false };
-    int rounds = 0;
     do {
         kc.changed = false;
         kind_walk_table(&kc, global);
-    } while (kc.changed && ++rounds < 64);   /* bound: kinds only ever tighten */
+    } while (kc.changed);
     kind_finalize_table(global);
 }
 
@@ -1624,19 +1650,6 @@ typedef struct {
     int count, capacity;
 } CNameClaims;
 
-/* The last path component of a mangled name, i.e. the declaration's source
- * spelling. Split non-overlapping from the left, the way make_mangled built it:
- * a component may start with `_`, so scanning for the last `__` would take
- * `fc__a___x` (component `_x`) apart one character off. */
-static const char *mangled_tail(const char *cname) {
-    const char *tail = cname;
-    for (const char *p = cname; p[0] && p[1]; ) {
-        if (p[0] == '_' && p[1] == '_') { tail = p + 2; p += 2; }
-        else p++;
-    }
-    return tail;
-}
-
 /* Claims are interned, so the key is the pointer, not the bytes. Allocator
  * alignment leaves the low bits constant, which linear probing would turn into
  * one long run, so the value is passed through a mixing finalizer first. */
@@ -1652,11 +1665,7 @@ static uint32_t cname_hash(const char *cname) {
 
 static void claims_grow(CNameClaims *cl) {
     int newcap = cl->capacity ? cl->capacity * 2 : 64;
-    CNameClaim *slots = calloc((size_t)newcap, sizeof(CNameClaim));
-    if (!slots) {
-        fprintf(stderr, "fcc: out of memory\n");
-        exit(1);
-    }
+    CNameClaim *slots = xcalloc((size_t)newcap, sizeof(CNameClaim));
     for (int i = 0; i < cl->capacity; i++) {
         if (!cl->slots[i].cname) continue;
         uint32_t idx = cname_hash(cl->slots[i].cname) & (uint32_t)(newcap - 1);
@@ -1695,7 +1704,7 @@ static void claim_c_name(CNameClaims *cl, const char *cname, SrcLoc loc,
                 "'%s' would be emitted as the C name '%s', which the declaration at "
                 "%s:%d already claims; rename one, or move it to a module path that "
                 "does not flatten onto the other's",
-                mangled_tail(cname), cname,
+                mangled_source_name(cname), cname,
                 e->loc.filename ? e->loc.filename : "?",
                 e->loc.line);
             return;
@@ -1740,7 +1749,9 @@ static void collect_c_names(CNameClaims *cl, Decl **decls, int count) {
         case DECL_MODULE:
             collect_c_names(cl, d->module.decls, d->module.decl_count);
             break;
-        default:
+        case DECL_IMPORT:
+        case DECL_NAMESPACE:
+        case DECL_ERROR:
             break;
         }
     }
@@ -1762,24 +1773,18 @@ static void check_c_name_collisions(Program *prog) {
  * Namespace declarations are exempt (they must come first). */
 static void check_imports_first(Program *prog) {
     const char *cur_file = NULL;
-    bool seen_non_import = false;
+    bool seen_other = false;
     const Decl *prev = NULL;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
         if (d->loc.filename != cur_file) {
             cur_file = d->loc.filename;
-            seen_non_import = false;
+            seen_other = false;
         }
-        if (d->kind == DECL_NAMESPACE) continue;
-        if (d->kind == DECL_IMPORT) {
-            if (seen_non_import && !same_import_statement(prev, d)) {
-                diag_error(d->loc,
-                    "imports must appear at the top of the file, before other declarations");
-            }
-        } else {
-            seen_non_import = true;
-        }
-        prev = d;
+        if (import_out_of_place(d, prev, &seen_other))
+            diag_error(d->loc,
+                "imports must appear at the top of the file, before other declarations");
+        if (d->kind != DECL_NAMESPACE) prev = d;
     }
 }
 
@@ -1811,7 +1816,8 @@ static void register_modules(Program *prog, SymbolTable *symtab, InternTable *in
         /* Build display prefix for qualified names: [namespace::]module */
         const char *display_prefix;
         if (ns_prefix) {
-            display_prefix = intern_sprintf(intern, "%s::%s", ns_prefix, mod_name);
+            display_prefix = intern_sprintf(intern, "%s::%s", ns_display(intern, ns_prefix),
+                                            mod_name);
         } else {
             display_prefix = mod_name;
         }
@@ -1833,7 +1839,7 @@ static void register_modules(Program *prog, SymbolTable *symtab, InternTable *in
         mod_sym->ns_prefix = ns_prefix;
 
         /* Create sub-symbol table for module members */
-        SymbolTable *members = malloc(sizeof(SymbolTable));
+        SymbolTable *members = xmalloc(sizeof(SymbolTable));
         symtab_init(members);
         mod_sym->members = members;
 
@@ -1899,7 +1905,7 @@ static void register_top_level_decls(Program *prog, SymbolTable *symtab,
             diag_error(d->loc,
                 "top-level let not allowed in namespace '%s::'; "
                 "wrap it in a module or move it to a global:: file",
-                current_ns);
+                ns_display(intern, current_ns));
             continue;
         }
         switch (d->kind) {
@@ -1939,12 +1945,17 @@ static void register_top_level_decls(Program *prog, SymbolTable *symtab,
                 break;
             }
             const char *qualified = current_ns
-                ? intern_sprintf(intern, "%s::%s", current_ns, src_name) : src_name;
+                ? intern_sprintf(intern, "%s::%s", ns_display(intern, current_ns), src_name)
+                : src_name;
             register_type_decl(symtab, intern, d, mangle_root(intern, current_ns),
                                qualified, current_ns, false);
             break;
         }
-        default:
+        case DECL_MODULE:
+        case DECL_IMPORT:
+        case DECL_EXTERN:
+        case DECL_NAMESPACE:
+        case DECL_ERROR:
             break;
         }
     }
@@ -2012,7 +2023,9 @@ static void resolve_file_imports(Program *prog, SymbolTable *symtab,
             if (!type_sym)
                 type_sym = symtab_lookup_kind_ns(symtab, name, DECL_ENUM, from_ns);
             if (!mod && !type_sym) {
-                diag_error(d->loc, "unknown symbol '%s' in namespace '%s'", name, from_ns);
+                char *shown = ns_display_dup(from_ns);
+                diag_error(d->loc, "unknown symbol '%s' in namespace '%s'", name, shown);
+                free(shown);
                 continue;
             }
             /* A cross-namespace whole-symbol import brings in a module and/or
@@ -2034,6 +2047,26 @@ static void resolve_file_imports(Program *prog, SymbolTable *symtab,
 
         /* Member import (import X from M / import * from M) */
         process_member_import(d, file_tbl, symtab, current_ns);
+    }
+}
+
+/* The parser read `name<` as an instantiation only for names its pre-pass
+ * found generic, from the same evidence pass1 reads (a type variable in a
+ * struct or union body, or in a function's header). Check that every generic
+ * pass1 found was among them; a miss would have parsed `f<T>(x)` as a
+ * comparison. */
+static void check_generic_names_seen(Program *prog, SymbolTable *tab) {
+    for (int i = 0; i < tab->count; i++) {
+        Symbol *s = &tab->symbols[i];
+        if (s->members) check_generic_names_seen(prog, s->members);
+        if (!s->is_generic || !s->decl || s->kind == DECL_MODULE) continue;
+        const char *name = mangled_source_name(s->name);
+        bool seen = false;
+        for (int j = 0; j < prog->generic_name_count && !seen; j++)
+            seen = strcmp(prog->generic_names[j], name) == 0;
+        if (!seen)
+            diag_fatal(s->decl->loc, "internal: '%s' is generic, but the parser's "
+                       "generic-name pre-pass did not find it", name);
     }
 }
 
@@ -2065,6 +2098,7 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
      * see infer_param_kinds above). Runs after all symbols and their
      * type_params/param_kinds arrays exist. */
     infer_param_kinds(symtab);
+    check_generic_names_seen(prog, symtab);
 
     /* Assign deterministic codes to declared error constants (error groups).
      * Runs on the merged Program, so the numbering is whole-program. */

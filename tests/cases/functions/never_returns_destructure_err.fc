@@ -1,0 +1,8 @@
+// A self-call with no base case as a destructured value is reported once;
+// the pattern's names are then poison, so their uses do not cascade into
+// "undefined name" errors.
+let h = (x: u32) ->
+    let { a, b } = h(x)
+    a + b
+
+let main = (args: str[]) -> 0

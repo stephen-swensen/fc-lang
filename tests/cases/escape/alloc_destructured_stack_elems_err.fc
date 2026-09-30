@@ -1,0 +1,12 @@
+// A binding destructured out of a tuple holds what the element holds: a slice
+// of stack pointers stays one, so heap-copying it is an error.
+let bad = () ->
+    let mut x = 42
+    let ptrs = i32*[1] { &x }
+    let t = { ptrs, 1 }
+    let { s, n } = t
+    alloc(s)!
+
+let main = (args: str[]) ->
+    let _r = bad()
+    0

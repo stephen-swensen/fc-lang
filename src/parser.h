@@ -18,8 +18,15 @@ Program *parse_file(Token *tokens, int count, const char *filename,
  * (explicit `<...>` prefix or parameter list) mentions one, and every
  * `import ... as` alias (the target's genericness is not visible at token
  * level). Run it over every file before parsing any, and pass the result to
- * parse_file. It reads the same evidence pass1 uses to decide genericness, so
- * no generic declaration is missed; an extra name only means a `<` after it is
- * tried as a type-argument list before falling back to a comparison. */
+ * parse_file. It reads the same evidence pass1 uses to decide genericness, and
+ * pass1 checks that it found every generic declaration
+ * (check_generic_names_seen); an extra name only means a `<` after it is tried
+ * as a type-argument list before falling back to a comparison. */
 void parser_collect_generic_names(Token *tokens, int count, InternTable *intern,
                                   const char ***names, int *n, int *cap);
+
+/* Parse every file of one program (its token streams, one per file) and merge
+ * them into a single Program: the generic-name pre-pass over all of them, then
+ * parse_file for each. The caller checks diag_error_count(). */
+Program *parse_files(Token **tokens, const int *counts, const char **filenames, int n,
+                       Arena *arena, InternTable *intern);

@@ -309,7 +309,7 @@ JsonValue *json_parse(Arena *a, const char *text, int len) {
 static void sb_put(char **buf, int *len, int *cap, const char *s, int n) {
     if (*len + n > *cap) {
         while (*len + n > *cap) *cap = *cap ? *cap * 2 : 256;
-        *buf = realloc(*buf, (size_t)*cap);
+        *buf = xrealloc(*buf, (size_t)*cap);
     }
     memcpy(*buf + *len, s, (size_t)n);
     *len += n;
@@ -356,7 +356,8 @@ void json_serialize(const JsonValue *v, char **buf, int *len, int *cap) {
             char tmp[32];
             double d = v->num;
             /* Integral values print as integers (LSP fields are integers). */
-            if (d == (double)(long long)d && d >= -9.2e18 && d <= 9.2e18)
+            /* Range first: converting an out-of-range double is undefined. */
+            if (d >= -9.2e18 && d <= 9.2e18 && d == (double)(long long)d)
                 snprintf(tmp, sizeof tmp, "%lld", (long long)d);
             else
                 snprintf(tmp, sizeof tmp, "%.17g", d);

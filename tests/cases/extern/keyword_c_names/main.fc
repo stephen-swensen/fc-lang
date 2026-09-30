@@ -1,0 +1,11 @@
+// A C function may have a name FC reserves (any keyword, not only alloc/free);
+// the extern gives it an FC name with `as`. Regression: only some keywords
+// were accepted as C names (bitcast and enum_of were not).
+module c from "names.h" =
+    extern bitcast as c_bitcast: (i32) -> i32
+    extern enum_of as c_enum_of: (i32) -> i32
+
+let main = (args: str[]) ->
+    assert(c.c_bitcast(1) == 2)
+    assert(c.c_enum_of(3) == 6)
+    0

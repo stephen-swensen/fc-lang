@@ -12,7 +12,7 @@ This is disclosed up front because FC is also intended as a demonstration of wha
 
 ## Key Features
 
-- **C11 target** — generates portable, self-contained C using `<stdint.h>` types and `_Static_assert`; the whole runtime dependency is six libc symbols
+- **C11 target** — generates self-contained C11 plus a few GNU extensions (statement expressions, `__builtin_*`) for GCC and Clang; the runtime dependency is a handful of libc functions (allocation, `mem*`, `strlen`, `snprintf`, and `fprintf`/`abort` for runtime failures)
 - **Indentation-based syntax** — offside rule, spaces only
 - **Type inference** — directional (bottom-up, inside-out), no global unification
 - **Monomorphized generics** — zero runtime cost, including const parameters (`wide<256>`) that parameterize layout
@@ -44,6 +44,11 @@ Smaller programs in [`demos/`](demos/) round out the surface:
 - **`fibbles`** (~640 lines) — Snake/Nibbles clone, SDL2 graphics + audio.
 - **`fing`** (~160 lines) — `ping` clone, uses `std::net` (raw ICMP).
 - **`furl`** (~220 lines) — `curl`-style HTTP client, uses `std::net` (TCP).
+- **`fario`** (~4200 lines) — NES-style platformer with original levels,
+  sprites and music, raylib.
+- **`foregon-frail`** (~2300 lines) and **`foregon-deluxe`** (~3600 lines) —
+  two Oregon Trail remakes, raylib: one on the 1978 teletype rules, one in the
+  style of the early-90s versions.
 - **`fello`** (5 lines) — hello world, kept as a measuring stick.
 
 `fing` and `furl` cover `std::net`, which wolf-fc doesn't use.
@@ -61,7 +66,7 @@ There is no FC runtime to link.
 
 ## Building
 
-Requires a C11 compiler (GCC, Clang, etc.).
+Requires GCC or Clang (the compiler is C11; the tests compile its output with both).
 
 ```sh
 make              # build the fcc compiler (release, -O2)
@@ -91,6 +96,8 @@ The default install layout (with `PREFIX=/usr/local`):
 ```
 
 `PREFIX`, `DESTDIR`, `bindir`, and `datadir` are all overridable per the GNU conventions, so distro/package builds (`PREFIX=/usr DESTDIR=/build/staging make install`) work out of the box.
+
+The language server (`fcc --lsp`) looks for the standard library under `$datadir/fcc/stdlib`, a path compiled into `fcc` (the `FCC_STDLIB_DIR` environment variable overrides it). `make install` with a different `PREFIX` or `datadir` from the build rebuilds the two objects that embed it, so the installed binary always points at the installed stdlib.
 
 > **Caveat:** until `fcc` grows automatic stdlib path resolution, you currently need to pass stdlib files explicitly on the command line (e.g. `fcc /usr/local/share/fcc/stdlib/*.fc your-program.fc`).
 
@@ -140,7 +147,7 @@ The `1.0.0-rc.7` prefix is hand-maintained in the `VERSION` file at the repo roo
 ## Testing
 
 ```sh
-make check                          # ASCII check on src/, then the full suite with gcc and clang
+make check                          # everything CI runs: source checks, the suite with gcc and clang, the language server tests
 make test-gcc                       # the suite with gcc only (also test-clang)
 make test-gcc FILTER=closures       # only tests whose category/name matches a pattern
 ```

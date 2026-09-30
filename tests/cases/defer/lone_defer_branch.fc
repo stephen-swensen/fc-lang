@@ -1,0 +1,25 @@
+// A branch is a block scope even when its only statement is a defer, so the
+// deferred expression runs as the branch ends. Regression: an if or else
+// branch holding just a defer emitted nothing.
+let mut counter = 0
+let bump = () -> counter = counter + 1
+
+let main = (args: str[]) ->
+    if true then defer bump()
+    let a = counter
+    if true then
+        defer bump()
+    let b = counter
+    if false then void() else defer bump()
+    let c = counter
+    match 1 with
+    | 1 -> defer bump()
+    | _ -> void()
+    let d = counter
+    if false then defer bump()
+    assert(a == 1)
+    assert(b == 2)
+    assert(c == 3)
+    assert(d == 4)
+    assert(counter == 4)
+    0

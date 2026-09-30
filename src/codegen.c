@@ -243,6 +243,7 @@ static void emit_elem_type(Type *t, FILE *out);
 static void emit_indent(FILE *out);
 static void emit_expr(Expr *e, FILE *out);
 static Type *resolve_struct_stub(Type *t);
+static Type *instance_type(Type *t);
 static void emit_enum_variant_literal(Type *et, const char *vname, FILE *out);
 static bool type_valueless(Type *t);
 static void emit_c_escaped(const char *text, int len, FILE *out);
@@ -293,7 +294,7 @@ static void emit_c_byte(unsigned char b, bool fmt, FILE *out) {
  * escapes and re-encoding for C. */
 static void emit_str_lit_body(const char *s, int slen, FILE *out) {
     int n = decode_str_lit(s, slen, NULL);
-    unsigned char *buf = malloc(n > 0 ? (size_t)n : 1);
+    unsigned char *buf = xmalloc(n > 0 ? (size_t)n : 1);
     decode_str_lit(s, slen, buf);
     for (int i = 0; i < n; i++) emit_c_byte(buf[i], false, out);
     free(buf);
@@ -315,7 +316,7 @@ static bool is_hoisted(const char *codegen_name) {
 /* ---- Defer scope helpers ---- */
 
 static void defer_scope_push(bool is_loop) {
-    DeferScope *ds = calloc(1, sizeof(DeferScope));
+    DeferScope *ds = xcalloc(1, sizeof(DeferScope));
     ds->is_loop = is_loop;
     ds->parent = g_defer_scope;
     g_defer_scope = ds;
@@ -455,7 +456,7 @@ static void collect_hoisted_bindings(Expr *e) {
          * Runtime-sized buffers stay on alloca, which grows per loop iteration
          * (documented; alloc(s)! promotes to the heap). */
         int64_t bsize = 0;
-        if (interp_const_buffer_size(e, &bsize)) {
+        if (interp_const_buffer_size(e, instance_type, &bsize)) {
             add_fn_backing(e, &e->interp_string.codegen_backing_name);
             e->interp_string.backing_size = bsize;
         }
@@ -604,6 +605,7 @@ static void end_hoisted_scope(void) {
     g_fn_backing_count = 0;
 }
 
+
 /* Width (bits) at which a slice bounds compare runs: wide enough to hold the
  * index's full static range and the stored len width, so the truncating casts
  * in the fused unsigned compare preserve semantics (every stored len is in
@@ -639,6 +641,16 @@ static Type *subst_lookup(const char *name) {
 static Type *subst_resolve(Type *t) {
     Type *bound = (t && t->kind == TYPE_TYPE_VAR) ? subst_lookup(t->type_var.name) : NULL;
     return bound ? bound : t;
+}
+
+/* `t` as the instance being emitted sees it: every type variable replaced by
+ * its binding, and the instances it then names given their C names. */
+static Type *instance_type(Type *t) {
+    if (!g_subst || !t || !type_contains_type_var(t)) return t;
+    t = type_substitute(g_arena, t, g_subst->var_names, g_subst->concrete, g_subst->count);
+    if (!type_contains_type_var(t))
+        mono_resolve_type_names(g_mono, g_arena, g_intern, t);
+    return t;
 }
 
 /* pass2 widens a narrower numeric operand into a wider slot by wrapping it
@@ -704,7 +716,11 @@ static int64_t fixarr_size(Type *t) {
         if (const_type_eval(r, g_subst->var_names, g_subst->concrete,
                             g_subst->count, &v))
             return v;
-        SrcLoc dummy; (void)const_eval_take_error(&dummy);  /* defensive: pass2 validated */
+        /* pass2 validated every instance's sizes (check_inst_sizes). */
+        SrcLoc loc = {0};
+        const char *msg = const_eval_take_error(&loc);
+        internal_error(loc, "fixed array size did not evaluate in an instance (%s)",
+                       msg ? msg : "not a constant");
     }
     return t->fixed_array.size;
 }
@@ -731,8 +747,21 @@ static int zero_agg_depth(Type *t) {
         /* C repr is value-first, struct { T value; bool has_value; }, so the
          * first-member chain continues through the payload. */
         return is_null_sentinel(t) ? 0 : 1 + zero_agg_depth(t->option.inner);
-    default: return 0;            /* scalars, pointers, enums, any* */
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_POINTER:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_STUB:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return 0;            /* scalars, pointers, enums, any* */
 }
 
 /* Extra brace levels for the zero in a (T){0}-style compound literal: the
@@ -1039,7 +1068,11 @@ static void emit_type(Type *t, FILE *out) {
         }
         break;
     }
-    default:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_COUNT:
         internal_error((SrcLoc){0}, "no C spelling for type kind %d", t->kind);
         break;
     }
@@ -1132,7 +1165,17 @@ static void emit_type_ident(Type *t, FILE *out) {
         }
         break;
     }
-    default:           fprintf(out, "unknown");   break;
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+        fprintf(out, "void");      /* as emit_type spells them */
+        break;
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_COUNT:
+        internal_error((SrcLoc){0}, "no C identifier for type kind %d", t->kind);
+        break;
     }
 }
 
@@ -1405,6 +1448,18 @@ static Expr ***expr_slots(Expr **xs, int n) {
  * operand list with side effects, a self-comparison, or a division/modulo
  * instead emits a statement-expression `({...})` and must be parenthesized
  * normally. */
+static bool emit_self_parens(Expr *e);
+
+/* `if (cond) {` (the caller has emitted any indent): a condition that emits
+ * its own parentheses gets no second pair, since `if ((x == y))` trips clang's
+ * -Wparentheses-equality. */
+static void emit_if_open(Expr *cond, FILE *out) {
+    bool own = emit_self_parens(cond);
+    fprintf(out, own ? "if " : "if (");
+    emit_expr(cond, out);
+    fprintf(out, own ? " {\n" : ") {\n");
+}
+
 static bool emit_self_parens(Expr *e) {
     if (e->kind != EXPR_BINARY) return false;
     if (e->binary.op == TOK_SLASH || e->binary.op == TOK_PERCENT) return false;
@@ -1914,11 +1969,9 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, TailMode tail,
                              const char *target) {
     bool as_return = tail == TAIL_RETURN;
     bool discard_value = tail != TAIL_VALUE;
-    /* Find last non-defer statement index (needed for block-value handling) */
-    int last_real_idx = -1;
-    for (int i = count - 1; i >= 0; i--) {
-        if (stmts[i]->kind != EXPR_DEFER) { last_real_idx = i; break; }
-    }
+    /* The block's value is its last statement's. A trailing defer is void, so
+     * a block ending in one has no value (as pass2 types it). */
+    int value_idx = count > 0 && stmts[count - 1]->kind != EXPR_DEFER ? count - 1 : -1;
 
     for (int i = 0; i < count; i++) {
         Expr *s = stmts[i];
@@ -1930,7 +1983,10 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, TailMode tail,
             continue;
         }
 
-        emit_indent(out);
+        /* A control transfer indents its own lines: its defers come first. */
+        bool transfers = s->kind == EXPR_RETURN || s->kind == EXPR_BREAK ||
+                         s->kind == EXPR_CONTINUE;
+        if (!transfers) emit_indent(out);
 
         if (s->kind == EXPR_LET) {
             const char *vname = s->let_expr.codegen_name ? s->let_expr.codegen_name : s->let_expr.let_name;
@@ -1943,6 +1999,7 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, TailMode tail,
         } else if (s->kind == EXPR_RETURN) {
             /* Emit defers before return */
             if (s->return_expr.value && has_pending_defers()) {
+                emit_indent(out);
                 emit_return_through_defers(s->return_expr.value, out);
             } else {
                 if (has_pending_defers()) emit_defers_to_func(out);
@@ -1961,6 +2018,7 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, TailMode tail,
         } else if (s->kind == EXPR_BREAK) {
             /* Emit defers before break */
             if (s->break_expr.value && has_pending_defers()) {
+                emit_indent(out);
                 emit_type(s->break_expr.value->type, out);
                 int tid = g_temp_counter++;
                 fprintf(out, " _brk%d = ", tid);
@@ -2021,7 +2079,7 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, TailMode tail,
                 emit_expr(s, out);
                 fprintf(out, ";\n");
             }
-        } else if (!as_return && i == last_real_idx && s->type &&
+        } else if (!as_return && i == value_idx && s->type &&
                    s->type->kind != TYPE_VOID &&
                    g_defer_scope && g_defer_scope->count > 0) {
             /* Last expression in a value-producing block with pending defers
@@ -2044,7 +2102,7 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, TailMode tail,
              * discarded (non-last statement, or last with discard_value).
              * Prevents -Wunused-value for GCC statement expressions like
              * non-void match/block used as statements. */
-            bool is_block_value = (i == last_real_idx);
+            bool is_block_value = (i == value_idx);
             bool void_cast = s->type && s->type->kind != TYPE_VOID &&
                              (!is_block_value || discard_value);
             if (void_cast) fprintf(out, "(void)(");
@@ -2058,16 +2116,16 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, TailMode tail,
      * emitted with the return), or non-void block value (handled above). */
     if (g_defer_scope && g_defer_scope->count > 0) {
         bool already_handled = false;
-        if ((as_return || tail == TAIL_ASSIGN) && last_real_idx >= 0) {
-            Expr *last_real = stmts[last_real_idx];
-            already_handled = last_real->type &&
-                last_real->type->kind != TYPE_VOID &&
-                last_real->kind != EXPR_RETURN;
+        if ((as_return || tail == TAIL_ASSIGN) && value_idx >= 0) {
+            Expr *last = stmts[value_idx];
+            already_handled = last->type &&
+                last->type->kind != TYPE_VOID &&
+                last->kind != EXPR_RETURN;
         }
-        if (!as_return && last_real_idx >= 0) {
-            Expr *last_real = stmts[last_real_idx];
-            already_handled = last_real->type &&
-                last_real->type->kind != TYPE_VOID;
+        if (!as_return && value_idx >= 0) {
+            Expr *last = stmts[value_idx];
+            already_handled = last->type &&
+                last->type->kind != TYPE_VOID;
         }
         if (!already_handled) {
             emit_scope_defers(g_defer_scope, out);
@@ -2075,31 +2133,40 @@ static void emit_block_stmts(Expr **stmts, int count, FILE *out, TailMode tail,
     }
 }
 
+/* Emit a function body after its opening brace: its statements at indent 1,
+ * hoisted declarations first, the last statement's value returned. Guards are
+ * on and overflow is unchecked at every function boundary: an `unguarded` or
+ * `checked` marker never reaches a callee. */
+static void emit_fn_body(Expr **body, int count, FILE *out) {
+    g_indent_level = 1;
+    g_guards_suppressed = false;
+    g_overflow_checked = false;
+    begin_hoisted_scope(body, count, out);
+    defer_scope_push(false);
+    emit_block_stmts(body, count, out, TAIL_RETURN, NULL);
+    defer_scope_pop();
+    end_hoisted_scope();
+    g_indent_level = 0;
+}
+
+/* Emit an if branch as C statements. A branch is a block scope whether it is
+ * one expression or an EXPR_BLOCK, so a lone `defer` in it runs at its end. */
+static void emit_branch_stmts(Expr *branch, FILE *out) {
+    Expr **stmts = &branch;
+    int count = 1;
+    if (branch->kind == EXPR_BLOCK) {
+        stmts = branch->block.stmts;
+        count = branch->block.count;
+    }
+    defer_scope_push(false);
+    emit_block_stmts(stmts, count, out, TAIL_DISCARD, NULL);
+    defer_scope_pop();
+}
+
 static void emit_if_stmt(Expr *e, FILE *out) {
-    /* Emit if as a C statement (not expression).
-     * Binary expressions emit their own outer parens, so use "if "
-     * to avoid double-parens like if ((x == y)) which triggers
-     * clang's -Wparentheses-equality. */
-    if (emit_self_parens(e->if_expr.cond)) {
-        fprintf(out, "if ");
-        emit_expr(e->if_expr.cond, out);
-        fprintf(out, " {\n");
-    } else {
-        fprintf(out, "if (");
-        emit_expr(e->if_expr.cond, out);
-        fprintf(out, ") {\n");
-    }
+    emit_if_open(e->if_expr.cond, out);
     g_indent_level++;
-    if (e->if_expr.then_body->kind == EXPR_BLOCK) {
-        defer_scope_push(false);
-        emit_block_stmts(e->if_expr.then_body->block.stmts,
-            e->if_expr.then_body->block.count, out, TAIL_DISCARD, NULL);
-        defer_scope_pop();
-    } else {
-        emit_indent(out);
-        emit_expr(e->if_expr.then_body, out);
-        fprintf(out, ";\n");
-    }
+    emit_branch_stmts(e->if_expr.then_body, out);
     g_indent_level--;
     emit_indent(out);
     fprintf(out, "}");
@@ -2111,16 +2178,7 @@ static void emit_if_stmt(Expr *e, FILE *out) {
         } else {
             fprintf(out, " else {\n");
             g_indent_level++;
-            if (e->if_expr.else_body->kind == EXPR_BLOCK) {
-                defer_scope_push(false);
-                emit_block_stmts(e->if_expr.else_body->block.stmts,
-                    e->if_expr.else_body->block.count, out, TAIL_DISCARD, NULL);
-                defer_scope_pop();
-            } else {
-                emit_indent(out);
-                emit_expr(e->if_expr.else_body, out);
-                fprintf(out, ";\n");
-            }
+            emit_branch_stmts(e->if_expr.else_body, out);
             g_indent_level--;
             emit_indent(out);
             fprintf(out, "}");
@@ -2135,15 +2193,7 @@ static void emit_if_stmt(Expr *e, FILE *out) {
    the branch's value is assigned to res_var. */
 static void emit_branch_into(Expr *branch, const char *res_var, FILE *out) {
     if (type_is_never(branch->type)) {
-        if (branch->kind == EXPR_BLOCK) {
-            defer_scope_push(false);
-            emit_block_stmts(branch->block.stmts, branch->block.count, out, TAIL_DISCARD, NULL);
-            defer_scope_pop();
-        } else {
-            emit_indent(out);
-            emit_expr(branch, out);
-            fprintf(out, ";\n");
-        }
+        emit_branch_stmts(branch, out);
     } else {
         emit_indent(out);
         fprintf(out, "%s = ", res_var);
@@ -2248,67 +2298,36 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
     /* Compute the buffer size expression. The buffer must be large enough: a
      * printf field width is a minimum, never a maximum, so it can only widen a
      * bound. String precision is the one true maximum. */
+    /* The sum of the segments' shares (interp_seg_budget, which the hoisted
+     * constant size also sums); a runtime share is the string's length, at
+     * least its field width. */
     fprintf(out, "int64_t _flen%d = ", tid);
     bool first_term = true;
     int k = 0;
     for (int i = 0; i < seg_count; i++) {
-        if (segs[i].is_literal) {
-            int actual_len = interp_literal_len(&segs[i]);
-            if (actual_len > 0) {
-                if (!first_term) fprintf(out, " + ");
-                fprintf(out, "%d", actual_len);
-                first_term = false;
-            }
-            continue;
-        }
-        if (segs[i].conversion == 'T') {
-            /* %T contributes the fixed length of the compile-time type name. */
-            const char *tname = type_name(segs[i].expr->type);
-            if (!first_term) fprintf(out, " + ");
-            fprintf(out, "%d", (int)strlen(tname));
-            first_term = false;
-            continue;
-        }
-
-        char conv = segs[i].conversion;
-        int64_t explicit_width = 0, explicit_prec = -1;
-        parse_format_width_prec(segs[i].text, &explicit_width, &explicit_prec);
-        Type *t = segs[i].expr->type;
-        bool is_str_arg = (conv == 's' && t && is_str_type(t));
-        bool is_cstr_arg = (conv == 's' && t && is_cstr_type(t));
-
+        InterpSegment *seg = &segs[i];
+        Type *t = seg->is_literal ? NULL : instance_type(seg->expr->type);
+        InterpSegBudget b = interp_seg_budget(seg, t);
+        if (seg->is_literal && b.bytes == 0) continue;
         if (!first_term) fprintf(out, " + ");
         first_term = false;
-
-        if (is_str_arg || is_cstr_arg) {
-            /* String-valued: precision is a hard maximum; width is a minimum
-             * field. With a precision the bound is the constant max(prec,
-             * width); otherwise it is the runtime length, floored at the
-             * minimum field width. */
-            if (explicit_prec >= 0) {
-                int64_t b = explicit_prec;
-                if (explicit_width > b) b = explicit_width;
-                fprintf(out, "%" PRId64, b);
-            } else if (is_str_arg) {
-                if (explicit_width > 0)
-                    fprintf(out, "(%" PRId64 " > _sg%d_%d.len ? %" PRId64 " : _sg%d_%d.len)",
-                        explicit_width, tid, k, explicit_width, tid, k);
-                else
-                    fprintf(out, "_sg%d_%d.len", tid, k);
-            } else {
-                if (explicit_width > 0)
-                    fprintf(out, "((int64_t)%" PRId64 " > (int64_t)strlen((const char*)_sg%d_%d)"
-                                 " ? (int64_t)%" PRId64 " : (int64_t)strlen((const char*)_sg%d_%d))",
-                        explicit_width, tid, k, explicit_width, tid, k);
-                else
-                    fprintf(out, "(int64_t)strlen((const char*)_sg%d_%d)", tid, k);
-            }
+        if (!b.runtime) {
+            fprintf(out, "%" PRId64, b.bytes);
+        } else if (is_str_type(t)) {
+            if (b.bytes > 0)
+                fprintf(out, "(%" PRId64 " > _sg%d_%d.len ? %" PRId64 " : _sg%d_%d.len)",
+                    b.bytes, tid, k, b.bytes, tid, k);
+            else
+                fprintf(out, "_sg%d_%d.len", tid, k);
         } else {
-            int64_t bound = interp_numeric_bound(conv, t, segs[i].text,
-                                                 explicit_width, explicit_prec);
-            fprintf(out, "%" PRId64, bound);
+            if (b.bytes > 0)
+                fprintf(out, "((int64_t)%" PRId64 " > (int64_t)strlen((const char*)_sg%d_%d)"
+                             " ? (int64_t)%" PRId64 " : (int64_t)strlen((const char*)_sg%d_%d))",
+                    b.bytes, tid, k, b.bytes, tid, k);
+            else
+                fprintf(out, "(int64_t)strlen((const char*)_sg%d_%d)", tid, k);
         }
-        k++;
+        if (!seg->is_literal && seg->conversion != 'T') k++;
     }
     if (first_term) fprintf(out, "0");
     fprintf(out, "; ");
@@ -2351,7 +2370,7 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
              * copies into the buffer like any other byte and counts in its
              * return. */
             int n = interp_literal_len(&segs[i]);
-            unsigned char *bytes = malloc(n > 0 ? (size_t)n : 1);
+            unsigned char *bytes = xmalloc(n > 0 ? (size_t)n : 1);
             decode_str_lit(segs[i].text, segs[i].text_length, bytes);
             for (int j = 0; j < n; j++) {
                 if (bytes[j] == 0) fputs("%c", out);
@@ -2359,8 +2378,7 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
             }
             free(bytes);
         } else if (segs[i].conversion == 'T') {
-            const char *tname = type_name(segs[i].expr->type);
-            fputs(tname, out);
+            fputs(type_name(instance_type(segs[i].expr->type)), out);
         } else {
             bool is_str_arg2 = (segs[i].conversion == 's' &&
                                segs[i].expr->type && is_str_type(segs[i].expr->type));
@@ -2419,7 +2437,7 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
         if (segs[i].is_literal) {
             /* One `0` per NUL byte the format writes with `%c` (see above). */
             int n = interp_literal_len(&segs[i]);
-            unsigned char *bytes = malloc(n > 0 ? (size_t)n : 1);
+            unsigned char *bytes = xmalloc(n > 0 ? (size_t)n : 1);
             decode_str_lit(segs[i].text, segs[i].text_length, bytes);
             for (int j = 0; j < n; j++)
                 if (bytes[j] == 0) fprintf(out, ", 0");
@@ -2755,15 +2773,10 @@ static bool emit_int_arith(Expr *e, int op, Type *rt, FILE *out) {
 
 /* A shift, with its count masked to the operand width (a << (b & 31) for a
  * 32-bit operand), so an out-of-range count is not undefined behavior. */
-static bool emit_shift(Expr *e, int op, Type *rt, FILE *out) {
+static void emit_shift(Expr *e, int op, Type *rt, FILE *out) {
     int mask = shift_mask_for(rt);
-    /* For platform-dependent types, emit a computed mask */
-    const char *mask_expr = NULL;
-    char mask_buf[64];
-    if (mask < 0) {
-        snprintf(mask_buf, sizeof(mask_buf), "((int)(sizeof(size_t)*8)-1)");
-        mask_expr = mask_buf;
-    }
+    /* isize/usize: the width is the target's, so the mask is computed in C. */
+    const char *mask_expr = mask < 0 ? "((int)(sizeof(size_t)*8)-1)" : NULL;
     if (op == TOK_LTLT) {
         /* Left shift through the unsigned counterpart, then cast back to
          * the result type: makes signed shift well-defined (no overflow
@@ -2786,13 +2799,11 @@ static bool emit_shift(Expr *e, int op, Type *rt, FILE *out) {
     } else {
         fprintf(out, "(");
         emit_expr(e->binary.left, out);
-        fprintf(out, " %s (", op == TOK_LTLT ? "<<" : ">>");
+        fprintf(out, " >> (");
         emit_expr(e->binary.right, out);
         if (mask_expr) fprintf(out, " & %s))", mask_expr);
         else fprintf(out, " & %d))", mask);
     }
-    return true;
-    return false;
 }
 
 /* Integer division/modulo. Two orthogonal concerns, on two axes:
@@ -2907,9 +2918,10 @@ static void emit_binary_op(Expr *e, FILE *out) {
         emit_int_arith(e, op, rt, out))
         return;
 
-    if ((op == TOK_LTLT || op == TOK_GTGT) && rt && type_is_integer(rt) &&
-        emit_shift(e, op, rt, out))
+    if ((op == TOK_LTLT || op == TOK_GTGT) && rt && type_is_integer(rt)) {
+        emit_shift(e, op, rt, out);
         return;
+    }
 
     if ((op == TOK_SLASH || op == TOK_PERCENT) && rt && type_is_integer(rt) &&
         emit_int_divmod(e, op, rt, out))
@@ -2935,7 +2947,9 @@ static void emit_binary_op(Expr *e, FILE *out) {
     case TOK_CARET:   op_str = "^";  break;
     case TOK_LTLT:    op_str = "<<"; break;
     case TOK_GTGT:    op_str = ">>"; break;
-    default: op_str = "?"; break;
+    default:
+        internal_error(e->loc, "no C operator for binary %s", token_kind_name(op));
+        return;
     }
     fprintf(out, "(");
     /* gcc and clang read a decimal `10 ^ 6` as a mistyped power of ten
@@ -3317,18 +3331,7 @@ static void emit_match(Expr *e, FILE *out) {
             bool has_guard = (arm->guard != NULL);
             if (has_guard) {
                 emit_indent(out);
-                /* Avoid double-parens like if ((x == y)) which triggers
-                   clang's -Wparentheses-equality when the guard is a
-                   binary expression (emit_expr wraps binaries in parens). */
-                if (emit_self_parens(arm->guard)) {
-                    fprintf(out, "if ");
-                    emit_expr(arm->guard, out);
-                    fprintf(out, " {\n");
-                } else {
-                    fprintf(out, "if (");
-                    emit_expr(arm->guard, out);
-                    fprintf(out, ") {\n");
-                }
+                emit_if_open(arm->guard, out);
                 g_indent_level++;
             }
         } else {
@@ -3467,7 +3470,7 @@ static void emit_struct_lit(Expr *e, FILE *out) {
                 /* A string literal's bytes, as integers: a C string
                  * initializer would also try to store the terminating NUL. */
                 int n = decode_str_lit(v->string_lit.value, v->string_lit.length, NULL);
-                unsigned char *bytes = malloc(n > 0 ? (size_t)n : 1);
+                unsigned char *bytes = xmalloc(n > 0 ? (size_t)n : 1);
                 decode_str_lit(v->string_lit.value, v->string_lit.length, bytes);
                 fprintf(out, "{");
                 if (n == 0) fprintf(out, "0");
@@ -3642,7 +3645,7 @@ static void emit_call(Expr *e, FILE *out) {
 
         /* Resolve deferred generic call under substitution context */
         if (!fn_name && g_subst && e->call.type_arg_count > 0) {
-            Type **concrete_args = malloc(sizeof(Type*) * (size_t)e->call.type_arg_count);
+            Type **concrete_args = xmalloc(sizeof(Type*) * (size_t)e->call.type_arg_count);
             for (int i = 0; i < e->call.type_arg_count; i++) {
                 concrete_args[i] = type_substitute(g_arena, e->call.type_args[i],
                     g_subst->var_names, g_subst->concrete, g_subst->count);
@@ -3724,6 +3727,24 @@ static void emit_call(Expr *e, FILE *out) {
 
 /* A field access: a type property, extern constant, module member, variant
  * constructor, or a value field (a fixed-array field is viewed as a slice). */
+/* A fixed-array field read as the slice that views it (`s.data` is a
+ * `T[]` over the field's storage). `access` is "." for a struct value and
+ * "->" through a pointer. The emitted slice type drops const; FC enforces
+ * const itself. */
+static void emit_fixed_array_view(Expr *e, const char *access, FILE *out) {
+    Type *fat = e->field.fixed_array_type;
+    Type *slice_type = e->type;
+    if (slice_type->is_const) slice_type = type_slice(g_arena, fat->fixed_array.elem);
+    fprintf(out, "(");
+    emit_type(slice_type, out);
+    fprintf(out, "){ .ptr = (");
+    emit_type(fat->fixed_array.elem, out);
+    fprintf(out, "*)");
+    emit_expr(e->field.object, out);
+    fprintf(out, "%s%s, .len = %lld }", access, c_safe_ident(g_intern, e->field.name),
+            (long long)fixarr_size(fat));
+}
+
 static void emit_field(Expr *e, FILE *out) {
     /* Module member access: emit mangled name directly */
     if (e->field.codegen_name) {
@@ -3765,28 +3786,15 @@ static void emit_field(Expr *e, FILE *out) {
                 fprintf(out, "%s", cstr);
                 return;
             }
-            diag_error(e->loc, "type '%s' has no property '%s'",
-                type_name(concrete), e->field.name);
-            fprintf(out, "0 /* error */");
+            /* pass2 checked the property for this instance (the per-instance
+             * generic check). */
+            internal_error(e->loc, "type '%s' has no property '%s'",
+                           type_name(concrete), e->field.name);
             return;
         }
     }
-    /* Fixed-array field: create slice view */
     if (e->field.fixed_array_type) {
-        Type *fat = e->field.fixed_array_type;
-        /* Strip const from the emitted slice type; FC enforces const itself */
-        Type *slice_type = e->type;
-        if (slice_type->is_const) {
-            slice_type = type_slice(g_arena, fat->fixed_array.elem);
-        }
-        fprintf(out, "(");
-        emit_type(slice_type, out);
-        fprintf(out, "){ .ptr = (");
-        emit_type(fat->fixed_array.elem, out);
-        fprintf(out, "*)");
-        emit_expr(e->field.object, out);
-        fprintf(out, ".%s, .len = %lld }", c_safe_ident(g_intern, e->field.name),
-                (long long)fixarr_size(fat));
+        emit_fixed_array_view(e, ".", out);
         return;
     }
     /* Option .is_some / .is_none synthetic fields */
@@ -4379,7 +4387,10 @@ static void emit_unary_prefix(Expr *e, FILE *out) {
     case TOK_TILDE: op_str = "~"; break;
     case TOK_AMP:   op_str = "&"; break;
     case TOK_STAR:  op_str = "*"; break;
-    default: op_str = "?"; break;
+    default:
+        internal_error(e->loc, "no C operator for unary %s",
+                       token_kind_name(e->unary_prefix.op));
+        return;
     }
     fprintf(out, "(%s", op_str);
     emit_expr(e->unary_prefix.operand, out);
@@ -4517,15 +4528,7 @@ static void emit_expr(Expr *e, FILE *out) {
             emit_type(e->type, out);
             fprintf(out, " %s;\n", res_var);
             emit_indent(out);
-            if (emit_self_parens(e->if_expr.cond)) {
-                fprintf(out, "if ");
-                emit_expr(e->if_expr.cond, out);
-                fprintf(out, " {\n");
-            } else {
-                fprintf(out, "if (");
-                emit_expr(e->if_expr.cond, out);
-                fprintf(out, ") {\n");
-            }
+            emit_if_open(e->if_expr.cond, out);
             g_indent_level++;
             emit_branch_into(e->if_expr.then_body, res_var, out);
             g_indent_level--;
@@ -4584,20 +4587,7 @@ static void emit_expr(Expr *e, FILE *out) {
 
     case EXPR_DEREF_FIELD: {
         if (e->field.fixed_array_type) {
-            Type *fat = e->field.fixed_array_type;
-            /* Strip const from the emitted slice type; pass2 enforces const */
-            Type *slice_type = e->type;
-            if (slice_type->is_const) {
-                slice_type = type_slice(g_arena, fat->fixed_array.elem);
-            }
-            fprintf(out, "(");
-            emit_type(slice_type, out);
-            fprintf(out, "){ .ptr = (");
-            emit_type(fat->fixed_array.elem, out);
-            fprintf(out, "*)");
-            emit_expr(e->field.object, out);
-            fprintf(out, "->%s, .len = %lld }", c_safe_ident(g_intern, e->field.name),
-                    (long long)fixarr_size(fat));
+            emit_fixed_array_view(e, "->", out);
             break;
         }
         /* Slice .len read through a pointer: same widening as the value form. */
@@ -4973,64 +4963,12 @@ static void emit_expr(Expr *e, FILE *out) {
         emit_match(e, out); break;
 
     case EXPR_BREAK:
-        if (has_pending_defers()) {
-            fprintf(out, "({ ");
-            if (e->break_expr.value) {
-                emit_type(e->break_expr.value->type, out);
-                int tid = g_temp_counter++;
-                fprintf(out, " _brk%d = ", tid);
-                emit_expr(e->break_expr.value, out);
-                fprintf(out, "; ");
-                emit_defers_to_loop(out);
-                fprintf(out, "_loop_result = _brk%d; break; })", tid);
-            } else {
-                emit_defers_to_loop(out);
-                fprintf(out, "break; })");
-            }
-        } else {
-            if (e->break_expr.value) {
-                fprintf(out, "_loop_result = ");
-                emit_expr(e->break_expr.value, out);
-                fprintf(out, "; break");
-            } else {
-                fprintf(out, "break");
-            }
-        }
-        break;
-
     case EXPR_CONTINUE:
-        if (has_pending_defers()) {
-            fprintf(out, "({ ");
-            emit_defers_to_loop(out);
-            fprintf(out, "continue; })");
-        } else {
-            fprintf(out, "continue");
-        }
-        break;
-
     case EXPR_RETURN:
-        if (has_pending_defers()) {
-            fprintf(out, "({ ");
-            if (e->return_expr.value) {
-                emit_type(e->return_expr.value->type, out);
-                int tid = g_temp_counter++;
-                fprintf(out, " _ret%d = ", tid);
-                emit_expr(e->return_expr.value, out);
-                fprintf(out, "; ");
-                emit_defers_to_func(out);
-                fprintf(out, "return _ret%d; })", tid);
-            } else {
-                emit_defers_to_func(out);
-                fprintf(out, "return; })");
-            }
-        } else {
-            if (e->return_expr.value) {
-                fprintf(out, "return ");
-                emit_expr(e->return_expr.value, out);
-            } else {
-                fprintf(out, "return");
-            }
-        }
+        /* Statements only (the parser admits them nowhere else): every block,
+         * branch and arm goes through emit_block_stmts, which emits them with
+         * their pending defers. */
+        internal_error(e->loc, "control transfer emitted as an expression");
         break;
 
     case EXPR_IGNORE:
@@ -5042,7 +4980,8 @@ static void emit_expr(Expr *e, FILE *out) {
         break;
 
     case EXPR_DEFER:
-        /* Handled in emit_block_stmts; should not reach here */
+        /* A statement: emit_block_stmts records it for its scope's exits. */
+        internal_error(e->loc, "defer emitted as an expression");
         break;
 
     case EXPR_SIZEOF: {
@@ -5256,21 +5195,9 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "){ .fn_ptr = %s, .ctx = &%s }; })",
                 lambda_c_name(e), bk);
         } else if (e->func.capture_count > 0) {
-            /* Fallback: no hoisted backing (e.g. emitted outside a hoisted scope).
-             * An inline compound literal has block-scope lifetime, so this is
-             * safe only when the lambda is consumed within the same block. */
-            const char *ln = lambda_c_name(e);
-            fprintf(out, "(");
-            emit_type(e->type, out);
-            fprintf(out, "){ .fn_ptr = %s, .ctx = &(_ctx_%s){ ",
-                ln, ln);
-            for (int i = 0; i < e->func.capture_count; i++) {
-                if (i > 0) fprintf(out, ", ");
-                fprintf(out, ".%s = %s",
-                    e->func.captures[i].codegen_name,
-                    e->func.captures[i].codegen_name);
-            }
-            fprintf(out, " } }");
+            /* A capturing lambda is always inside a function body, whose
+             * hoisting gave its context a function-lifetime slot. */
+            internal_error(e->loc, "capturing lambda without a context slot");
         } else {
             /* Non-capturing lambda: NULL context */
             fprintf(out, "(");
@@ -5287,13 +5214,14 @@ static void emit_expr(Expr *e, FILE *out) {
 
 
     case EXPR_ERROR:
-        /* Tripwire: error nodes exist only when diag_error_count()>0, and codegen is
-           gated behind a clean compile, so reaching here is a compiler bug. */
-        assert(0 && "EXPR_ERROR reached codegen");
+        /* Error nodes exist only when diag_error_count() > 0, and codegen runs
+           only after a clean compile. */
+        internal_error(e->loc, "parse-error node reached codegen");
         break;
 
-    default:
-        internal_error(e->loc, "no emission for expression kind %d", e->kind);
+    case EXPR_LET_DESTRUCT:
+        /* A statement: emit_block_stmts emits it. */
+        internal_error(e->loc, "destructuring let emitted as an expression");
         break;
     }
 }
@@ -5358,16 +5286,7 @@ static void emit_func_decl(Decl *d, FILE *out) {
         fprintf(out, " {\n    (void)_ctx;\n");
     }
 
-    g_indent_level = 1;
-    g_guards_suppressed = false;   /* guards on at a function boundary: an
-                                      `unguarded` marker never reaches a callee */
-    g_overflow_checked = false;    /* unchecked at a function boundary too */
-    begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
-    defer_scope_push(false);
-    emit_block_stmts(fn->func.body, fn->func.body_count, out, TAIL_RETURN, NULL);
-    defer_scope_pop();
-    end_hoisted_scope();
-    g_indent_level = 0;
+    emit_fn_body(fn->func.body, fn->func.body_count, out);
 
     /* main returns 0 unless its body ends in a return or an integer value
      * (which emit_block_stmts already returned). */
@@ -5580,12 +5499,7 @@ static void typeset_add(TypeSet *ts, Type *t) {
 
 static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, TypeSet *fns) {
     if (!t) return;
-    /* Apply type variable substitution if available */
-    if (g_subst && type_contains_type_var(t)) {
-        t = type_substitute(g_arena, t, g_subst->var_names, g_subst->concrete, g_subst->count);
-        if (!type_contains_type_var(t))
-            mono_resolve_type_names(g_mono, g_arena, g_intern, t);
-    }
+    t = instance_type(t);
     if (type_contains_type_var(t)) return;  /* still has unresolved type vars */
     /* Resolve stubs before type classification */
     if (t->kind == TYPE_STUB) t = resolve_struct_stub(t);
@@ -5684,18 +5598,24 @@ static void collect_types_in_type(Type *t, TypeSet *slices, TypeSet *options, Ty
     }
 }
 
+/* The instance name of a concrete generic stub (`box<i32>` spelled as a
+ * TYPE_STUB with type arguments), whether or not monomorphization has already
+ * renamed it in place (see Type.stub.base_name). */
+static const char *stub_instance_name(Type *t) {
+    return mangle_generic_name(g_intern,
+        t->stub.base_name ? t->stub.base_name : t->stub.name,
+        t->stub.type_args, t->stub.type_arg_count);
+}
+
 /* Resolve TYPE_STUB types (unresolved name-only references) to full definitions */
 static Type *resolve_struct_stub(Type *t) {
     if (!g_symtab) return t;
     if (t->kind == TYPE_STUB) {
         /* A concrete generic instance (e.g. box<int32>) used as a by-value field
          * resolves to its monomorphized instance, not the generic template (the
-         * template is never emitted as a complete type). The field stub keeps its
-         * base name (the pass2 type is shared with the symbol table, so it must
-         * not be mutated); the mangled name is computed here for the lookup. */
+         * template is never emitted as a complete type). */
         if (t->stub.type_arg_count > 0 && !type_contains_type_var(t)) {
-            const char *mangled = mangle_generic_name(g_intern,
-                t->stub.name, t->stub.type_args, t->stub.type_arg_count);
+            const char *mangled = stub_instance_name(t);
             if (g_mono) {
                 for (int i = 0; i < g_mono->count; i++) {
                     if (g_mono->entries[i].mangled_name == mangled &&
@@ -5725,12 +5645,7 @@ static Type *resolve_struct_stub(Type *t) {
 /* Recursively collect types that need generated eq functions */
 static void collect_eq_types(Type *t, TypeSet *eqs) {
     if (!t) return;
-    /* Apply type variable substitution if available */
-    if (g_subst && type_contains_type_var(t)) {
-        t = type_substitute(g_arena, t, g_subst->var_names, g_subst->concrete, g_subst->count);
-        if (!type_contains_type_var(t))
-            mono_resolve_type_names(g_mono, g_arena, g_intern, t);
-    }
+    t = instance_type(t);
     if (type_contains_type_var(t)) return;
     /* Resolve stubs before checking if eq func is needed */
     if (t->kind == TYPE_STUB) t = resolve_struct_stub(t);
@@ -5771,7 +5686,20 @@ static void collect_eq_types(Type *t, TypeSet *eqs) {
     case TYPE_RESULT:
         collect_eq_types(t->result.inner, eqs);
         break;
-    default:
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_POINTER:
+    case TYPE_FUNC:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_FIXED_ARRAY:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_STUB:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
         break;
     }
 }
@@ -6333,7 +6261,20 @@ static bool wrap_inner_complete(WrapEmit *we, Type *inner) {
             if (type_ident_eq(we->results->types[i], inner))
                 return we->res_done[i];
         return true;  /* not collected: nothing to wait for */
-    default:
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_POINTER:
+    case TYPE_SLICE:
+    case TYPE_FUNC:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_FIXED_ARRAY:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
         return true;  /* scalars, pointers, slices, fns: bodies already out */
     }
     for (int i = 0; i < we->defs_done_count; i++)
@@ -6401,10 +6342,9 @@ static const char *find_by_value_dep_name(Type *type) {
     case TYPE_UNION:  return type->unio.name;
     case TYPE_STUB:
         /* A concrete generic-instance field depends on its monomorphized
-         * instance's mangled name, so it is emitted after that instance. */
+         * instance, so it is emitted after that instance. */
         if (type->stub.type_arg_count > 0 && !type_contains_type_var(type))
-            return mangle_generic_name(g_intern, type->stub.name,
-                                       type->stub.type_args, type->stub.type_arg_count);
+            return stub_instance_name(type);
         return type->stub.name;
     case TYPE_FIXED_ARRAY: return find_by_value_dep_name(type->fixed_array.elem);
     case TYPE_OPTION:
@@ -6417,8 +6357,22 @@ static const char *find_by_value_dep_name(Type *type) {
     case TYPE_RESULT:
         /* A result always embeds its payload by value: same interleave rule */
         return find_by_value_dep_name(type->result.inner);
-    default: return NULL;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_POINTER:
+    case TYPE_SLICE:
+    case TYPE_FUNC:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
     }
+    return NULL;
 }
 
 enum { DECL_TOPO_UNVISITED = 0, DECL_TOPO_VISITING = 1, DECL_TOPO_DONE = 2 };
@@ -6744,7 +6698,13 @@ static void detect_features_decl(Decl *d) {
         for (int i = 0; i < d->module.decl_count; i++)
             detect_features_decl(d->module.decls[i]);
         break;
-    default:
+    case DECL_STRUCT:
+    case DECL_UNION:
+    case DECL_ENUM:
+    case DECL_IMPORT:
+    case DECL_EXTERN:
+    case DECL_NAMESPACE:
+    case DECL_ERROR:
         break;
     }
 }
@@ -6826,14 +6786,7 @@ static void emit_lambda_defs(LambdaSet *ls, FILE *out) {
                 lam->func.capture_count > 0 ? "_ctx" : "NULL");
         }
 
-        g_guards_suppressed = false;   /* lambda body: guards on (function boundary) */
-        g_overflow_checked = false;    /* lambda body: unchecked (function boundary) */
-        begin_hoisted_scope(lam->func.body, lam->func.body_count, out);
-        defer_scope_push(false);
-        emit_block_stmts(lam->func.body, lam->func.body_count, out, TAIL_RETURN, NULL);
-        defer_scope_pop();
-        end_hoisted_scope();
-        g_indent_level = 0;
+        emit_fn_body(lam->func.body, lam->func.body_count, out);
         fprintf(out, "}\n\n");
     }
 }
@@ -7193,6 +7146,7 @@ static void emit_types(FILE *out, Decl **all_decls, int all_count, MonoTable *mo
     }
     g_eq_set = NULL;
     g_results_set = NULL;
+    g_enum_of_set = NULL;
 
     /* Enum typedefs: complete scalar types with no dependencies, emitted
        before every forward declaration so struct fields, option/result inners,
@@ -7316,8 +7270,8 @@ static void emit_types(FILE *out, Decl **all_decls, int all_count, MonoTable *mo
        each newly-emitted def unlocks the wrappers embedding it. */
     WrapEmit we = {
         .options = &options, .results = &results,
-        .opt_done = calloc(options.count > 0 ? (size_t)options.count : 1, sizeof(bool)),
-        .res_done = calloc(results.count > 0 ? (size_t)results.count : 1, sizeof(bool)),
+        .opt_done = xcalloc(options.count > 0 ? (size_t)options.count : 1, sizeof(bool)),
+        .res_done = xcalloc(results.count > 0 ? (size_t)results.count : 1, sizeof(bool)),
         .defs_done = NULL, .defs_done_count = 0,
         .out = out,
     };
@@ -7346,8 +7300,8 @@ static void emit_types(FILE *out, Decl **all_decls, int all_count, MonoTable *mo
             DA_APPEND(defs, def_count, def_cap, s);
         }
     }
-    int *def_state = calloc((size_t)(def_count > 0 ? def_count : 1), sizeof(int));
-    int *def_order = malloc(sizeof(int) * (size_t)(def_count > 0 ? def_count : 1));
+    int *def_state = xcalloc((size_t)(def_count > 0 ? def_count : 1), sizeof(int));
+    int *def_order = xmalloc(sizeof(int) * (size_t)(def_count > 0 ? def_count : 1));
     int def_order_count = 0;
     for (int i = 0; i < def_count; i++)
         topo_visit_sudef(defs, def_count, i, def_state, def_order, &def_order_count);
@@ -7355,7 +7309,7 @@ static void emit_types(FILE *out, Decl **all_decls, int all_count, MonoTable *mo
 
     /* Emit definitions in dependency order, interleaving option/result bodies
        that wrap each newly-defined struct/union/tuple. */
-    const char **defs_done = malloc(sizeof(char*) * (size_t)(def_count > 0 ? def_count : 1));
+    const char **defs_done = xmalloc(sizeof(char*) * (size_t)(def_count > 0 ? def_count : 1));
     we.defs_done = defs_done;
     for (int oi = 0; oi < def_order_count; oi++) {
         SuDef *s = &defs[def_order[oi]];
@@ -7419,7 +7373,7 @@ static void collect_file_globals(Decl **all_decls, int all_count) {
             g_file_global_count++;
     }
     if (g_file_global_count > 0) {
-        g_file_globals = malloc(sizeof(Decl*) * (size_t)g_file_global_count);
+        g_file_globals = xmalloc(sizeof(Decl*) * (size_t)g_file_global_count);
         int idx = 0;
         for (int i = 0; i < all_count; i++) {
             Decl *d = all_decls[i];
@@ -7493,7 +7447,7 @@ static void collect_code(EmittedCode *code, Decl **all_decls, int all_count,
         }
     }
     code->inst_lambdas = mono->count > 0
-        ? calloc((size_t)mono->count, sizeof(LambdaSet)) : NULL;
+        ? xcalloc((size_t)mono->count, sizeof(LambdaSet)) : NULL;
     for (int mi = 0; mi < mono->count; mi++) {
         MonoInstance *inst = &mono->entries[mi];
         if (inst->decl_kind != DECL_LET || !inst->template_decl) continue;
@@ -7700,15 +7654,7 @@ static void emit_functions(FILE *out, Decl **all_decls, int all_count,
         emit_fn_signature(inst->mangled_name, fn->type->func.return_type,
                           fn->func.params, fn->func.param_count, out);
         fprintf(out, " {\n    (void)_ctx;\n");
-        g_indent_level = 1;
-        g_guards_suppressed = false;   /* generic-instance body: guards on (function boundary) */
-        g_overflow_checked = false;    /* generic-instance body: unchecked (function boundary) */
-        begin_hoisted_scope(fn->func.body, fn->func.body_count, out);
-        defer_scope_push(false);
-        emit_block_stmts(fn->func.body, fn->func.body_count, out, TAIL_RETURN, NULL);
-        defer_scope_pop();
-        end_hoisted_scope();
-        g_indent_level = 0;
+        emit_fn_body(fn->func.body, fn->func.body_count, out);
         fprintf(out, "}\n\n");
         leave_instance();
     }

@@ -1,0 +1,4 @@
+namespace acme::gfx::
+
+module util =
+    let one = () -> 1

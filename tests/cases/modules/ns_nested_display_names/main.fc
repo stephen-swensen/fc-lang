@@ -1,0 +1,7 @@
+import errs from acme::gfx::
+
+let main = (args: str[]) ->
+    match error_name(errs.bad) with
+    | some(s) -> assert(s == "acme::gfx::errs.bad")
+    | none -> assert(false)
+    0

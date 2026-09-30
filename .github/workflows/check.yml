@@ -1,0 +1,20 @@
+# Build fcc and run `make check` (the compiler suite under gcc and clang,
+# --len-repr 16, the language-server tests, and the consistency checks) and the
+# VSCode extension smoke test on every push and pull request.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Check
+        run: make check
+      - name: VSCode extension
+        run: make test-vscode

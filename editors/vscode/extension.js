@@ -13,21 +13,37 @@ let nextId = 1;
 const pending = new Map();          // id -> {resolve, reject}
 let buf = Buffer.alloc(0);
 const versions = new Map();         // uri -> document version
-let ready = false;
+let ready = false;                  // initialize answered; documents may be synced
+let stopping = false;               // deactivate() is shutting the server down
+const restarts = [];                // times of recent automatic restarts
 
 /* ---- transport ---- */
 
 function send(msg) {
-  if (!proc || proc.killed) return;
+  if (!proc || proc.killed) return false;
   const body = Buffer.from(JSON.stringify(msg), "utf8");
   proc.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
   proc.stdin.write(body);
+  return true;
 }
 
+// A request to the server. Rejects at once when no server is running, and when
+// the server exits before answering (see onExit), so a provider never waits on
+// a dead process.
 function request(method, params) {
   const id = nextId++;
-  send({ jsonrpc: "2.0", id, method, params });
-  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    if (!send({ jsonrpc: "2.0", id, method, params })) {
+      pending.delete(id);
+      reject(new Error("FC language server is not running"));
+    }
+  });
+}
+
+// The result of a request, or `fallback` when the server is unavailable.
+async function query(method, params, fallback) {
+  try { return await request(method, params); } catch (_) { return fallback; }
 }
 
 function notify(method, params) {
@@ -88,7 +104,7 @@ function applyDiagnostics(params) {
 /* ---- document sync (full text) ---- */
 
 function didOpen(doc) {
-  if (doc.languageId !== "fc") return;
+  if (doc.languageId !== "fc" || !ready) return;
   const uri = doc.uri.toString();
   versions.set(uri, doc.version);
   notify("textDocument/didOpen", {
@@ -97,7 +113,7 @@ function didOpen(doc) {
 }
 
 function didChange(doc) {
-  if (doc.languageId !== "fc") return;
+  if (doc.languageId !== "fc" || !ready) return;
   const uri = doc.uri.toString();
   const version = (versions.get(uri) || 0) + 1;
   versions.set(uri, version);
@@ -108,7 +124,7 @@ function didChange(doc) {
 }
 
 function didClose(doc) {
-  if (doc.languageId !== "fc") return;
+  if (doc.languageId !== "fc" || !ready) return;
   const uri = doc.uri.toString();
   versions.delete(uri);
   notify("textDocument/didClose", { textDocument: { uri } });
@@ -130,41 +146,86 @@ function typeDisplayMode() {
 
 /* ---- activation ---- */
 
-async function activate(context) {
+/* ---- server lifecycle ---- */
+
+// Start `fcc --lsp`, initialize it, and send it every open FC document. Returns
+// false (after telling the user) when the server cannot be started. When it
+// exits unexpectedly it is restarted, up to three times in three minutes.
+async function startServer() {
   const cfg = vscode.workspace.getConfiguration("fc");
   const command = cfg.get("serverPath") || "fcc";
   const stdlibPath = cfg.get("stdlibPath") || "";
   const env = Object.assign({}, process.env);
   if (stdlibPath) env.FCC_STDLIB_DIR = stdlibPath;
 
+  ready = false;
+  buf = Buffer.alloc(0);
+  let child;
   try {
-    proc = cp.spawn(command, ["--lsp"], { env });
+    child = cp.spawn(command, ["--lsp"], { env });
   } catch (err) {
     vscode.window.showErrorMessage(`FC: cannot launch '${command} --lsp': ${err.message}`);
-    return;
+    return false;
   }
-  proc.on("error", (err) =>
+  proc = child;
+  // A missing binary is reported asynchronously, as an 'error' event, and the
+  // process then never answers initialize: race the two.
+  const failed = new Promise((resolve) => {
+    child.on("error", (err) => resolve(err));
+    child.on("exit", (code) => resolve(new Error(`exited with code ${code}`)));
+  });
+  child.on("exit", () => onExit(child));
+  child.stdout.on("data", handleData);
+  // Server diagnostics never reach the client over stderr, but surface crashes.
+  child.stderr.on("data", (d) => console.error("fcc --lsp:", d.toString()));
+
+  const init = request("initialize", { processId: process.pid, rootUri: null, capabilities: {} })
+    .then(() => null, (err) => err);
+  const err = await Promise.race([init, failed]);
+  if (err) {
     vscode.window.showErrorMessage(
       `FC: language server '${command}' failed to start (${err.message}). Set 'fc.serverPath'.`
-    )
-  );
-  proc.stdout.on("data", handleData);
-  // Server diagnostics never reach the client over stderr, but surface crashes.
-  proc.stderr.on("data", (d) => console.error("fcc --lsp:", d.toString()));
+    );
+    if (proc === child) proc = null;
+    return false;
+  }
+  notify("initialized", {});
+  ready = true;
+  versions.clear();
+  vscode.workspace.textDocuments.forEach(didOpen);
+  return true;
+}
 
+// The server process ended: fail its outstanding requests and, unless the
+// extension is shutting down, start a new one.
+function onExit(child) {
+  if (proc !== child) return;
+  proc = null;
+  ready = false;
+  for (const p of pending.values()) p.reject(new Error("FC language server exited"));
+  pending.clear();
+  if (stopping) return;
+  const now = Date.now();
+  while (restarts.length && now - restarts[0] > 180000) restarts.shift();
+  if (restarts.length >= 3) {
+    vscode.window.showErrorMessage(
+      "FC: the language server keeps exiting; not restarting it. Reload the window to try again."
+    );
+    return;
+  }
+  restarts.push(now);
+  startServer();
+}
+
+/* ---- activation ---- */
+
+async function activate(context) {
   diagColl = vscode.languages.createDiagnosticCollection("fc");
   context.subscriptions.push(diagColl);
 
-  await request("initialize", {
-    processId: process.pid,
-    rootUri: null,
-    capabilities: {},
-  });
-  notify("initialized", {});
-  ready = true;
+  // startServer sends the already-open FC documents; then watch for changes.
+  if (!(await startServer())) return;
 
-  // Sync already-open FC documents, then watch for changes.
-  vscode.workspace.textDocuments.forEach(didOpen);
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument(didOpen),
     vscode.workspace.onDidChangeTextDocument((e) => didChange(e.document)),
@@ -181,7 +242,7 @@ async function activate(context) {
   context.subscriptions.push(
     vscode.languages.registerHoverProvider(selector, {
       async provideHover(document, position) {
-        const r = await request("textDocument/hover", docPos(document, position));
+        const r = await query("textDocument/hover", docPos(document, position), null);
         if (!r || !r.contents) return null;
         const md = new vscode.MarkdownString(
           typeof r.contents === "string" ? r.contents : r.contents.value
@@ -192,7 +253,7 @@ async function activate(context) {
 
     vscode.languages.registerDefinitionProvider(selector, {
       async provideDefinition(document, position) {
-        const r = await request("textDocument/definition", docPos(document, position));
+        const r = await query("textDocument/definition", docPos(document, position), null);
         if (!r) return null;
         const locs = Array.isArray(r) ? r : [r];
         return locs.map((l) => new vscode.Location(vscode.Uri.parse(l.uri), toRange(l.range)));
@@ -213,7 +274,7 @@ async function activate(context) {
               triggerCharacter: context.triggerCharacter,
             };
           }
-          const r = await request("textDocument/completion", params);
+          const r = await query("textDocument/completion", params, []);
           const items = Array.isArray(r) ? r : (r && r.items) || [];
           return items.map((it) => {
             const ci = new vscode.CompletionItem(
@@ -237,9 +298,9 @@ async function activate(context) {
       onDidChangeCodeLenses: codeLensEmitter.event,
       async provideCodeLenses(document) {
         if (typeDisplayMode() !== "codelens") return [];
-        const r = await request("textDocument/codeLens", {
+        const r = await query("textDocument/codeLens", {
           textDocument: { uri: document.uri.toString() },
-        });
+        }, []);
         return (r || []).map(
           (l) => new vscode.CodeLens(toRange(l.range), l.command || { title: "", command: "" })
         );
@@ -250,13 +311,13 @@ async function activate(context) {
       onDidChangeInlayHints: inlayEmitter.event,
       async provideInlayHints(document, range) {
         if (typeDisplayMode() !== "inline") return [];
-        const r = await request("textDocument/inlayHint", {
+        const r = await query("textDocument/inlayHint", {
           textDocument: { uri: document.uri.toString() },
           range: {
             start: { line: range.start.line, character: range.start.character },
             end: { line: range.end.line, character: range.end.character },
           },
-        });
+        }, []);
         return (r || []).map(
           (h) =>
             new vscode.InlayHint(
@@ -281,6 +342,7 @@ async function activate(context) {
 }
 
 function deactivate() {
+  stopping = true;
   if (proc && !proc.killed) {
     try { notify("shutdown", null); notify("exit", null); } catch (_) {}
     proc.kill();

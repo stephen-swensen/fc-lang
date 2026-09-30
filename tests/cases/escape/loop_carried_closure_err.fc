@@ -1,0 +1,14 @@
+// Loop-carried taint through a capturing lambda, whose context lives in the
+// function's frame.
+let bad = () ->
+    let mut f = () -> 0
+    let mut saved = () -> 0
+    for i in 0..2 do
+        saved = f
+        let n = i
+        f = () -> n
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad()
+    0

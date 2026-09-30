@@ -267,8 +267,8 @@ static SrcLoc tok_loc(Parser *p, const Token *t) {
 /* Error-recovery contract: on a token mismatch, report once and return the
    current token without consuming it, so an enclosing recovery loop can
    synchronize on it. The parser never aborts: every syntax error is reported
-   with diag_error and parsing continues (only the lexer's layout errors are
-   fatal). Forward progress comes from the leaf-bump rule (parse_prefix /
+   with diag_error and parsing continues (a lex error, reported before parsing,
+   is the fatal kind). Forward progress comes from the leaf-bump rule (parse_prefix /
    parse_pattern_atom) plus the recover_progress() watchdog in every item loop.
    Callers may read the returned token's text but must not assume it was
    consumed. */
@@ -279,6 +279,25 @@ static Token *expect(Parser *p, TokenKind kind) {
         return current(p);
     }
     return advance_p(p);
+}
+
+/* A keyword token: word-shaped but not an identifier. */
+static bool is_keyword_token(const Token *t) {
+    return t->kind != TOK_IDENT && t->length > 0 &&
+           (isalpha((unsigned char)t->start[0]) || t->start[0] == '_');
+}
+
+/* A name being declared (a binding, parameter, field, variant or type). A
+ * keyword in its place is reported once, as a keyword, and read on as if it
+ * were the name, so the rest of the declaration parses instead of cascading. */
+static Token *expect_name(Parser *p) {
+    Token *t = current(p);
+    if (is_keyword_token(t)) {
+        diag_error(loc_from_token(t), "'%.*s' is a keyword and cannot be used as a name",
+                   t->length, t->start);
+        return advance_p(p);
+    }
+    return expect(p, TOK_IDENT);
 }
 
 static void skip_newlines(Parser *p) {
@@ -315,6 +334,26 @@ static void recover_to(Parser *p, const TokenKind *set, int n) {
     }
 }
 
+/* End one line of a declaration body (a field, a variant, a member).
+   Leftover tokens are reported once (unless the line already reported an
+   error) and skipped, nested blocks included, so a malformed line costs one
+   diagnostic rather than one per token. `line_errs` is diag_error_count() at
+   the start of the line. */
+static void end_body_line(Parser *p, int line_errs) {
+    if (check(p, TOK_NEWLINE) || check(p, TOK_DEDENT) || at_end_p(p)) return;
+    if (diag_error_count() == line_errs)
+        diag_error(loc_from_token(current(p)), "expected end of line, got %s",
+                   token_kind_name(current(p)->kind));
+    int depth = 0;
+    while (!at_end_p(p)) {
+        TokenKind k = current(p)->kind;
+        if (depth == 0 && (k == TOK_NEWLINE || k == TOK_DEDENT)) return;
+        if (k == TOK_INDENT) depth++;
+        else if (k == TOK_DEDENT) depth--;
+        advance_p(p);
+    }
+}
+
 /* No-progress watchdog for every recovery loop: if an iteration consumed nothing
    (a sub-parser stalled on a token it couldn't use), force one token of progress
    so the loop can never spin. Stops short at a DEDENT/EOF, which the loop condition
@@ -323,30 +362,30 @@ static void recover_progress(Parser *p, int guard_pos) {
     if (p->pos == guard_pos && !at_end_p(p) && !check(p, TOK_DEDENT)) advance_p(p);
 }
 
-/* Synchronizing set for the top-level and module-body recovery loops: anchor on
-   declaration-starting keywords (hierarchical sync, as in the Dragon Book) so a
-   dropped terminator resyncs at the next declaration rather than swallowing it.
-   Block bodies resync on layout (NEWLINE/DEDENT) through leaf-bump and the
+static bool is_decl_start(TokenKind k);
+
+/* Panic-mode skip for the top-level and module-body recovery loops: anchor on
+   a declaration-starting keyword (hierarchical sync, as in the Dragon Book) so
+   a dropped terminator resyncs at the next declaration rather than swallowing
+   it. Block bodies resync on layout (NEWLINE/DEDENT) through leaf-bump and the
    watchdog instead, since a statement keyword is not a reliable in-block
-   anchor. */
-static const TokenKind DECL_START[] = {
-    TOK_LET, TOK_STRUCT, TOK_UNION, TOK_ENUM, TOK_ERROR_KW, TOK_MODULE,
-    TOK_IMPORT, TOK_EXTERN, TOK_NAMESPACE, TOK_PRIVATE,
-};
+   anchor. Like recover_to, never crosses DEDENT/EOF. */
+static void recover_to_decl(Parser *p) {
+    while (!at_end_p(p) && !check(p, TOK_DEDENT) && !is_decl_start(current(p)->kind))
+        advance_p(p);
+}
 
 static const char *tok_intern(Parser *p, Token *t) {
     return intern(p->intern, t->start, t->length);
 }
 
-/* Accept an identifier or a reserved keyword token as a C name in extern declarations.
- * This allows 'extern free as c_free: ...' where 'free' is normally a keyword. */
+/* The C name in an extern declaration: an identifier, or any keyword, since a
+ * C library may use a name FC reserves ('extern free as c_free: ...'; the
+ * caller then requires the alias). */
 static Token *expect_extern_c_name(Parser *p) {
     TokenKind k = current(p)->kind;
-    if (k == TOK_IDENT || k == TOK_ALLOC || k == TOK_FREE || k == TOK_SIZEOF ||
-        k == TOK_ALIGNOF || k == TOK_DEFAULT || k == TOK_ASSERT ||
-        k == TOK_OK || k == TOK_ERR || k == TOK_ERROR_KW || k == TOK_ERROR_NAME) {
+    if (k == TOK_IDENT || is_keyword_token(current(p)))
         return advance_p(p);
-    }
     diag_error(loc_from_token(current(p)),
         "expected identifier in extern declaration, got %s", token_kind_name(k));
     return current(p); /* no consume: the recovery loop syncs on this token */
@@ -464,9 +503,11 @@ static Expr *block_or_single(Parser *p, Expr **stmts, int count, SrcLoc loc) {
 
 static Type *parse_type(Parser *p);
 static Type *parse_type_arg(Parser *p);
+static Type **parse_type_arg_list(Parser *p, int *count);
 static bool parse_static_assert_line(Parser *p, Expr **out_cond, const char **out_msg, SrcLoc *out_loc);
 static Expr *parse_const_arith(Parser *p, int min_prec);
 static Expr *parse_const_arith_inner(Parser *p, int min_prec);
+static Expr *parse_prefix(Parser *p);
 
 /* Check if a token kind is valid inside a type argument list <...> */
 static bool is_type_arg_token(TokenKind k) {
@@ -482,6 +523,7 @@ static bool is_type_arg_token(TokenKind k) {
     case TOK_ARROW:
     case TOK_CONST:
     case TOK_INT_LIT: case TOK_MINUS:   /* const generic argument: wide<256>, wide<-1> */
+    case TOK_SIZEOF: case TOK_ALIGNOF:  /* rejected in pass2 with the reason */
     case TOK_PLUS: case TOK_SLASH: case TOK_PERCENT:  /* bare const arithmetic: wide<'n * 2> */
         return true;
     default:
@@ -667,7 +709,8 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
         if (p->allow_fixed_array && check(p, TOK_LBRACKET) &&
             (peek_at(p, 1)->kind == TOK_TYPE_VAR || peek_at(p, 1)->kind == TOK_LPAREN ||
              peek_at(p, 1)->kind == TOK_MINUS || peek_at(p, 1)->kind == TOK_INT_LIT ||
-             peek_at(p, 1)->kind == TOK_IDENT)) {
+             peek_at(p, 1)->kind == TOK_IDENT || peek_at(p, 1)->kind == TOK_SIZEOF ||
+             peek_at(p, 1)->kind == TOK_ALIGNOF)) {
             advance_p(p); /* consume [ */
             Expr *size_expr = parse_const_arith(p, 1);
             expect(p, TOK_RBRACKET);
@@ -793,39 +836,23 @@ static Type *parse_type(Parser *p) {
         udt->stub.qualified_name = NULL;
         udt->stub.type_args = NULL;
         udt->stub.type_arg_count = 0;
-        /* Check for type arguments: name<Type, ...> */
+        /* name<Type, ...>: type arguments, unless the list does not close with
+         * '>' (then the '<' was not one: backtrack). Diagnostics from the
+         * attempt wait for that verdict. */
         if (check(p, TOK_LT)) {
-            /* Scan forward to verify this is a type arg list (not comparison) */
             int save = p->pos;
+            int held = diag_speculate_begin();
             advance_p(p); /* consume < */
-            Type **targs = NULL;
-            int ta_count = 0, ta_cap = 0;
-            bool valid = true;
-            do {
-                Token *tt = current(p);
-                if (tt->kind == TOK_IDENT || tt->kind == TOK_TYPE_VAR ||
-                    tt->kind == TOK_LPAREN || tt->kind == TOK_VOID ||
-                    tt->kind == TOK_ERROR_KW ||
-                    tt->kind == TOK_CONST || tt->kind == TOK_LBRACE ||
-                    tt->kind == TOK_INT_LIT || tt->kind == TOK_MINUS) {
-                    Type *ty = parse_type_arg(p);
-                    DA_APPEND(targs, ta_count, ta_cap, ty);
-                } else {
-                    valid = false;
-                    break;
-                }
-                if (!check(p, TOK_COMMA)) break;
-                advance_p(p);
-            } while (1);
-            if (valid && at_typearg_gt(p)) {
+            int ta_count = 0;
+            Type **targs = parse_type_arg_list(p, &ta_count);
+            if (at_typearg_gt(p)) {
+                diag_speculate_end(held, true);
                 consume_typearg_gt(p); /* consume > (splitting a >> for a nested list) */
-                udt->stub.type_args = arena_dup(p->arena, targs, ta_count, sizeof(Type*));
+                udt->stub.type_args = targs;
                 udt->stub.type_arg_count = ta_count;
-                free(targs);
             } else {
-                /* Not type args: backtrack */
+                diag_speculate_end(held, false);
                 restore_pos(p, save);
-                free(targs);
             }
         }
         return parse_type_suffix(p, udt);
@@ -986,11 +1013,7 @@ static uint64_t parse_int_value(const char *start, int length, bool *out_of_rang
     /* Sized from the token, whose characters the digits never outnumber. A
      * clipped digit string is not detectably wrong: strtoull on the prefix
      * succeeds without ERANGE and yields a different number. */
-    char *buf = malloc((size_t)length + 1);
-    if (!buf) {
-        fprintf(stderr, "fcc: out of memory\n");
-        exit(1);
-    }
+    char *buf = xmalloc((size_t)length + 1);
     int num_len = 0;
     if (out_of_range) *out_of_range = false;
 
@@ -1119,9 +1142,15 @@ static Expr *parse_const_atom(Parser *p) {
         expect(p, TOK_RPAREN);
         return e;
     }
+    case TOK_SIZEOF:
+    case TOK_ALIGNOF:
+        /* Parsed whole so pass2 can reject it with the reason (the C compiler
+         * decides a type's size), instead of the argument list falling apart
+         * into a comparison. */
+        return parse_prefix(p);
     default:
-        diag_error(loc, "expected a const generic expression, got %s",
-                   token_kind_name(t->kind));
+        diag_error(loc, "expected a constant (an integer, a const parameter or a "
+                   "named constant), got %s", token_kind_name(t->kind));
         if (!is_hard_stop(t->kind)) advance_p(p);
         return alloc_expr_error(p, loc);
     }
@@ -1216,6 +1245,8 @@ static Type *parse_type_arg(Parser *p) {
     switch (t->kind) {
     case TOK_INT_LIT:
     case TOK_MINUS:
+    case TOK_SIZEOF:
+    case TOK_ALIGNOF:
         is_const_expr = true;
         break;
     case TOK_TYPE_VAR:
@@ -1374,7 +1405,7 @@ static Expr *parse_func_literal(Parser *p) {
     if (!check(p, TOK_RPAREN)) {
         do {
             SrcLoc ploc = tok_loc(p, current(p));
-            const char *name = tok_intern(p, expect(p, TOK_IDENT));
+            const char *name = tok_intern(p, expect_name(p));
             expect(p, TOK_COLON);
             Type *type = parse_type(p);
             Param param = { .name = name, .type = type, .loc = ploc };
@@ -1462,7 +1493,7 @@ static Expr *parse_let_binding(Parser *p, bool require_in) {
         letnode->let_destruct.is_mut = is_mut;
         letnode->let_destruct.init = init;
     } else {
-        Token *name_tok = expect(p, TOK_IDENT);
+        Token *name_tok = expect_name(p);
         const char *name = tok_intern(p, name_tok);
         SrcLoc name_loc = tok_loc(p, name_tok);
         expect(p, TOK_EQ);
@@ -1784,7 +1815,13 @@ static Expr *parse_alloc(Parser *p, SrcLoc loc) {
     }
 
     if (is_type || try_type) {
+        /* A tentative type parse holds its diagnostics until a type form
+         * (`)`, `[` or `,`) confirms it. */
+        int held = try_type ? diag_speculate_begin() : 0;
         Type *ty = parse_type(p);
+        if (try_type)
+            diag_speculate_end(held, check(p, TOK_RPAREN) || check(p, TOK_LBRACKET) ||
+                                     check(p, TOK_COMMA));
         if (check(p, TOK_RPAREN)) {
             /* alloc(T): bare type alloc */
             advance_p(p);
@@ -1894,8 +1931,10 @@ static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
     if (peek_at(p, 1)->kind == TOK_RPAREN && peek_at(p, 2)->kind == TOK_ARROW) {
         return parse_func_literal(p);
     }
-    /* (ident : ...) -> ... : function with params */
-    if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 2)->kind == TOK_COLON) {
+    /* (ident : ...) -> ... : function with params. A keyword before the ':'
+     * is a misnamed parameter, reported by the parameter parse. */
+    if ((peek_at(p, 1)->kind == TOK_IDENT || is_keyword_token(peek_at(p, 1))) &&
+        peek_at(p, 2)->kind == TOK_COLON) {
         return parse_func_literal(p);
     }
     /* (Type)expr: cast. Tried when the next token is a built-in type name, a
@@ -1944,8 +1983,10 @@ static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
          * `const` never starts an expression, so `((const` can only be a
          * type; every other `((` stays an expression and is not probed. */
         (peek_at(p, 1)->kind == TOK_LPAREN && peek_at(p, 2)->kind == TOK_CONST)) {
-        /* Try to parse as cast with backtracking */
+        /* Try to parse as cast with backtracking. Diagnostics from the type
+         * parse are held until the cast is confirmed. */
         int save = p->pos;
+        int held = diag_speculate_begin();
         advance_p(p); /* ( */
         Type *target = parse_type(p);
         /* (cstr[N]): bounded str-to-cstr cast. cstr is u8*, and with
@@ -1975,6 +2016,7 @@ static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
              * parenthesized unwrap, as in `f((x!))` or `(x!) == y`. `(x!) e`
              * is a cast to type `x!`, meaningless when `x` isn't a type, like
              * `(a*) b`. */
+            diag_speculate_end(held, true);
             advance_p(p);
             Expr *operand = parse_expr(p, PREC_PREFIX);
             Expr *e = alloc_expr(p, EXPR_CAST, loc);
@@ -1984,6 +2026,7 @@ static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
             return e;
         }
         /* Not a cast: backtrack */
+        diag_speculate_end(held, false);
         restore_pos(p, save);
     }
     } /* end try_cast block */
@@ -2093,11 +2136,7 @@ static Expr *parse_float_lit(Parser *p, Token *t, SrcLoc loc) {
      * float is silently wrong rather than an error, since cutting
      * `0.00...01e300` before its exponent yields 0.0 with neither ERANGE nor
      * an out-of-range flag. */
-    char *buf = malloc((size_t)num_end + 1);
-    if (!buf) {
-        fprintf(stderr, "fcc: out of memory\n");
-        exit(1);
-    }
+    char *buf = xmalloc((size_t)num_end + 1);
     int num_len = 0;
     bool mantissa_nonzero = false;
     bool past_mantissa = false;
@@ -3420,7 +3459,7 @@ static Decl *parse_let_decl(Parser *p) {
         is_mut = true;
     }
 
-    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    const char *name = tok_intern(p, expect_name(p));
     expect(p, TOK_EQ);
 
     Expr *init;
@@ -3499,17 +3538,19 @@ static void parse_struct_body(Parser *p, Decl *d, bool allow_static_assert) {
         skip_newlines(p);
         if (check(p, TOK_DEDENT)) break;
         int guard = p->pos;
+        int line_errs = diag_error_count();
         Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
         if (allow_static_assert && parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
             StaticAssert sa = { sa_cond, sa_msg, sa_loc, d->struc.name, false };
             DA_APPEND(sasserts, sassert_count, sassert_cap, sa);
         } else {
-            Token *ftok = expect(p, TOK_IDENT);
+            Token *ftok = expect_name(p);
             StructField f = { .name = tok_intern(p, ftok), .loc = tok_loc(p, ftok) };
             expect(p, TOK_COLON);
             f.type = parse_type_allowing_fixed_array(p);
             DA_APPEND(fields, field_count, field_cap, f);
         }
+        end_body_line(p, line_errs);
         recover_progress(p, guard);  /* a fully malformed line consumes nothing */
         skip_newlines(p);
     }
@@ -3526,7 +3567,7 @@ static Decl *parse_struct_decl(Parser *p) {
     int errs0 = diag_error_count();
     SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_STRUCT);
-    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    const char *name = tok_intern(p, expect_name(p));
     expect(p, TOK_EQ);
 
     if (!decl_body_present(p, "struct", name, "field", loc, errs0))
@@ -3545,7 +3586,7 @@ static Decl *parse_union_decl(Parser *p) {
     int errs0 = diag_error_count();
     SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_UNION);
-    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    const char *name = tok_intern(p, expect_name(p));
     expect(p, TOK_EQ);
 
     /* Expect INDENT then | variant(type) lines */
@@ -3563,6 +3604,7 @@ static Decl *parse_union_decl(Parser *p) {
         if (check(p, TOK_DEDENT)) break;
 
         int guard = p->pos;
+        int line_errs = diag_error_count();
         {
             Expr *sa_cond; const char *sa_msg; SrcLoc sa_loc;
             if (parse_static_assert_line(p, &sa_cond, &sa_msg, &sa_loc)) {
@@ -3574,7 +3616,7 @@ static Decl *parse_union_decl(Parser *p) {
             }
         }
         expect(p, TOK_PIPE);
-        Token *vtok = expect(p, TOK_IDENT);
+        Token *vtok = expect_name(p);
         const char *vname = tok_intern(p, vtok);
         SrcLoc vloc = tok_loc(p, vtok);
         Type *payload = NULL;
@@ -3586,6 +3628,7 @@ static Decl *parse_union_decl(Parser *p) {
 
         UnionVariant v = { .name = vname, .payload = payload, .loc = vloc };
         DA_APPEND(variants, variant_count, variant_cap, v);
+        end_body_line(p, line_errs);
         recover_progress(p, guard);  /* a fully malformed variant line consumes nothing */
         skip_newlines(p);
     }
@@ -3617,7 +3660,7 @@ static Decl *parse_enum_decl(Parser *p) {
     int errs0 = diag_error_count();
     SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_ENUM);
-    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    const char *name = tok_intern(p, expect_name(p));
 
     if (check(p, TOK_LT)) {
         diag_error(loc_from_token(current(p)), "enum types take no type parameters");
@@ -3653,8 +3696,9 @@ static Decl *parse_enum_decl(Parser *p) {
         if (check(p, TOK_DEDENT)) break;
 
         int guard = p->pos;
+        int line_errs = diag_error_count();
         expect(p, TOK_PIPE);
-        Token *vtok = expect(p, TOK_IDENT);
+        Token *vtok = expect_name(p);
         const char *vname = tok_intern(p, vtok);
         SrcLoc vloc = tok_loc(p, vtok);
         if (check(p, TOK_LPAREN)) {
@@ -3690,6 +3734,7 @@ static Decl *parse_enum_decl(Parser *p) {
             }
         }
         DA_APPEND(variants, variant_count, variant_cap, v);
+        end_body_line(p, line_errs);
         recover_progress(p, guard);  /* a fully malformed variant line consumes nothing */
         skip_newlines(p);
     }
@@ -3721,7 +3766,7 @@ static Decl *parse_error_decl(Parser *p) {
     int errs0 = diag_error_count();
     SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_ERROR_KW);
-    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    const char *name = tok_intern(p, expect_name(p));
     expect(p, TOK_EQ);
 
     /* Expect INDENT then | member lines (union-style layout, no payloads) */
@@ -3737,8 +3782,9 @@ static Decl *parse_error_decl(Parser *p) {
         if (check(p, TOK_DEDENT)) break;
 
         int guard = p->pos;
+        int line_errs = diag_error_count();
         expect(p, TOK_PIPE);
-        Token *mtok = expect(p, TOK_IDENT);
+        Token *mtok = expect_name(p);
         const char *mname = tok_intern(p, mtok);
         SrcLoc mloc = tok_loc(p, mtok);
         if (check(p, TOK_LPAREN)) {
@@ -3756,6 +3802,7 @@ static Decl *parse_error_decl(Parser *p) {
         m->let.name = mname;
         m->let.init = init;
         DA_APPEND(members, count, cap, m);
+        end_body_line(p, line_errs);
         recover_progress(p, guard);  /* a fully malformed member line consumes nothing */
         skip_newlines(p);
     }
@@ -3775,7 +3822,7 @@ static Decl *parse_error_decl(Parser *p) {
 static Decl *parse_module_decl(Parser *p) {
     SrcLoc loc = tok_loc(p, current(p));
     expect(p, TOK_MODULE);
-    const char *name = tok_intern(p, expect(p, TOK_IDENT));
+    const char *name = tok_intern(p, expect_name(p));
 
     /* Optional from "lib" clause. On a mismatch `expect` returns the
      * offending token unconsumed, so strip quotes only from a real string
@@ -3815,9 +3862,9 @@ static Decl *parse_module_decl(Parser *p) {
         if (check(p, TOK_DEDENT)) break;
         int guard = p->pos;
         if (parse_decl(p, &members)->kind == DECL_ERROR) {
-            /* Sync to the next module-member declaration; recover_to stops at the
+            /* Sync to the next module-member declaration; recover_to_decl stops at the
                module's DEDENT, so recovery cannot escape this module body. */
-            recover_to(p, DECL_START, (int)(sizeof DECL_START / sizeof *DECL_START));
+            recover_to_decl(p);
         }
         recover_progress(p, guard);
         skip_newlines(p);
@@ -4260,6 +4307,27 @@ static Decl *parse_extern_decl(Parser *p) {
 /* Parse one declaration and append what it declares to `out`; a comma-list
  * import appends several. Returns the first appended, or a DECL_ERROR node
  * (not appended) after a syntax error. */
+/* The declaration keywords and their parsers. `import`, which may append
+ * several declarations, and the `private` modifier are handled around this
+ * table; together they are the declaration-starting set the recovery loops
+ * anchor on (is_decl_start). */
+static const struct {
+    TokenKind keyword;
+    Decl *(*parse)(Parser *p);
+} DECL_PARSERS[] = {
+    { TOK_LET, parse_let_decl },       { TOK_STRUCT, parse_struct_decl },
+    { TOK_UNION, parse_union_decl },   { TOK_ENUM, parse_enum_decl },
+    { TOK_ERROR_KW, parse_error_decl }, { TOK_MODULE, parse_module_decl },
+    { TOK_NAMESPACE, parse_namespace_decl }, { TOK_EXTERN, parse_extern_decl },
+};
+
+static bool is_decl_start(TokenKind k) {
+    if (k == TOK_PRIVATE || k == TOK_IMPORT) return true;
+    for (size_t i = 0; i < sizeof DECL_PARSERS / sizeof DECL_PARSERS[0]; i++)
+        if (DECL_PARSERS[i].keyword == k) return true;
+    return false;
+}
+
 static Decl *parse_decl(Parser *p, DeclList *out) {
     skip_newlines(p);
 
@@ -4271,23 +4339,17 @@ static Decl *parse_decl(Parser *p, DeclList *out) {
         for (int i = first; i < out->count; i++) out->items[i]->is_private = true;
         return d;
     }
-
-    if (check(p, TOK_LET)) return add_parsed(out, parse_let_decl(p));
-    if (check(p, TOK_STRUCT)) return add_parsed(out, parse_struct_decl(p));
-    if (check(p, TOK_UNION)) return add_parsed(out, parse_union_decl(p));
-    if (check(p, TOK_ENUM)) return add_parsed(out, parse_enum_decl(p));
-    if (check(p, TOK_ERROR_KW)) return add_parsed(out, parse_error_decl(p));
-    if (check(p, TOK_MODULE)) return add_parsed(out, parse_module_decl(p));
     if (check(p, TOK_IMPORT)) return parse_import_decl(p, out);
-    if (check(p, TOK_NAMESPACE)) return add_parsed(out, parse_namespace_decl(p));
-    if (check(p, TOK_EXTERN)) return add_parsed(out, parse_extern_decl(p));
+    for (size_t i = 0; i < sizeof DECL_PARSERS / sizeof DECL_PARSERS[0]; i++)
+        if (check(p, DECL_PARSERS[i].keyword))
+            return add_parsed(out, DECL_PARSERS[i].parse(p));
 
     SrcLoc loc = loc_from_token(current(p));
     diag_error(loc, "expected declaration, got %s",
         token_kind_name(current(p)->kind));
     /* No leaf-bump here: the parse_program / parse_module_decl loop recovers to
-       the next DECL_START anchor (and runs the watchdog), which keeps any stray
-       block intact. */
+       the next declaration keyword (recover_to_decl, and runs the watchdog),
+       which keeps any stray block intact. */
     return alloc_decl_error(p, loc);
 }
 
@@ -4302,7 +4364,7 @@ static Program *parse_program(Parser *p) {
             /* Sync to the next top-level declaration so one malformed line doesn't
                swallow the rest of the file. The error node is not appended (later
                passes have nothing to do with it; the diagnostic was already emitted). */
-            recover_to(p, DECL_START, (int)(sizeof DECL_START / sizeof *DECL_START));
+            recover_to_decl(p);
         } else {
             if (d->kind == DECL_NAMESPACE && seen_non_ns) {
                 diag_error(d->loc, "namespace declaration must be the first line of the file");
@@ -4335,4 +4397,22 @@ Program *parse_file(Token *tokens, int count, const char *filename,
         .generic_name_count = generic_name_count,
     };
     return parse_program(&p);
+}
+
+Program *parse_files(Token **tokens, const int *counts, const char **filenames, int n,
+                       Arena *arena, InternTable *intern) {
+    const char **generic_names = NULL;
+    int gn_count = 0, gn_cap = 0;
+    for (int i = 0; i < n; i++)
+        parser_collect_generic_names(tokens[i], counts[i], intern,
+                                     &generic_names, &gn_count, &gn_cap);
+    Program **programs = arena_alloc(arena, sizeof(Program *) * (size_t)(n > 0 ? n : 1));
+    for (int i = 0; i < n; i++)
+        programs[i] = parse_file(tokens[i], counts[i], filenames[i], generic_names, gn_count,
+                                 arena, intern);
+    Program *prog = program_merge(arena, programs, n);
+    prog->generic_names = arena_dup(arena, generic_names, gn_count, sizeof *generic_names);
+    prog->generic_name_count = gn_count;
+    free(generic_names);
+    return prog;
 }

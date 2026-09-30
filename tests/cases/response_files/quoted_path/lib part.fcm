@@ -1,0 +1,3 @@
+// Pulled in through a quoted response-file path that contains a space.
+module helper =
+    let two = () -> 2

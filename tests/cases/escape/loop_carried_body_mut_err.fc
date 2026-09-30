@@ -1,0 +1,15 @@
+// Loop-carried taint through a mut binding local to the loop body.
+let bad = () ->
+    let mut p = default(i32*)
+    let mut saved = default(i32*)
+    for i in 0..2 do
+        saved = p
+        let mut x = 5
+        let mut q = default(i32*)
+        q = &x
+        p = q
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad()
+    0

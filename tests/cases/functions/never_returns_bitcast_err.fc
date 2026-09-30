@@ -1,0 +1,6 @@
+// A self-call with no base case as a bitcast operand is reported as such.
+// Regression: the diagnostic named the internal <unresolved> placeholder.
+let h = (x: u32) ->
+    bitcast(f32, h(x))
+
+let main = (args: str[]) -> 0

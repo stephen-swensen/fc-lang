@@ -20,20 +20,20 @@ static void collect_sink(SrcLoc loc, const char *msg, void *ud) {
 /* ---- lexing ---- */
 
 /* Lex one source. The lexer's in-progress arrays are exposed through r so that
- * a layout error, which longjmps out of the lexer, leaves them for analyze() to
+ * a lex error, which longjmps out of the lexer, leaves them for analyze() to
  * free rather than leaking them (see lexer.h). */
 static Token *lex_source(AnalysisResult *r, const char *text, const char *filename,
                          const Flag *flags, int flag_count, int *out_count) {
     diag_set_filename(filename);
-    r->lex_raw = NULL;
-    r->lex_layout = NULL;
+    r->lex_input = NULL;
+    r->lex_output = NULL;
     Lexer lexer = {0};
     lexer_init(&lexer, text, &r->intern, flags, flag_count);
-    lexer.abort_slot_raw = &r->lex_raw;
-    lexer.abort_slot_layout = &r->lex_layout;
+    lexer.abort_slot_input = &r->lex_input;
+    lexer.abort_slot_output = &r->lex_output;
     Token *tokens = lexer_tokenize(&lexer, out_count);
-    r->lex_raw = NULL;
-    r->lex_layout = NULL;
+    r->lex_input = NULL;
+    r->lex_output = NULL;
     return tokens;
 }
 
@@ -164,7 +164,7 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
                         LexCache *cache) {
     int saved_len_repr = g_len_repr;
     g_len_repr = len_repr;
-    AnalysisResult *r = calloc(1, sizeof *r);
+    AnalysisResult *r = xcalloc(1, sizeof *r);
     arena_init(&r->arena);
     intern_init(&r->intern, &r->arena);
     symtab_init(&r->symtab);
@@ -185,7 +185,6 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
     diag_set_abort_jmp(&env);
     if (setjmp(env) == 0) {
         int nsrc = 1 + extra_count;
-        Program **programs = arena_alloc(&r->arena, sizeof(Program *) * (size_t)nsrc);
         Token **toks = arena_alloc(&r->arena, sizeof(Token *) * (size_t)nsrc);
         int *tcs = arena_alloc(&r->arena, sizeof(int) * (size_t)nsrc);
         const char **fns = arena_alloc(&r->arena, sizeof(const char *) * (size_t)nsrc);
@@ -208,17 +207,7 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
                 : lex_one(r, extra[i].text, fn, flags, flag_count, &tcs[1 + i]);
         }
 
-        const char **generic_names = NULL;
-        int gn_count = 0, gn_cap = 0;
-        for (int i = 0; i < nsrc; i++)
-            parser_collect_generic_names(toks[i], tcs[i], &r->intern,
-                                         &generic_names, &gn_count, &gn_cap);
-
-        for (int i = 0; i < nsrc; i++)
-            programs[i] = parse_file(toks[i], tcs[i], fns[i], generic_names, gn_count,
-                                     &r->arena, &r->intern);
-        free(generic_names);
-        r->program = program_merge(&r->arena, programs, nsrc);
+        r->program = parse_files(toks, tcs, fns, nsrc, &r->arena, &r->intern);
 
         /* After the merge, diagnostics with no per-node filename default to the
          * primary document (stdlib is presumed clean and is filtered out). */
@@ -232,8 +221,8 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
            queries (hover, definition, lenses) keep working on the well-formed
            parts of the file rather than going blank because of one bad line or a
            duplicate name in a merged sibling. pass2 poisons what it cannot type
-           with TYPE_ERROR and types parse-error nodes silently. A lexer layout
-           error still aborts the whole analysis (the else branch). */
+           with TYPE_ERROR and types parse-error nodes silently. A lex error
+           still aborts the whole analysis (the else branch). */
         pass2_check(r->program, &r->symtab, &r->intern, &r->mono, &r->file_scopes,
                     &r->arena);
         pass2_ran = true;
@@ -241,17 +230,17 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
         r->aborted = true;
         /* Free the lexer's in-progress arrays the abort left behind. The
          * already-returned per-source arrays are tracked in token_arrays. */
-        if (r->lex_raw)    { free(r->lex_raw);    r->lex_raw = NULL; }
-        if (r->lex_layout) { free(r->lex_layout); r->lex_layout = NULL; }
+        if (r->lex_input)  { free(r->lex_input);  r->lex_input = NULL; }
+        if (r->lex_output) { free(r->lex_output); r->lex_output = NULL; }
     }
 
-    /* pass2 did not run only when the lexer hit an unrecoverable layout error
-     * (tab, unterminated string/comment, inconsistent indentation). Every node's
-     * type is then NULL, so the open document's hover, definition and CodeLens go
-     * empty, and if the abort was in a merged sibling nothing on the open
-     * document says why. Add one file-level diagnostic on the open document
-     * naming the offending file. (Project-wide publishing shows the sibling's own
-     * error on the sibling.) */
+    /* pass2 did not run only when the lexer hit an error (a tab, an
+     * unterminated string or comment, inconsistent indentation, an #if error).
+     * Every node's type is then NULL, so the server answers hover, definition
+     * and CodeLens from the last analysis that type-checked, if any, and if the
+     * abort was in a merged sibling nothing on the open document says why. Add
+     * one file-level diagnostic on the open document naming the offending file.
+     * (Project-wide publishing shows the sibling's own error on the sibling.) */
     if (!pass2_ran) {
         bool open_has_diag = false;
         const char *other = NULL;
@@ -271,10 +260,11 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
             const char *msg = base
                 ? arena_sprintf(&r->arena,
                          "analysis incomplete: an error in an included file (%s) "
-                         "halted type checking; hover, definition, and lenses are "
-                         "unavailable for this file until it is resolved", base)
+                         "halted type checking; until it is resolved, hover, "
+                         "definition, and lenses show the last version that "
+                         "type-checked", base)
                 : "analysis incomplete: type checking did not run; hover, "
-                  "definition, and lenses are unavailable for this file";
+                  "definition, and lenses show the last version that type-checked";
             Diagnostic d;
             d.loc = (SrcLoc){ .filename = r->filename, .line = 1, .col = 1 };
             d.message = arena_strdup(&r->arena, msg, (int)strlen(msg));
@@ -299,8 +289,8 @@ void analysis_free(AnalysisResult *r) {
     if (!r) return;
     for (int i = 0; i < r->token_array_count; i++) free(r->token_arrays[i]);
     free(r->token_arrays);
-    free(r->lex_raw);
-    free(r->lex_layout);
+    free(r->lex_input);
+    free(r->lex_output);
 
     symtab_free(&r->symtab);
     file_scopes_free(&r->file_scopes);

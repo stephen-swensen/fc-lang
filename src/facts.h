@@ -65,6 +65,14 @@ const Expr *error_const_literal(const Expr *e);
 void parse_format_width_prec(const char *text, int64_t *width, int64_t *precision);
 bool interp_conv_is_unsigned(char conv, Type *t);
 int interp_literal_len(InterpSegment *seg);
-int64_t interp_numeric_bound(char conv, Type *t, const char *flags_text,
-                             int64_t explicit_width, int64_t explicit_prec);
-bool interp_const_buffer_size(Expr *e, int64_t *out_size);
+
+/* One segment's share of an interpolated string's byte budget: `bytes` when
+ * constant; when `runtime` (a %s of str or cstr with no precision), the
+ * string's length, at least `bytes` (its field width). */
+typedef struct {
+    bool runtime;
+    int64_t bytes;
+} InterpSegBudget;
+
+InterpSegBudget interp_seg_budget(InterpSegment *seg, Type *t);
+bool interp_const_buffer_size(Expr *e, Type *(*resolve)(Type *), int64_t *out_size);

@@ -1,0 +1,8 @@
+// A nested namespace is shown as written (acme::gfx), never in its joined
+// internal form. Regression: error_name and the .errcodes map read
+// "acme__gfx::errs.bad".
+namespace acme::gfx::
+
+error errs =
+    | bad
+    | worse

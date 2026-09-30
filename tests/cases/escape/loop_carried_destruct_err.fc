@@ -1,0 +1,13 @@
+// Loop-carried taint through a destructuring let inside the assigned block.
+let bad = () ->
+    let mut p = default(i32*)
+    let mut saved = default(i32*)
+    for i in 0..2 do
+        saved = p
+        let mut x = 5
+        p = (let { a, b } = { &x, 1 } in a)
+    return saved
+
+let main = (args: str[]) ->
+    let r = bad()
+    0

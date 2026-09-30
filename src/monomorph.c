@@ -268,20 +268,31 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
         return;
     case TYPE_STUB:
         if (type->stub.type_arg_count > 0 && !type_contains_type_var(type)) {
-            if (!mono_find(t, type->stub.name)) {
+            if (!type->stub.base_name && !mono_find(t, type->stub.name)) {
+                type->stub.base_name = type->stub.name;
                 type->stub.name = mangle_generic_name(intern,
                     type->stub.name, type->stub.type_args, type->stub.type_arg_count);
             }
         }
         return;
-    default: return;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        return;
     }
 }
 
 /* Substitute type vars using a binding map, returning concrete types */
 static Type **substitute_type_args(Arena *a, Type **type_args, int type_arg_count,
                                     const char **var_names, Type **concrete, int var_count) {
-    Type **result = malloc(sizeof(Type*) * (size_t)type_arg_count);
+    Type **result = xmalloc(sizeof(Type*) * (size_t)type_arg_count);
     for (int i = 0; i < type_arg_count; i++)
         result[i] = type_substitute(a, type_args[i], var_names, concrete, var_count);
     return result;
@@ -433,73 +444,6 @@ static void discover_in_expr(Expr *e, void *ctx) {
     }
 }
 
-/* Check if a type references a struct/union by value (not through pointer/option/slice).
- * Returns the mangled name if found, NULL otherwise. */
-static const char *find_by_value_dep(Type *type) {
-    if (!type) return NULL;
-    switch (type->kind) {
-    case TYPE_STRUCT:
-        /* A struct embedded by value is a direct dependency */
-        return type->struc.name;
-    case TYPE_UNION:
-        /* A union embedded by value is a direct dependency */
-        return type->unio.name;
-    case TYPE_STUB:
-        /* An unresolved stub by value is a direct dependency */
-        return type->stub.name;
-    case TYPE_FIXED_ARRAY:
-        /* Fixed arrays of structs are by-value */
-        return find_by_value_dep(type->fixed_array.elem);
-    case TYPE_RESULT:
-        /* A result always embeds its payload by value ({ err; value } struct).
-         * Options return NULL below: whether they embed depends on the
-         * representation (T*? is a bare pointer), which this file can't see;
-         * codegen's find_by_value_dep_name orders struct options instead.
-         * Results have no such split, so they always recurse. */
-        return find_by_value_dep(type->result.inner);
-    default:
-        /* Pointers, slices, options, functions: not by-value dependencies */
-        return NULL;
-    }
-}
-
-/* Topological sort state for DFS */
-enum { TOPO_UNVISITED = 0, TOPO_VISITING = 1, TOPO_DONE = 2 };
-
-static void topo_visit(MonoTable *t, int idx, int *state, int *order, int *order_count) {
-    if (state[idx] != TOPO_UNVISITED) return;
-    state[idx] = TOPO_VISITING;
-    MonoInstance *inst = &t->entries[idx];
-    if (inst->concrete_type && (inst->decl_kind == DECL_STRUCT || inst->decl_kind == DECL_UNION)) {
-        Type *ct = inst->concrete_type;
-        /* Collect by-value dependencies from struct fields and union variant payloads */
-        const char **deps = NULL;
-        int dep_count = 0, dep_cap = 0;
-        if (ct->kind == TYPE_STRUCT) {
-            for (int f = 0; f < ct->struc.field_count; f++) {
-                const char *d = find_by_value_dep(ct->struc.fields[f].type);
-                if (d) DA_APPEND(deps, dep_count, dep_cap, d);
-            }
-        } else if (ct->kind == TYPE_UNION) {
-            for (int v = 0; v < ct->unio.variant_count; v++) {
-                const char *d = find_by_value_dep(ct->unio.variants[v].payload);
-                if (d) DA_APPEND(deps, dep_count, dep_cap, d);
-            }
-        }
-        for (int d = 0; d < dep_count; d++) {
-            for (int j = 0; j < t->count; j++) {
-                if (j != idx && t->entries[j].mangled_name == deps[d]) {
-                    topo_visit(t, j, state, order, order_count);
-                    break;
-                }
-            }
-        }
-        free(deps);
-    }
-    state[idx] = TOPO_DONE;
-    order[(*order_count)++] = idx;
-}
-
 /* Recursively walk a type tree and register any concrete generic struct/union
  * references that don't have a MonoInstance yet. This handles structs referenced
  * only as field types (never directly constructed via struct literals). */
@@ -612,7 +556,17 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
             }
         }
         return;
-    default: return;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        return;
     }
 }
 
@@ -658,7 +612,17 @@ static void check_dangling_instance(MonoTable *t, Type *ty, Decl *site, bool *re
          * it is the same dangling-reference condition. */
         if (ty->stub.type_arg_count > 0 && !mono_find(t, ty->stub.name)) goto dangling;
         return;
-    default: return;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        return;
     }
 dangling:
     *reported = true;
@@ -719,8 +683,8 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
 
     /* Completeness backstop: reject any concrete type that references an
      * unregistered generic instance (a truncated infinite family; see
-     * check_dangling_instance). Done before the topo sort so an incomplete table
-     * is never handed to codegen. */
+     * check_dangling_instance), so an incomplete table is never handed to
+     * codegen. */
     bool dangling_reported = false;
     for (int i = 0; i < t->count && !dangling_reported; i++) {
         MonoInstance *inst = &t->entries[i];
@@ -736,34 +700,6 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
     }
     if (dangling_reported) return;  /* main gates codegen on the error count */
 
-    /* Topologically sort struct/union entries so by-value dependencies come first.
-     * Function entries are left in their original order at the end. */
-    /* count only grows from 0 via DA_APPEND; the assert tells GCC LTO that the
-     * (size_t) casts below cannot produce a huge value. */
-    assert(t->count >= 0);
-    int *state = calloc((size_t)t->count, sizeof(int));
-    int *order = malloc(sizeof(int) * (size_t)t->count);
-    int order_count = 0;
-
-    /* Visit struct/union entries first (DFS-based topological sort) */
-    for (int i = 0; i < t->count; i++) {
-        if (t->entries[i].decl_kind == DECL_STRUCT || t->entries[i].decl_kind == DECL_UNION)
-            topo_visit(t, i, state, order, &order_count);
-    }
-    /* Append remaining entries (functions) in original order */
-    for (int i = 0; i < t->count; i++) {
-        if (state[i] == TOPO_UNVISITED)
-            order[order_count++] = i;
-    }
-
-    /* Reorder entries according to topological order */
-    MonoInstance *sorted = malloc(sizeof(MonoInstance) * (size_t)t->count);
-    for (int i = 0; i < t->count; i++)
-        sorted[i] = t->entries[order[i]];
-    memcpy(t->entries, sorted, sizeof(MonoInstance) * (size_t)t->count);
-    free(sorted);
-    free(state);
-    free(order);
 }
 
 /* Backstop for const-generic evaluation failures stashed by this phase's

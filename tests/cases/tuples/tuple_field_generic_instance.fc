@@ -1,0 +1,31 @@
+// A tuple that holds a generic instance by value is emitted after the
+// instance, wherever the tuple appears: a struct field, inside an option, a
+// nested tuple, or a union payload. Regression: the tuple's element named the
+// instance in a form the ordering did not recognize, so the tuple struct was
+// emitted first and the C failed with "field has incomplete type".
+struct inner =
+    v: 'a
+
+struct outer =
+    t: {inner<i32>, i32}
+    o: {inner<i16>?, i32}
+    n: {{inner<u8>, i32}, i32}
+
+union holder =
+    | pair({inner<i64>, i32})
+    | empty
+
+let main = (args: str[]) ->
+    let x = outer {
+        t = { inner { v = 1 }, 2 },
+        o = { some(inner { v = 3i16 }), 4 },
+        n = { { inner { v = 5u8 }, 6 }, 7 },
+    }
+    assert(x.t[0].v == 1)
+    let n = x.n[0]
+    assert(n[0].v == 5u8)
+    let h = holder.pair({ inner { v = 8i64 }, 9 })
+    match h with
+    | pair(p) -> assert(p[0].v == 8i64)
+    | empty -> assert(false)
+    0

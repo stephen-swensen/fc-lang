@@ -112,11 +112,10 @@ int main(int argc, char **argv) {
     intern_init(&intern_table, &arena);
 
     /* Lex, parse each input file and collect Programs */
-    Program **programs = malloc(sizeof(Program*) * (size_t)input_count);
-    char **sources = malloc(sizeof(char*) * (size_t)input_count);
-    Token **all_tokens = malloc(sizeof(Token*) * (size_t)input_count);
+    char **sources = xmalloc(sizeof(char*) * (size_t)input_count);
+    Token **all_tokens = xmalloc(sizeof(Token*) * (size_t)input_count);
 
-    int *token_counts = malloc(sizeof(int) * (size_t)input_count);
+    int *token_counts = xmalloc(sizeof(int) * (size_t)input_count);
 
     /* Lex every file first: the expression-position `<` scans need the
      * whole-program set of generic declaration names (any file may call a
@@ -132,17 +131,9 @@ int main(int argc, char **argv) {
         all_tokens[i] = lexer_tokenize(&lexer, &token_counts[i]);
     }
 
-    const char **generic_names = NULL;
-    int gn_count = 0, gn_cap = 0;
-    for (int i = 0; i < input_count; i++)
-        parser_collect_generic_names(all_tokens[i], token_counts[i], &intern_table,
-                                     &generic_names, &gn_count, &gn_cap);
-
-    for (int i = 0; i < input_count; i++)
-        programs[i] = parse_file(all_tokens[i], token_counts[i], input_paths[i],
-                                 generic_names, gn_count, &arena, &intern_table);
+    Program *prog = parse_files(all_tokens, token_counts, input_paths, input_count,
+                                  &arena, &intern_table);
     free(token_counts);
-    free(generic_names);
 
     /* Every syntax error has been reported; the error nodes standing in for
      * them must not reach the later passes. */
@@ -150,8 +141,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());
         return 1;
     }
-
-    Program *prog = program_merge(&arena, programs, input_count);
 
     /* Set filename for diagnostics during later passes */
     if (input_count == 1) {
@@ -249,7 +238,6 @@ int main(int argc, char **argv) {
         free(all_tokens[i]);
         free(sources[i]);
     }
-    free(programs);
     free(sources);
     free(all_tokens);
     args_compile_free(&ca);      /* frees inputs + flags array + output */

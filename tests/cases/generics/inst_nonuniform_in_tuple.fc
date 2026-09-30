@@ -1,0 +1,11 @@
+// A non-uniform self-reference inside a tuple element is rejected at the
+// definition, like one anywhere else in a field's type. Regression: the check
+// skipped tuple elements, and the error came from the instantiation cap
+// instead, with no source location.
+struct node =
+    v: 'a
+    next: {node<node<'a>>, i32}*
+
+let main = (args: str[]) ->
+    let n = default(node<i32>)
+    0

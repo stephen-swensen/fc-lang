@@ -1,0 +1,6 @@
+// A self-call with no base case, consumed as a tuple element, is reported.
+// Regression: the tuple was accepted and the non-terminating function compiled.
+let h = (x: u32) ->
+    { h(x), 1 }
+
+let main = (args: str[]) -> 0

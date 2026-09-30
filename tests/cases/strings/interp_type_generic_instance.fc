@@ -1,0 +1,19 @@
+// %T inside a generic function names the type the instance binds, as the same
+// code written with the concrete type does, and the buffer is sized for that
+// name. Regression: it printed the type variable ('a).
+struct box =
+    v: 'a
+
+let tn = (x: 'a) -> "%T{x}" == "u64"
+let name_len = (x: 'a) ->
+    let s = "[%T{x}]"
+    s.len
+let boxed = (x: 'a) -> "%T{box { v = x }}" == "box<i16>"
+
+let main = (args: str[]) ->
+    assert(tn(1u64))
+    assert(name_len(1i8) == 4)
+    assert(name_len(1u64) == 5)
+    assert(name_len("s") == 11)   // "[const str]", as concrete code names it
+    assert(boxed(3i16))
+    0
