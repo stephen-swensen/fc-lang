@@ -221,6 +221,46 @@ unreachable-code detection, would make this *more* silent, not less; not pursued
 
 ---
 
+## Diagnostics: known cascades and gaps
+
+Pre-existing, found while working on other things (2026-09-30). Each is one mistake that
+gets more than one error, or an error that reads worse than it should. None miscompiles.
+
+- **A failed `?` check cascades into callers.** In
+  `let g = (n: i32) -> let m = next(n)? in m`, `?` needs `g` to return a result, and that
+  error is right, but `g`'s return type stays `i32`, so a caller's
+  `match g(3) with | ok(v) -> v | err(c) -> 0` adds four more: "ok pattern on non-result
+  type i32", "undefined name 'v'", "err pattern on non-result type i32" and "non-exhaustive
+  match". Two gaps: `check_propagations` (`pass2.c`) reports without poisoning the return
+  type, and an `ok`/`err` pattern rejected for its subject's type does not bind its inner
+  names as poison, the way a pattern on an error-typed subject does.
+- **A self-recursive `return f(...)` inside a loop leaks `<unresolved>`.** With the base
+  case after the loop, the return is checked before `50` anchors the return type:
+
+  ```fc
+  let f = (n: i32) ->
+      loop
+          let x = if n == 0 then break else n
+          return f(x - 1)    // "return type mismatch: expected i32, got <unresolved>"
+      50
+  ```
+
+  The spec's recursive-functions rule (§Early return) says a base case in any position
+  anchors the type, so this should either type-check or get a message that names the
+  recursion; the placeholder's spelling must never reach a diagnostic.
+- **A file-level cycle reports three errors.** `let a = b + 1` / `let b = a + 1` at file
+  level gives "circular dependency: 'b' depends on itself" plus "file-level initializer
+  for 'a'/'b' must not contain ... variable references". A file-level initializer may not
+  reference another binding at all (§Statements vs. expressions), so the reference errors
+  alone describe the mistake; the cycle check should not run on them, or should suppress
+  them.
+- **`(pt!) p` gets a generic syntax error.** Since parentheses holding a name under `!` or
+  `?` are always an expression (§Casting), `(pt!) p`, meant as a cast to a result type,
+  reports "expected a newline or ';' between statements, got identifier" at `p`. A message
+  that says no cast targets a result or option type would name the actual mistake.
+
+---
+
 ## Direct hardware access — `volatile`, inline asm, packed layouts
 
 FC's model of the machine is otherwise explicit (exact-width ints, defined two's-complement
@@ -265,6 +305,14 @@ this section is the open-item backlog. None of these block release.
   regardless of source order, so a `let` declared textually *after* the cursor is still
   offered. A line filter on the harvest closes it. Low value (a name you're about to type
   showing up a few lines early is mild).
+- **Harvested names hide an import's completion kind.** The same harvest also collects
+  every name the function body *references*, and `complete_scope` adds those as
+  Variables before the imports are offered; the name set keeps the first entry, so an
+  imported function the body already calls completes as a Variable rather than a
+  Function. Offering harvested names only for true locals (or adding them after imports)
+  fixes it. The module-body case already reports the right kind
+  (`tests/lsp/lsp_test.py`, "a module-body import completes as the kind of what it
+  imports").
 - **Variant-constructor go-to-definition granularity** — lands on the union declaration,
   not the specific variant. Deliberate today, but `UnionVariant.loc` is recorded (hover
   already reads it for the variant's doc comment via `variant_decl_loc`), so refining it
