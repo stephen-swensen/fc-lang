@@ -1,0 +1,7 @@
+// A float literal that does not fit its type is reported once and poisons its
+// expression.
+let main = (args: str[]) ->
+    let y = 1e400
+    let z = y + 1
+    static_assert(1e500 > 0.0, "big float")
+    0

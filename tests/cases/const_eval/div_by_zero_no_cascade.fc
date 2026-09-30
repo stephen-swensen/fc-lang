@@ -1,0 +1,13 @@
+// A constant that divides by zero is reported once, wherever a literal is
+// required: a static_assert condition, a const generic argument, a fixed-array
+// size, a slice-literal length. The slot's own "must be a compile-time
+// constant" message is not added on top.
+struct holder =
+    bytes: u8[1 / 0]
+
+let pick = <'n>() -> 0
+
+let main = (args: str[]) ->
+    static_assert(1 / 0 == 0, "divides by zero")
+    let v = i32[1 % 0] { }
+    pick<2 / 0>()

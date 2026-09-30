@@ -1,0 +1,9 @@
+// An integer literal that does not fit its type is reported once and poisons
+// its expression, so nothing folds, judges or type-checks its truncated value:
+// not a module constant built from it, and not an operator that uses it.
+let big = 4000000000
+
+let main = (args: str[]) ->
+    static_assert(big > 0, "big constant")
+    let x = 5000000000 + true
+    0

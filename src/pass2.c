@@ -1785,6 +1785,20 @@ typedef enum {
     CONST_SLOT_ARG,    /* a const generic argument: `wide<'n * 2>` */
 } ConstSlot;
 
+/* Fold `e` for a slot that needs a literal: the folded integer literal (or
+ * bool literal, when `allow_bool`), or NULL. `*reported` says whether folding
+ * already reported why it failed (a division by zero, a mutable binding), in
+ * which case the caller adds no generic "must be a constant" message. */
+static Expr *fold_to_literal(CheckCtx *ctx, Expr *e, bool allow_bool, bool *reported) {
+    int errs_before = diag_error_count();
+    Expr *folded = const_fold_expr(ctx, e);
+    *reported = diag_error_count() != errs_before;
+    if (*reported || !folded) return NULL;
+    if (folded->kind == EXPR_INT_LIT || (allow_bool && folded->kind == EXPR_BOOL_LIT))
+        return folded;
+    return NULL;
+}
+
 /* A const expression with no generic parameter left in it, folded to a literal:
  * named module consts, i32.bits, enum counts and concrete arithmetic. */
 static Expr *fold_const_leaf(CheckCtx *ctx, Expr *e, ConstSlot slot) {
@@ -1795,11 +1809,12 @@ static Expr *fold_const_leaf(CheckCtx *ctx, Expr *e, ConstSlot slot) {
                    slot == CONST_SLOT_ARG ? "generic argument" : "fixed array size");
         return NULL;
     }
+    bool reported;
     if (slot == CONST_SLOT_ARG) {
-        Expr *folded = const_fold_expr(ctx, e);
-        if (folded && (folded->kind == EXPR_INT_LIT || folded->kind == EXPR_BOOL_LIT))
-            return folded;
-        diag_error(e->loc, "const generic argument must be a compile-time constant");
+        Expr *folded = fold_to_literal(ctx, e, true, &reported);
+        if (folded) return folded;
+        if (!reported)
+            diag_error(e->loc, "const generic argument must be a compile-time constant");
         return NULL;
     }
     Type *t = e->type ? e->type : check_expr(ctx, e);
@@ -1810,9 +1825,10 @@ static Expr *fold_const_leaf(CheckCtx *ctx, Expr *e, ConstSlot slot) {
         return NULL;
     }
     if (e->kind == EXPR_INT_LIT) return e;
-    Expr *folded = const_fold_expr(ctx, e);
-    if (folded && folded->kind == EXPR_INT_LIT) return folded;
-    diag_error(e->loc, "fixed array size must be a compile-time constant");
+    Expr *folded = fold_to_literal(ctx, e, false, &reported);
+    if (folded) return folded;
+    if (!reported)
+        diag_error(e->loc, "fixed array size must be a compile-time constant");
     return NULL;
 }
 
@@ -2581,12 +2597,13 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
  * represented as the two's-complement uint64_t (e.g. -1 is 0xFFFF...);
  * `negative` says the literal was written with a leading minus (negation
  * folding and negative patterns pass it). If the parser flagged the literal as out-of-range (strtoull saturated
- * to ULLONG_MAX), report that first since the stored value is meaningless. */
-static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc,
+ * to ULLONG_MAX), report that first since the stored value is meaningless.
+ * Returns false after reporting. */
+static bool check_int_literal_range(uint64_t value, Type *type, SrcLoc loc,
                                     bool out_of_range, bool negative) {
     if (out_of_range) {
         diag_error(loc, "integer literal exceeds 64-bit unsigned range (max 18446744073709551615)");
-        return;
+        return false;
     }
     /* A literal written with a leading minus can never fit an unsigned type.
      * `value` holds its two's-complement bit pattern, so report the original
@@ -2599,61 +2616,79 @@ static void check_int_literal_range(uint64_t value, Type *type, SrcLoc loc,
                           : "";   /* usize: the width is the target's */
         diag_error(loc, "integer literal -%" PRIu64 " out of range for %s%s",
                    (uint64_t)0 - value, type_name(type), range);
-        return;
+        return false;
     }
     switch (type->kind) {
     case TYPE_INT8:
-        if (value > 127 && value < (uint64_t)(int64_t)-128)
+        if (value > 127 && value < (uint64_t)(int64_t)-128) {
             diag_error(loc, "integer literal %" PRId64 " out of range for i8 (-128..127)", (int64_t)value);
-        return;
+            return false;
+        }
+        return true;
     case TYPE_INT16:
-        if (value > 32767 && value < (uint64_t)(int64_t)-32768)
+        if (value > 32767 && value < (uint64_t)(int64_t)-32768) {
             diag_error(loc, "integer literal %" PRId64 " out of range for i16 (-32768..32767)", (int64_t)value);
-        return;
+            return false;
+        }
+        return true;
     case TYPE_INT32:
-        if (value > 2147483647ULL && value < (uint64_t)(int64_t)-2147483648LL)
+        if (value > 2147483647ULL && value < (uint64_t)(int64_t)-2147483648LL) {
             diag_error(loc, "integer literal %" PRId64 " out of range for i32 (-2147483648..2147483647)", (int64_t)value);
-        return;
+            return false;
+        }
+        return true;
     case TYPE_INT64:
-        if (value > 9223372036854775807ULL && value < (uint64_t)INT64_MIN)
+        if (value > 9223372036854775807ULL && value < (uint64_t)INT64_MIN) {
             diag_error(loc, "integer literal out of range for i64");
-        return;
+            return false;
+        }
+        return true;
     case TYPE_UINT8:
-        if (value > 255)
+        if (value > 255) {
             diag_error(loc, "integer literal %" PRIu64 " out of range for u8 (0..255)", value);
-        return;
+            return false;
+        }
+        return true;
     case TYPE_UINT16:
-        if (value > 65535)
+        if (value > 65535) {
             diag_error(loc, "integer literal %" PRIu64 " out of range for u16 (0..65535)", value);
-        return;
+            return false;
+        }
+        return true;
     case TYPE_UINT32:
-        if (value > 4294967295ULL)
+        if (value > 4294967295ULL) {
             diag_error(loc, "integer literal %" PRIu64 " out of range for u32 (0..4294967295)", value);
-        return;
+            return false;
+        }
+        return true;
     case TYPE_UINT64:
-        return; /* always fits in uint64_t storage */
-    default: return;
+        return true; /* always fits in uint64_t storage */
+    default:
+        return true;
     }
 }
 
 /* Check a float literal for overflow/underflow detected by the parser.
  * Overflow means +/-inf in the target type; underflow means 0 from a nonzero
  * source.
- * Subnormals are accepted (C accepts them silently, so do we). */
-static void check_float_literal_range(Type *type, bool out_of_range, bool underflow, SrcLoc loc) {
+ * Subnormals are accepted (C accepts them silently, so do we). Returns false
+ * after reporting. */
+static bool check_float_literal_range(Type *type, bool out_of_range, bool underflow, SrcLoc loc) {
     if (out_of_range) {
         if (type->kind == TYPE_FLOAT32)
             diag_error(loc, "float literal out of range for f32 (max ~3.4e38)");
         else
             diag_error(loc, "float literal out of range for f64 (max ~1.8e308)");
-        return;
+        return false;
     }
     if (underflow) {
         if (type->kind == TYPE_FLOAT32)
             diag_error(loc, "float literal underflows to zero in f32");
         else
             diag_error(loc, "float literal underflows to zero in f64");
+        return false;
     }
+    return true;
 }
 
 /* Wrap an expression in an implicit widening cast.
@@ -6714,9 +6749,10 @@ static Type *check_array_lit(CheckCtx *ctx, Expr *e) {
      * arithmetic over them) is folded first. */
     bool size_deferred = false;
     if (e->array_lit.size_expr->kind != EXPR_INT_LIT) {
-        Expr *folded = const_fold_expr(ctx, e->array_lit.size_expr);
-        if (folded && folded->kind == EXPR_INT_LIT)
-            e->array_lit.size_expr = folded;
+        bool reported;
+        Expr *folded = fold_to_literal(ctx, e->array_lit.size_expr, false, &reported);
+        if (reported) return poison(e);
+        if (folded) e->array_lit.size_expr = folded;
     }
     if (e->array_lit.size_expr->kind != EXPR_INT_LIT) {
         /* A size over const generic params can't fold at template time:
@@ -7379,14 +7415,18 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     case EXPR_INT_LIT:
         e->type = e->int_lit.lit_type;
         /* check_unary_prefix folds `-lit` and rejects a negated unsigned
-         * literal itself, so negative=false here. */
-        check_int_literal_range(e->int_lit.value, e->type, e->loc, e->int_lit.out_of_range, false);
+         * literal itself, so negative=false here. A literal that does not
+         * fit is poison, so nothing folds or judges its truncated value. */
+        if (!check_int_literal_range(e->int_lit.value, e->type, e->loc,
+                                     e->int_lit.out_of_range, false))
+            return poison(e);
         return e->type;
 
     case EXPR_FLOAT_LIT:
         e->type = e->float_lit.lit_type;
-        check_float_literal_range(e->type, e->float_lit.out_of_range,
-                                  e->float_lit.underflow, e->loc);
+        if (!check_float_literal_range(e->type, e->float_lit.out_of_range,
+                                       e->float_lit.underflow, e->loc))
+            return poison(e);
         return e->type;
 
     case EXPR_BOOL_LIT:
@@ -8355,12 +8395,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                 }
             } else {
                 /* Fully concrete: fold and evaluate it here. */
-                Expr *folded = const_fold_expr(ctx, cond);
-                bool is_lit = folded && (folded->kind == EXPR_BOOL_LIT ||
-                                         folded->kind == EXPR_INT_LIT);
-                if (!is_lit) {
-                    diag_error(cond->loc,
-                        "static_assert condition must be a compile-time constant expression");
+                bool reported;
+                Expr *folded = fold_to_literal(ctx, cond, true, &reported);
+                if (!folded) {
+                    if (!reported)
+                        diag_error(cond->loc,
+                            "static_assert condition must be a compile-time constant expression");
                 } else {
                     bool val = folded->kind == EXPR_BOOL_LIT
                         ? folded->bool_lit.value : folded->int_lit.value != 0;

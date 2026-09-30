@@ -1,0 +1,6 @@
+// A static_assert whose condition holds an out-of-range literal reports the
+// literal only: the condition is not judged with its truncated value.
+let main = (args: str[]) ->
+    static_assert(4000000000 > 0, "big literal")
+    static_assert(-3000000000 < 0, "big negative literal")
+    0
