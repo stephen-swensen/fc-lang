@@ -1,0 +1,1 @@
+extern function 'visit' parameter 1: a function type crosses to C only as a callback parameter

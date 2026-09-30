@@ -1,0 +1,1 @@
+an optional C callback takes some(f), with f a function known at compile time, or none

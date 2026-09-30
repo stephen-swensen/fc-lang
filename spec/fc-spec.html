@@ -1083,6 +1083,8 @@ Overflow detection is **deterministic**, independent of optimization level — F
 
 The **Contents assignable** column reads `yes` for a local or file-level binding. At *module* scope it reads `no` for `let`: a module-level non-function `let` is a module constant and its contents are frozen (§Module constants are read-only). `let mut` is unchanged at every scope.
 
+A function follows the same table, with one difference in the **Addressable** column: `&f` on a function names its code, as a C function pointer, not the binding's storage, so it is valid on a `let` bound to a static function and an error on a `let mut` (§Address-of, §Static functions).
+
 All bindings must be initialized at declaration. Types are always inferred — there are no explicit type annotations on bindings.
 
 ```fc
@@ -1345,7 +1347,7 @@ The copy is one level deep, so each element is what the source hands out: a refe
 
 At the top level of a file, `let`, `let mut`, `struct`, `union`, `enum`, `module`, `import`, and `namespace` are **statements** — they are processed by the first compiler pass, have no type, and produce no value. Inside module bodies, the same applies to `let`, `let mut`, `struct`, `union`, `enum`, `module`, `import`, and `extern`.
 
-**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, static type properties (`i32.min`, `f64.nan`, `isize.bits`, …), enum variants and `E.count`, struct literals with constant fields, slice literals (backed and raw-part forms) with constant elements, `some(...)` wrapping a constant, and union variant constructors with constant payloads. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; slice literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
+**Module-level** non-function `let` bindings must be initialized with **constant expressions** — literals, arithmetic on literals, casts of constants, `sizeof`, `alignof`, `default`, static type properties (`i32.min`, `f64.nan`, `isize.bits`, …), enum variants and `E.count`, struct literals with constant fields, slice literals (backed and raw-part forms) with constant elements, `some(...)` wrapping a constant, union variant constructors with constant payloads, and **functions** — the name of a static function, or a non-capturing lambda literal (§Static functions), so a table of functions is a constant. A module-level const-expr may also **reference other module-level const-expr `let` bindings by name**; references are resolved using FC's normal lookup rules (same module, imports, and parent modules), so forward and cross-module references are both fine as long as the target is itself a const-expr let. `let mut` targets and local bindings cannot be referenced. Value cycles (`let a = b`, `let b = a`) are rejected. Function calls, `alloc`, option unwrap (`!`), and string interpolation remain disallowed. This matches C's requirement that file-scope variable initializers be constant expressions; slice literals are lifted to a `static` backing array at file scope, and referenced const-exprs are folded into the initializer at compile time.
 
 #### Module constants are read-only
 
@@ -1389,7 +1391,7 @@ Neither the freeze nor the placement changes constant evaluation: a module const
 
 **Compile-time evaluation.** Fixed-width integer and `bool` constant subexpressions are *evaluated* by the compiler and replaced with a single literal. This covers integer `+ - * / % << >> & | ^` and unary `- ~`, comparisons, the logical operators (`&& || !`), and `int`→`int` casts. Evaluation follows FC's runtime semantics exactly — 2's-complement wraparound and shift-amount masking — so the folded literal equals what the same expression would compute at runtime. Because the work happens in the compiler, integer **division and modulo are allowed** in const-exprs (they fold to a literal rather than emitting a runtime by-zero check), and **division or modulo by zero in a constant expression is a compile-time error** rather than a runtime abort. `isize`/`usize` and floating-point subexpressions are deliberately *not* evaluated by the compiler: their widths/rounding are target-defined, so the values are left for the C compiler to fold (this keeps constants correct under cross-compilation). One consequence is that `isize`/`usize` division and modulo remain disallowed in a module-member initializer — they need a runtime context — while their `+`, `-`, `*`, shift, and bitwise forms are fine. Static type properties follow the same split: a fixed-width integer `.min`, `.max`, or `.bits` is folded to its literal value (so it can take part in const division/modulo and comparisons, e.g. `i32.min / 2`), while float properties and the target-defined `isize`/`usize` `.min`/`.max`/`.bits` are emitted as their C macro and left to the C compiler.
 
-**File-level** non-function `let` bindings — those at the top level of the entry-point file, the only place a top-level `let` may appear (see §Top-level declarations and the entry-point file) — accept all module-level constant-expression *forms* plus runtime forms: `alloc`, option unwrap (`!`), and other expressions that would require runtime evaluation. The one thing they are stricter about is references: a file-level initializer may not reference other bindings (unlike module level, where const-expr members may reference each other), and function calls are not allowed. These initializations are hoisted into the program's startup code before `main` runs, so the entry-point file acts as an extended main function.
+**File-level** non-function `let` bindings — those at the top level of the entry-point file, the only place a top-level `let` may appear (see §Top-level declarations and the entry-point file) — accept all module-level constant-expression *forms* plus runtime forms: `alloc`, option unwrap (`!`), and other expressions that would require runtime evaluation. The one thing they are stricter about is references: a file-level initializer may not reference other bindings (unlike module level, where const-expr members may reference each other) other than by naming a static function, which is a constant (§Static functions), and function calls are not allowed. These initializations are hoisted into the program's startup code before `main` runs, so the entry-point file acts as an extended main function.
 
 ```fc
 // constant expressions — allowed at both file and module level
@@ -2738,6 +2740,39 @@ Semantics of the promoted closure:
 >
 > **Tail-call optimization** — FC does not perform tail-call optimization itself, but the generated C does not close the door on it. A tail-recursive function — whether a top-level function or a self-recursive local lambda (see §Blocks) — compiles to C whose recursive call sits in tail position, and a standard C compiler (e.g. gcc or clang at `-O2`) will turn it into a loop with no stack growth. This is notable for local lambdas specifically: a self-recursive call is emitted in the uniform fat-pointer call form `closure.fn_ptr(arg, closure.ctx)`, an *indirect* call through a function pointer. Because the function value is a compile-time-constant local, the optimizer devirtualizes the call and applies the same tail-call optimization it would to a direct one — so the fat-pointer representation imposes no penalty here. As with the elision above, this is the C compiler's optimization rather than an FC guarantee; FC's contribution is to keep the recursive call in tail position so the optimization remains available.
 
+### Static functions
+
+To FC code every function value behaves the same: it can be bound, passed, returned, stored, compared and called. What differs is whether the source fixes which code it is. A function is **static** when it is:
+
+- a declared function — a `let` bound to a lambda literal, at any scope;
+- an extern function, unless it is variadic;
+- a non-capturing lambda literal;
+- an immutable `let` bound to a static function (`let g = inc`, and `let h = g` in turn).
+
+Every other function value is known only at run time: a `let mut`, a parameter, a struct field or slice element, a call's result, a capturing closure.
+
+The distinction matters in exactly two places.
+
+**A static function's name is a constant.** A module constant or a file-level `let` may alias one, a table may list them, and a function variable may start out as one:
+
+```fc
+module c from "stdlib.h" =
+    extern abs: (i32) -> i32
+
+module ops =
+    let double = (x: i32) -> x * 2
+    let table = ((i32) -> i32)[3] { double, c.abs, (x: i32) -> x * 10 }
+    let mut hook = double      // a variable; reassign it with ops.hook = ...
+```
+
+**Only a static function crosses to C.** A C function pointer has no channel for a context, so C can hold only code the compiler can name. A static function crosses in three ways: as an argument to an extern's callback parameter, declared `(A) -> R`; as `some(f)` to an optional one, declared `((A) -> R)?`, where `none` passes `NULL`; and through `&f` (§Address-of), which gives the pointer as an `any*` for an untyped C slot such as a `void*` field. An FC function crosses through its trampoline, which drops the context argument (§C Interop); an extern crosses as its own C symbol.
+
+Nothing turns a C function pointer back into an FC function value — C cannot supply a context, and on some targets a code pointer does not fit a data pointer — so a function type may appear in an extern declaration only as a callback parameter, whose own parameters and result are C types. A C function returning a function pointer, a C struct field holding one, and a callback that takes a callback are declared `any*`, and filled with `&f`.
+
+**Extern functions are values.** `let f = c.abs` binds one, `apply(c.abs, x)` passes one, and `f == c.abs` holds. The compiler reaches the extern through a wrapper that takes the context argument an FC function's code takes, and that calls the extern exactly as a direct call would, with the same boundary conversions and error protocol. A variadic extern has no single function type, so it is only called.
+
+> The same lines hold in the languages FC draws on. C initializes static tables of function pointers and takes `&func` of a function by name. Rust allows `static` arrays of `fn` items and passes `extern "C" fn` items as callbacks, and only a non-capturing closure coerces to a function pointer. Zig passes only a compile-time-known function with the C calling convention. In F#, a function, including a P/Invoke one, is a value like any other.
+
 # PART 4 — Type System
 
 ## Structs
@@ -3451,15 +3486,15 @@ This is a rule about the *binding*, not the value: the contents of a `let` value
 
 `const T*` here means no writes *through this pointer* — not that the value never changes (§The const qualifier). An immutable **global or module-level** `let` is addressable the same way, yielding a `const T*` with static provenance (so it may be returned). Taking an address **through a const path** is likewise a read-only address, not an error: `&(cp.field)` where `cp` is a `const T*` yields a `const F*`.
 
-**Taking the address of a function** — `&f` yields a plain C function pointer to a function's code, typed `any*`. It is valid exactly where the function is **known at compile time**: a **top-level or module function**, a **non-capturing lambda literal** (`&((a: i32) -> a * 2)`), or a local **`let` bound to a non-capturing lambda literal** (`let f = (a: i32) -> a * 2` then `&f`). The pointer names that code, not a binding's storage, so a `let`'s read-only address rule plays no part, and it has static lifetime: it may be returned or stored anywhere. Any other function value is an error — a `let mut` binding (it may be reassigned, even to a capturing closure), a parameter, a struct field, a call's result — because its function is known only at run time, and C has no way to call a value it cannot name. A capturing closure is rejected for the same reason: a C function pointer has no channel for its context. The pointer is the function's C calling-convention wrapper (see §C Interop), since an FC function takes a hidden context argument that a C caller does not pass; taking `&f` twice yields the same pointer.
+**Taking the address of a function** — `&f` yields a plain C function pointer to a **static** function's code (§Static functions), typed `any*`: a declared function, an extern, a non-capturing lambda literal (`&((a: i32) -> a * 2)`), or a `let` bound to one. As in C, `&` of a function names its code, not a binding's storage, so a `let`'s read-only address rule plays no part, and the pointer has static lifetime: it may be returned or stored anywhere. Any other function value is an error — a `let mut` binding (it may be reassigned, even to a capturing closure), a parameter, a struct field, a call's result — because its function is known only at run time, and C has no way to call a value it cannot name. A capturing closure is rejected for the same reason: a C function pointer has no channel for its context. For an FC function the pointer is its trampoline, which drops the hidden context argument a C caller does not pass (§C Interop); for an extern it is the C symbol itself. Taking `&f` twice, or of an alias of `f`, yields the same pointer.
 
 In practice, `&f` is rarely needed. When a function type appears in an `extern` parameter declaration, the compiler handles the C function pointer mapping automatically — the programmer passes a non-capturing lambda directly without `&`. See §C Interop.
 
 The main remaining use case for `&f` is a C struct that contains a function pointer field, accessed by FC via a raw pointer, where no `extern` function mediates the assignment:
 
 ```fc
-// storing a function pointer into a C struct field directly
-let mut handler = (x: i32) -> process(x)
+// storing a function pointer into a C struct field declared `callback: any*`
+let handler = (x: i32) -> process(x)
 some_c_struct.callback = &handler
 ```
 
@@ -3467,7 +3502,7 @@ Taking the address of a capturing lambda is always a compile error:
 
 ```fc
 let threshold = 10
-let mut above = (x: i32) -> x > threshold   // captures threshold
+let above = (x: i32) -> x > threshold       // captures threshold
 let p = &above    // compile error — capturing lambda
 ```
 
@@ -5788,33 +5823,33 @@ module er from "errno.h" =
 
 One spelling is excluded outright: an extern C name may not **begin with `fc__`**, the reserved root every FC declaration's emitted name lives under (a file-scope `counter` is emitted as `fc__counter`, module member `m.counter` as `fc__m__counter`). No header can legitimately export such a symbol, so an extern there could only alias a compiler-emitted one — referring to the FC declaration directly is always the intent — and it is rejected at the declaration, alias or not. Only the exact double-underscore root is reserved: C names that merely contain `fc__` elsewhere, or use a single-underscore `fc_` prefix (a plausible real library prefix), remain legal.
 
-In practice, `extern free as c_free` is essentially never needed. FC's built-in `free` operator emits C's `free()` in the generated output and works on any heap pointer regardless of whether it was allocated via FC's `alloc` or `libc.malloc` — at the C level it is the same allocator. If a C API requires `free` as a function pointer value, a wrapper lambda suffices:
+In practice, `extern free as c_free` is essentially never needed. FC's built-in `free` operator emits C's `free()` in the generated output and works on any heap pointer regardless of whether it was allocated via FC's `alloc` or `libc.malloc` — at the C level it is the same allocator. If a C API requires `free` as a function pointer value, a declared function suffices (or an `extern free as c_free`, which is itself a static function):
 
 ```fc
-let mut free_fn = (ptr: any*) -> free(ptr)   // (any*) -> void — addressable, passable
+let free_fn = (ptr: any*) -> free(ptr)   // (any*) -> void — static: addressable, passable to C
 ```
 
 The `extern as` form is shown here for completeness and is more relevant when a C library has a function named `alloc`, `sizeof`, or `default`.
 
-### Extern functions are called, not passed
+### Extern functions are values
 
-An extern function is a bare C symbol, not an FC value. It may appear **only in call position** — `c.abs(x)`. Binding it (`let f = c.abs`), passing it as an argument, returning it, or taking its address (`&c.abs`) is a compile error:
+An extern function is a function like any other: it is called (`c.abs(x)`), and it is also a value, which can be bound, passed, returned, stored and compared. It is a static function (§Static functions), so C can be handed it too, as its own symbol:
 
 ```fc
 module c from "stdlib.h" =
     extern abs: (i32) -> i32
 
-let f = c.abs          // error: extern function 'abs' cannot be used as a value
-let p = &c.abs         // error: same — an extern is not a fat pointer to reach into
+let apply = (f: (i32) -> i32, x: i32) -> f(x)
+
+let f = c.abs          // (i32) -> i32
+let y = apply(c.abs, 0 - 3)   // 3
+let p = &c.abs         // the C function pointer `abs`
 ```
 
-The reason is the calling convention. Every FC function *value* is a fat pointer whose C signature carries a trailing `void*` context param (the closure channel, see §Closures). A plain extern C function's ABI has no such param, so there is nothing to wrap it into — and `&f`'s escape hatch (§Address-of) extracts the `fn_ptr` field of a fat pointer, which an extern does not have. The fix is to route the extern through an FC lambda, which *is* a real function value:
+> **Transpilation**
+> Every FC function value's code takes a trailing `void*` context argument (the closure channel, §Closures), which a C function's does not. So an extern used as an FC value is reached through a static wrapper, `fc_cwrap_<C name>`, emitted once per extern, that takes the context argument and calls the extern exactly as a direct call would — with the same `cstr` casts and, for an extern with an error protocol, the same mapping of its raw result into `T!`. A direct call, `&c.abs`, and an extern passed to C use the symbol itself and need no wrapper.
 
-```fc
-let f = (x: i32) -> c.abs(x)   // (i32) -> i32 — binds, passes, and is addressable
-```
-
-This is the same wrapper-lambda pattern used above for `free` as a function-pointer value.
+A **variadic** extern (`printf`) has no single function type, so it is only called; wrap a call in a lambda to pass one around.
 
 ### Null return values from C
 
@@ -6058,11 +6093,14 @@ let main = (args: str[]) ->
 
 **What can be passed to extern function parameters:**
 
-A trampoline wraps one particular function, so the compiler must know at compile time which function it is. It accepts exactly the functions `&f` accepts (§Address-of):
+A trampoline wraps one particular function, so the compiler must know at compile time which function it is: the argument must be a **static function** (§Static functions), exactly what `&f` accepts (§Address-of):
 
 1. **A top-level or module function** — `int_compare` in the example above.
 2. **A non-capturing lambda literal** — written directly at the call site.
-3. **A local `let` bound to a non-capturing lambda literal** — `by_last_digit` above. The binding is immutable, so it always names that literal; a nested lambda that passes it on does not capture it.
+3. **A `let` bound to a static function** — `by_last_digit` above. The binding is immutable, so it always names that function; a nested lambda that passes it on does not capture it.
+4. **An extern function** — passed as its own C symbol, with no trampoline: `libc.qsort(p, n, size, c.compare_ints)`.
+
+A callback C may receive as `NULL` is declared `((A) -> R)?`: `some(f)` passes the static function `f`, and `none(...)` passes `NULL`.
 
 Anything else is a compile error. In particular:
 
@@ -6070,6 +6108,8 @@ Anything else is a compile error. In particular:
 - **Function values known only at run time** are rejected, even if the value they hold is non-capturing: a `let mut` binding (which may be reassigned), a parameter, a struct field, the result of a call or an `if`. The type `(A, B) -> C` does not say which function a value is, or whether it captures.
 
 The workaround is straightforward: name the function with a `let`, inline the lambda at the call site, or hoist it to a top-level `let`.
+
+A function type crosses the boundary only in these parameter positions. C function pointers in other places — a C function's result, a C struct's field, a callback's own parameters — are declared `any*`, and a C struct field is filled with `&f` (§Static functions).
 
 C APIs that need stateful callbacks typically provide a `void*` context parameter for this purpose — define a context struct, pass it as `any*`, and cast back inside a non-capturing callback.
 

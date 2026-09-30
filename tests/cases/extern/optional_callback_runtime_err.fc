@@ -1,0 +1,11 @@
+// An optional C callback takes `some` of a static function, or `none`: an
+// option held in a variable carries a function known only at run time.
+module c from "stdlib.h" =
+    extern atexit: (((() -> void))?) -> i32
+
+let bye = () -> void()
+
+let main = (args: str[]) ->
+    let o = some(bye)
+    ignore c.atexit(o)
+    0

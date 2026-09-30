@@ -1,0 +1,12 @@
+// An extern with an error protocol is a value of its declared type, T!: its
+// wrapper maps the raw C result exactly as a direct call does.
+module c from "fcntl.h" =
+    extern open: (const cstr, i32) -> i32! from errno(-1)
+
+let try_open = (f: (const cstr, i32) -> i32!, path: const cstr) -> f(path, 0)
+
+let main = (args: str[]) ->
+    match try_open(c.open, c"fc-definitely-nonexistent-file") with
+    | ok(_) -> assert(false, "expected open to fail")
+    | err(e) -> assert(e == 2, "expected ENOENT (2), got %d{e}")
+    0

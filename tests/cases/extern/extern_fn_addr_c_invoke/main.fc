@@ -1,0 +1,26 @@
+// An extern is a static function, so C can be handed it as itself: `&c.f`
+// is the C symbol, and so is an extern passed to a C callback parameter,
+// directly or through a `let` alias. Regression: `&c.negate` was rejected,
+// and so was passing an extern to an extern's callback parameter.
+module c from "cb.h" =
+    extern cb_invoke: (any*, i32) -> i32
+    extern negate: (i32) -> i32
+    extern cmp_i32: (const any*, const any*) -> i32
+
+module libc from "stdlib.h" =
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> i32) -> void
+
+let neg_alias = c.negate
+
+let main = (args: str[]) ->
+    assert(c.cb_invoke(&c.negate, 4) == -4)
+    assert(c.cb_invoke(&neg_alias, 5) == -5)
+    assert(&c.negate == &neg_alias)
+    let mut nums = i32[3] { 3, 1, 2 }
+    libc.qsort(nums.ptr, 3usize, (usize) sizeof(i32), c.cmp_i32)
+    assert(nums[0] == 1 && nums[2] == 3)
+    let by = c.cmp_i32
+    let mut more = i32[2] { 9, 8 }
+    libc.qsort(more.ptr, 2usize, (usize) sizeof(i32), by)
+    assert(more[0] == 8)
+    0

@@ -960,6 +960,71 @@ static const char *make_qualified(InternTable *intern, const char *prefix, const
  * need an integer or void payload, null needs a pointer), `status` carries no
  * payload (the return value is the code), and neg_errno/hresult read the code
  * out of a signed return. */
+/* Whether a function type appears anywhere in `t`. A named type is declared
+ * elsewhere and judged there. */
+static bool type_has_func(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+    case TYPE_FUNC:        return true;
+    case TYPE_POINTER:     return type_has_func(t->pointer.pointee);
+    case TYPE_SLICE:       return type_has_func(t->slice.elem);
+    case TYPE_OPTION:      return type_has_func(t->option.inner);
+    case TYPE_RESULT:      return type_has_func(t->result.inner);
+    case TYPE_FIXED_ARRAY: return type_has_func(t->fixed_array.elem);
+    default:               return false;
+    }
+}
+
+/* Whether a callback type's own parameters and result are free of function
+ * types, so a trampoline can present it to C. */
+static bool callback_is_plain(const Type *ft) {
+    for (int i = 0; i < ft->func.param_count; i++)
+        if (type_has_func(ft->func.param_types[i])) return false;
+    return !type_has_func(ft->func.return_type);
+}
+
+/* C sees a function only as a plain function pointer, which FC supplies from a
+ * static function and only as a callback parameter: `(A) -> R`, or
+ * `((A) -> R)?` for one that may be NULL, whose own parameters and result
+ * hold no function type. Report a function type anywhere else in the
+ * extern function or constant `d`. Nothing converts a C function pointer
+ * into an FC function value, so a C result or field holding one is `any*`. */
+static void validate_extern_fn_types(Decl *d, const char *src_name) {
+    Type *t = d->ext.type;
+    if (!t) return;
+    if (t->kind != TYPE_FUNC) {
+        if (type_has_func(t))
+            diag_error(d->loc, "extern constant '%s' cannot have a function type; "
+                       "declare it as any*", src_name);
+        return;
+    }
+    for (int i = 0; i < t->func.param_count; i++) {
+        Type *pt = t->func.param_types[i];
+        Type *cb = pt->kind == TYPE_OPTION ? pt->option.inner : pt;
+        bool ok = cb && cb->kind == TYPE_FUNC ? callback_is_plain(cb) : !type_has_func(pt);
+        if (!ok)
+            diag_error(d->loc, "extern function '%s' parameter %d: a function type "
+                       "crosses to C only as a callback parameter, (A) -> R or "
+                       "((A) -> R)?, with no function type inside it", src_name, i + 1);
+    }
+    if (type_has_func(t->func.return_type))
+        diag_error(d->loc, "extern function '%s' cannot return a function type: C "
+                   "returns a plain function pointer, which is not an FC function "
+                   "value; declare the result as any*", src_name);
+}
+
+/* Report a function-typed field of the extern struct or union `d`: C holds a
+ * plain function pointer there, which FC stores as any* (filled with &f). */
+static void validate_extern_struct_fields(Decl *d) {
+    for (int i = 0; i < d->struc.field_count; i++)
+        if (type_has_func(d->struc.fields[i].type))
+            diag_error(d->struc.fields[i].loc, "extern %s field '%s' cannot have a "
+                       "function type: C holds a plain function pointer there; "
+                       "declare it as any* and store &f",
+                       d->struc.is_c_union ? "union" : "struct",
+                       d->struc.fields[i].name);
+}
+
 static void validate_extern_protocol(Decl *d, const char *src_name) {
     ExternProtocol proto = d->ext.protocol;
     if (proto == EXT_PROTO_ERROR) return;  /* malformed clause already reported */
@@ -1238,6 +1303,8 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             register_type_decl(members, intern, child, mangle_prefix,
                                make_qualified(intern, display_prefix, src_name),
                                NULL, child->is_private);
+            if (child->kind == DECL_STRUCT && child->struc.is_extern)
+                validate_extern_struct_fields(child);
             break;
         }
         case DECL_EXTERN: {
@@ -1289,6 +1356,7 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
             }
             if (et && et->kind == TYPE_FUNC)
                 validate_extern_protocol(child, src_name);
+            validate_extern_fn_types(child, src_name);
             break;
         }
         case DECL_MODULE: {

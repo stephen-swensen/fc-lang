@@ -1,0 +1,7 @@
+// A C function returns a plain function pointer, which is not an FC function
+// value, so an extern cannot return a function type; it returns any*.
+// Regression: accepted, and the C failed to compile.
+module c from "signal.h" =
+    extern signal: (i32, (i32) -> void) -> (i32) -> void
+
+let main = (args: str[]) -> 0

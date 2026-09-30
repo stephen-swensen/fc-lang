@@ -1,0 +1,7 @@
+// A variadic extern has no single function type, so it is not a value.
+module cio from "stdio.h" =
+    extern printf: (const cstr, ...) -> i32
+
+let main = (args: str[]) ->
+    let p = cio.printf
+    0

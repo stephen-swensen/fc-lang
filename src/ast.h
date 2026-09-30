@@ -187,10 +187,9 @@ struct Expr {
                                                   only (a param has no doc comment of its own to scan for) */
             bool is_std_stream;                /* the built-in stdin, stdout or stderr (not a binding
                                                   that happens to share the name) */
-            struct Expr *fn_literal;           /* used as a C function pointer (`&f`, an extern
-                                                  argument): the non-capturing lambda literal the
-                                                  local `let` is bound to, whose trampoline stands
-                                                  for it (set by pass2) */
+            struct Expr *static_fn;            /* a local `let` bound to a static function
+                                                  (fn_static_target): the expression naming
+                                                  that function (set by pass2) */
         } ident;
 
         /* EXPR_BINARY */
@@ -646,6 +645,10 @@ struct Decl {
              * through. */
             bool is_frozen;
             Expr *init;
+            /* An immutable non-function `let` bound to a static function
+             * (fn_static_target), such as `let alias = inc`: the expression
+             * naming that function (set by pass2). */
+            struct Expr *static_fn;
             /* A generic function: its initializer is a function with a type
              * variable among its explicit ones or in a parameter type. Set by
              * pass1 (detect_generic_func), with the symbol's is_generic. */

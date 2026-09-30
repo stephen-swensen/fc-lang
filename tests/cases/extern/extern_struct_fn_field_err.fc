@@ -1,0 +1,9 @@
+// A C struct holds a plain function pointer, which FC does not treat as a
+// function value, so an extern struct field cannot have a function type; it is
+// declared any* and filled with &f. Regression: accepted, and the C failed to
+// compile.
+module c from "signal.h" =
+    extern struct sigaction =
+        sa_handler: (i32) -> void
+
+let main = (args: str[]) -> 0

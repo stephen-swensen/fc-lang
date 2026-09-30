@@ -365,16 +365,31 @@ bool facts_overflow_governs(const Expr *e, Type *(*resolve)(Type *)) {
     }
 }
 
-bool fn_value_is_context_free(const Expr *e) {
-    if (!e->type || e->type->kind != TYPE_FUNC) return false;
+/* The static function a global or module member names, reached as `e`. */
+static const Expr *symbol_static_target(const Expr *e, const Symbol *s) {
+    if (!s || !s->decl) return e;   /* a top-level function with no symbol record */
+    const Decl *d = s->decl;
+    if (d->kind == DECL_EXTERN)
+        return d->ext.type && d->ext.type->kind == TYPE_FUNC &&
+               !d->ext.type->func.is_variadic ? e : NULL;
+    if (decl_is_function(d)) return e;
+    if (d->kind == DECL_LET && !d->let.is_mut && d->let.static_fn)
+        return fn_static_target(d->let.static_fn);
+    return NULL;
+}
+
+const Expr *fn_static_target(const Expr *e) {
+    if (!e || !e->type || e->type->kind != TYPE_FUNC) return NULL;
     switch (e->kind) {
+    case EXPR_FUNC:
+        return e->func.capture_count == 0 && e->func.lifted_name ? e : NULL;
     case EXPR_IDENT:
-        if (e->ident.is_local) return e->ident.fn_literal != NULL;
-        return !e->ident.resolved_sym || !decl_is_variable(e->ident.resolved_sym->decl);
+        if (e->ident.is_local)
+            return e->ident.static_fn ? fn_static_target(e->ident.static_fn) : NULL;
+        return symbol_static_target(e, e->ident.resolved_sym);
     case EXPR_FIELD:
-        return e->field.codegen_name != NULL &&
-               (!e->field.resolved_member || !decl_is_variable(e->field.resolved_member->decl));
-    case EXPR_FUNC:  return e->func.capture_count == 0 && e->func.lifted_name;
-    default:         return false;
+        return e->field.codegen_name ? symbol_static_target(e, e->field.resolved_member) : NULL;
+    default:
+        return NULL;
     }
 }

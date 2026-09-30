@@ -1,0 +1,16 @@
+// An optional C callback, `((A) -> R)?`, is a C function pointer that may be
+// NULL: `some(f)` passes the static function f, and `none` passes NULL.
+// Regression: the option was passed as FC's { value, has_value } struct,
+// which did not compile.
+module cb from "cb.h" =
+    extern call_opt: (((i32) -> i32)?, i32) -> i32
+
+let triple = (x: i32) -> x * 3
+
+let main = (args: str[]) ->
+    let local = (x: i32) -> x * 5
+    assert(cb.call_opt(some(triple), 2) == 6)
+    assert(cb.call_opt(some(local), 2) == 10)
+    assert(cb.call_opt(some((x: i32) -> x - 1), 2) == 1)
+    assert(cb.call_opt(none((i32) -> i32), 2) == -1)
+    0

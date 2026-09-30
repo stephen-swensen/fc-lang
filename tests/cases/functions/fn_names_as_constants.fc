@@ -1,0 +1,32 @@
+// A static function's name is a constant: a file-level alias, a module-level
+// dispatch table (of declared functions, lambda literals and externs), one
+// constant copied into another, and a function variable's initial value may
+// all name functions. Regression: each was rejected ("must be a constant
+// expression" / "must not contain ... variable references").
+module c from "stdlib.h" =
+    extern abs: (i32) -> i32
+
+let inc = (x: i32) -> x + 1
+let dec = (x: i32) -> x - 1
+let alias = inc
+let alias2 = alias
+let mut current = inc
+
+module ops =
+    let double = (x: i32) -> x * 2
+    let table = ((i32) -> i32)[4] { double, c.abs, (x: i32) -> x * 10, double }
+    let same = table
+    let mut hook = double
+
+let main = (args: str[]) ->
+    assert(alias(1) == 2 && alias2(2) == 3)
+    assert(current(5) == 6)
+    current = dec
+    assert(current(5) == 4)
+    assert(ops.table[0](3) == 6 && ops.table[1](0 - 3) == 3 && ops.table[2](3) == 30)
+    assert(ops.same[3](4) == 8 && ops.same.len == 4)
+    assert(ops.hook(5) == 10)
+    ops.hook = inc
+    assert(ops.hook(5) == 6)
+    assert(alias == inc && alias2 == inc)
+    0

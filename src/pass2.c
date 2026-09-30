@@ -23,6 +23,8 @@ typedef struct {
     Expr *lambda_init;          /* the EXPR_FUNC this (immutable) binding was initialized
                                    with, else NULL; lets alloc(f) see the context
                                    layout through the binding */
+    Expr *static_fn;            /* an immutable binding to a static function
+                                   (fn_static_target): the expression naming it */
 } LocalBinding;
 
 typedef struct Scope Scope;
@@ -176,6 +178,15 @@ static Type *scope_lookup_capture(Scope *s, const char *name,
 static Expr *scope_lookup_lambda_init(Scope *s, const char *name) {
     LocalBinding *b = scope_find(s, name, true);
     return b && !b->is_mut ? b->lambda_init : NULL;
+}
+
+/* The static function an immutable local binding stands for (its
+ * static_fn), NULL if the name is unbound, mutable, or bound to a function
+ * known only at run time. Crosses lambda boundaries: the function is the same
+ * code wherever the name is read. */
+static Expr *scope_lookup_static_fn(Scope *s, const char *name) {
+    LocalBinding *b = scope_find(s, name, true);
+    return b && !b->is_mut ? b->static_fn : NULL;
 }
 
 static bool scope_lookup_is_capturing(Scope *s, const char *name) {
@@ -4807,18 +4818,15 @@ static Type *check_expr(CheckCtx *ctx, Expr *e) {
             "that instantiates it, e.g. (x) -> %s(x)", e->ident.name, e->ident.name);
         return poison(e);
     }
-    /* Reject an extern function used as a value. Every FC function value is a
-     * fat pointer whose C signature carries a trailing `void*` context param;
-     * a plain extern C function has no such param, so binding, passing or
-     * returning one (or taking `&` of it) would emit incompatible-pointer C.
-     * The fix is to call it directly or wrap it in an FC lambda. `&f` reaches
-     * only fat pointers for the same reason (spec: Address-of). */
-    if (in_value_position && extern_fn_value_symbol(e, t)) {
+    /* An extern function is a value like any function: codegen reaches it
+     * through a wrapper that takes the context argument. A variadic one has
+     * no single function type to be a value of. */
+    Symbol *ext = in_value_position ? extern_fn_value_symbol(e, t) : NULL;
+    if (ext && ext->type->func.is_variadic) {
         const char *nm = value_ref_display(ctx->arena, e);
         diag_error(e->loc,
-            "extern function '%s' cannot be used as a value; call it directly, "
-            "e.g. %s(...), or wrap it in a lambda that calls it, e.g. (x) -> %s(x)",
-            nm, nm, nm);
+            "variadic extern function '%s' cannot be used as a value; call it "
+            "directly, e.g. %s(...), or wrap a call in a lambda", nm, nm);
         return poison(e);
     }
     return t;
@@ -5154,16 +5162,20 @@ static Type *check_generic_call(CheckCtx *ctx, Expr *e, Type *ft, Symbol *callee
     return e->type;
 }
 
-/* Whether function value `e` can be handed to C as a function pointer: code
- * known at compile time (fn_value_is_context_free). A local `let` bound to a
- * non-capturing lambda literal is resolved to that literal here
- * (Expr.ident.fn_literal), so codegen names the literal's trampoline. */
+/* The static function a checked function value names (fn_static_target),
+ * or NULL. A local name is resolved through its binding here
+ * (Expr.ident.static_fn), which is how an alias of an alias reaches the
+ * function. */
+static const Expr *static_fn_of(CheckCtx *ctx, Expr *e) {
+    if (e->kind == EXPR_IDENT && e->ident.is_local && !e->ident.static_fn)
+        e->ident.static_fn = scope_lookup_static_fn(ctx->scope, e->ident.name);
+    return fn_static_target(e);
+}
+
+/* Whether function value `e` can be handed to C as a function pointer: a
+ * static function (static_fn_of), whose code C can name. */
 static bool resolve_c_callable(CheckCtx *ctx, Expr *e) {
-    if (e->kind == EXPR_IDENT && e->ident.is_local && !e->ident.fn_literal) {
-        Expr *lam = scope_lookup_lambda_init(ctx->scope, e->ident.name);
-        if (lam && lam->func.capture_count == 0) e->ident.fn_literal = lam;
-    }
-    return fn_value_is_context_free(e);
+    return static_fn_of(ctx, e) != NULL;
 }
 
 /* Report that function value `e` cannot be used as a C function pointer
@@ -5264,9 +5276,15 @@ static Type *check_call(CheckCtx *ctx, Expr *e) {
     bool arg_err = false;
     bool extern_callee = callee_sym && callee_sym->kind == DECL_EXTERN;
     for (int i = 0; i < e->call.arg_count; i++) {
-        ctx->code_use = extern_callee && i < ft->func.param_count &&
-                        ft->func.param_types[i]->kind == TYPE_FUNC &&
-                        e->call.args[i]->kind == EXPR_IDENT;
+        Type *cpt = extern_callee && i < ft->func.param_count ? ft->func.param_types[i] : NULL;
+        Expr *carg = e->call.args[i];
+        if (cpt && cpt->kind == TYPE_OPTION && carg->kind == EXPR_SOME) {
+            cpt = cpt->option.inner;
+            carg = carg->some_expr.value;
+        }
+        /* The name inside is the argument's first identifier, which takes
+         * the flag. */
+        ctx->code_use = cpt && cpt->kind == TYPE_FUNC && carg->kind == EXPR_IDENT;
         Type *at = check_expr(ctx, e->call.args[i]);
         ctx->code_use = false;
         if (reject_unresolved_recursive_value(e->call.args[i])) { arg_err = true; continue; }
@@ -5304,11 +5322,24 @@ static Type *check_call(CheckCtx *ctx, Expr *e) {
     /* Extern calls skip the _ctx parameter */
     if (callee_sym && callee_sym->kind == DECL_EXTERN) {
         e->call.is_extern_call = true;
-        /* A function-type argument crosses as a raw C function pointer, so
-         * it must be code with no context. */
+        /* A callback argument crosses as a plain C function pointer, so it
+         * must be a static function; an optional one is `some` of one, or
+         * `none`, which crosses as NULL. */
         for (int i = 0; i < e->call.arg_count && i < ft->func.param_count; i++) {
-            if (ft->func.param_types[i]->kind != TYPE_FUNC) continue;
+            Type *pt = ft->func.param_types[i];
             Expr *arg = e->call.args[i];
+            if (pt->kind == TYPE_OPTION && pt->option.inner &&
+                pt->option.inner->kind == TYPE_FUNC) {
+                if (arg->kind == EXPR_DEFAULT) continue;
+                if (arg->kind != EXPR_SOME) {
+                    diag_error(arg->loc, "an optional C callback takes some(f), with f "
+                        "a function known at compile time, or none");
+                    continue;
+                }
+                arg = arg->some_expr.value;
+            } else if (pt->kind != TYPE_FUNC) {
+                continue;
+            }
             if (resolve_c_callable(ctx, arg)) continue;
             if (arg->kind == EXPR_FUNC && arg->func.capture_count > 0)
                 diag_error(arg->loc, "cannot pass capturing closure to extern: "
@@ -6481,8 +6512,8 @@ static Type *check_ident(CheckCtx *ctx, Expr *e) {
             }
             /* Add capture to each lambda_ctx level, unless the name is
              * used only as code whose function is known here. */
-            Expr *code = code_use ? scope_lookup_lambda_init(ctx->scope, e->ident.name) : NULL;
-            bool named_as_code = code && code->func.capture_count == 0;
+            bool named_as_code = code_use &&
+                                 scope_lookup_static_fn(ctx->scope, e->ident.name) != NULL;
             LambdaCtx *lc = named_as_code ? NULL : ctx->lambda_ctx;
             for (int bc = 0; bc < boundary_crossings && lc; bc++) {
                 bool found = false;
@@ -6991,6 +7022,9 @@ static Type *check_let(CheckCtx *ctx, Expr *e) {
         b->is_capturing = init->func.capture_count > 0;
         b->lambda_init = init;
     }
+    /* An immutable binding to a static function stands for that function. */
+    if (!e->let_expr.let_is_mut && t->kind == TYPE_FUNC)
+        b->static_fn = (Expr *)static_fn_of(ctx, init);
     e->type = type_void();
     return e->type;
 }
@@ -9863,7 +9897,9 @@ static Expr *const_clone_expr(CheckCtx *ctx, Expr *src) {
     case EXPR_SIZEOF:
     case EXPR_ALIGNOF:
     case EXPR_DEFAULT:
-    case EXPR_FIELD:  /* extern-const or no-payload variant ctor */
+    case EXPR_FIELD:  /* extern-const, no-payload variant ctor, static function */
+    case EXPR_IDENT:  /* static function: a constant name for its code */
+    case EXPR_FUNC:   /* non-capturing lambda: one function, however often named */
         return src;
     case EXPR_UNARY_PREFIX: {
         Expr *n = arena_alloc(ctx->arena, sizeof(Expr));
@@ -9964,7 +10000,6 @@ static Expr *const_clone_expr(CheckCtx *ctx, Expr *src) {
 
     /* const_fold_expr produces none of these, so a module constant never
      * holds one. */
-    case EXPR_IDENT:
     case EXPR_UNARY_POSTFIX:
     case EXPR_INDEX:
     case EXPR_SLICE:
@@ -9976,7 +10011,6 @@ static Expr *const_clone_expr(CheckCtx *ctx, Expr *src) {
     case EXPR_CONTINUE:
     case EXPR_RETURN:
     case EXPR_BLOCK:
-    case EXPR_FUNC:
     case EXPR_ALLOC:
     case EXPR_FREE:
     case EXPR_BITCAST:
@@ -10238,7 +10272,12 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
     case EXPR_ALIGNOF:
     case EXPR_DEFAULT:
         return e;
+    case EXPR_FUNC:
+        /* A lambda's code is a constant; a capture is not. */
+        return e->func.capture_count == 0 ? e : NULL;
     case EXPR_IDENT: {
+        /* A static function's name is a constant: its code. */
+        if (fn_static_target(e)) return e;
         Symbol *s = e->ident.resolved_sym;
         if (!s || !s->decl || s->decl->kind != DECL_LET)
             return NULL;
@@ -10284,7 +10323,8 @@ static Expr *const_fold_expr(CheckCtx *ctx, Expr *e) {
             Expr *v = const_fold_type_property(ctx, e);
             return v ? v : e;  /* a literal if host-foldable, else the macro node */
         }
-        if (e->field.is_extern_const || e->field.is_variant_constructor)
+        if (e->field.is_extern_const || e->field.is_variant_constructor ||
+            fn_static_target(e))
             return e;
         /* A declared error constant (group.member) folds to its assigned code;
          * pass1 already patched the member's literal, so a copy is enough. */
@@ -10470,6 +10510,12 @@ static bool is_init_expr(Expr *e, InitRule rule, bool *all_emitted) {
     case EXPR_ALIGNOF:
     case EXPR_DEFAULT:
         return true;
+    case EXPR_IDENT:
+        /* A static function's name is its code, a constant; any other name
+         * reads a variable. */
+        return fn_static_target(e) != NULL;
+    case EXPR_FUNC:
+        return e->func.capture_count == 0;
     case EXPR_UNARY_PREFIX:
         /* Negation, boolean not and bitwise not; deref (*) and address-of (&)
          * read storage. */
@@ -10510,7 +10556,8 @@ static bool is_init_expr(Expr *e, InitRule rule, bool *all_emitted) {
         /* Extern constants (C macros/enums), union and enum variants, static
          * type properties (i32.min, f64.nan, ...) and declared error codes. */
         return e->field.is_extern_const || e->field.is_variant_constructor ||
-               e->field.is_type_property || error_const_literal(e) != NULL;
+               e->field.is_type_property || error_const_literal(e) != NULL ||
+               fn_static_target(e) != NULL;
     case EXPR_STRUCT_LIT:
         for (int i = 0; i < e->struct_lit.field_count; i++)
             if (!is_init_expr(e->struct_lit.fields[i].value, rule, all_emitted)) return false;
@@ -10606,6 +10653,9 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
 
     d->let.resolved_type = t;
     if (sym) sym->type = t;
+    /* An immutable binding to a static function stands for that function. */
+    if (!d->let.is_mut && !decl_is_function(d) && d->let.init && t->kind == TYPE_FUNC)
+        d->let.static_fn = (Expr *)static_fn_of(ctx, d->let.init);
     /* Add to scope so later decls can reference it */
     const char *cg_name = d->let.codegen_name ? d->let.codegen_name : d->let.name;
     /* Global binding: go-to-def resolves via the Symbol, so the def_loc is unused

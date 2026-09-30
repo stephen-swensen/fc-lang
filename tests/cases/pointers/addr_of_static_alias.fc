@@ -1,0 +1,18 @@
+// A `let` bound to a static function is that function, at any scope and
+// through any chain of aliases, so `&` gives the same C function pointer as
+// the function's own name. Regression: `let g = inc` then `&g` was rejected as
+// "known only at run time".
+let inc = (x: i32) -> x + 1
+let top_alias = inc
+
+let main = (args: str[]) ->
+    let g = inc
+    let h = g
+    let lam = (x: i32) -> x * 2
+    let lam_alias = lam
+    assert(&g == &inc)
+    assert(&h == &inc)
+    assert(&top_alias == &inc)
+    assert(&lam_alias == &lam)
+    assert(&lam != &inc)
+    0

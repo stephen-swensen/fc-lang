@@ -1,0 +1,31 @@
+// An extern function is a value like any function: it can be bound, passed,
+// returned, stored and compared, bare or reached through an import. Its FC
+// value calls it through a wrapper that takes the context argument every FC
+// function's code takes. Regression: each use was rejected ("extern function
+// cannot be used as a value").
+module c from "stdlib.h" =
+    extern abs: (i32) -> i32
+
+module user =
+    import abs from c
+    let go = () ->
+        let f = abs
+        f(0 - 3)
+
+let apply = (f: (i32) -> i32, n: i32) -> f(n)
+
+let get_abs = () -> c.abs
+
+struct holder =
+    op: (i32) -> i32
+
+let main = (args: str[]) ->
+    let f = c.abs
+    assert(f(0 - 10) == 10)
+    assert(apply(c.abs, 0 - 5) == 5)
+    assert(get_abs()(0 - 6) == 6)
+    assert(user.go() == 3)
+    let h = holder { op = c.abs }
+    assert(h.op(0 - 7) == 7)
+    assert(f == c.abs && get_abs() == f)
+    0

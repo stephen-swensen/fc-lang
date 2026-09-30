@@ -74,7 +74,7 @@ The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 | `types.c/h` | The `Type` representation, equality, printing (`type_name`), substitution, the context-free const-expression evaluator used by const generics, and type-name mangling (`instance_base_name` is the one rule for the template an instance is named from). Also the rules pass2 and codegen share about types: the constant operators (`const_binary_op`, `const_unary_op`, `const_cast_value`), what a type embeds by value (`type_byval_aggregate`), and which options are null-sentinel pointers (`option_inner_is_null_sentinel`). `str` and `cstr` are true aliases of `u8[]` and `u8*`: the `Type` keeps the alias spelling for messages only. |
 | `pass1.c/h` | Symbol tables. Collects every top-level and module-level name, type layout and function signature so declarations can refer to each other in any order; resolves imports; assigns C names; numbers error codes; checks that no two declarations claim one C name. |
 | `pass2.c/h` | The type checker: inference, name resolution, widening, casts, match exhaustiveness, provenance (escape) analysis, constant folding, generic validation, and registration of generic instances. `front_end_free` tears down what the front end built, for both fcc and the language server. |
-| `facts.c/h` | Facts about expressions that pass2 judges by and codegen emits by, so the two agree: which operations `checked` and `unguarded` govern, which function values C can call through a trampoline, whether a pointer or integer is provably null/non-zero, error-constant values, and how interpolated-string segments are sized. |
+| `facts.c/h` | Facts about expressions that pass2 judges by and codegen emits by, so the two agree: which operations `checked` and `unguarded` govern, which functions are static (`fn_static_target`: constants, and the only functions that cross to C), whether a pointer or integer is provably null/non-zero, error-constant values, and how interpolated-string segments are sized. |
 | `monomorph.c/h` | The instance table (`mono_register`), transitive discovery, and the finalize step that resolves instance type names. |
 | `codegen.c/h` | The C emitter. |
 | `diag.c/h` | Error reporting. In server mode it reports to a sink and turns a fatal error into a `longjmp`. |
@@ -317,6 +317,12 @@ cannot make is made per instance by the concrete rule.
 - Slice indexing is bounds-checked, and unwrapping an option or result checks
   its tag first; a failed check aborts.
 - Struct and union equality compiles to generated comparison functions.
+- A function value is `{ fn_ptr, ctx }`, and every FC function's code takes a
+  trailing `void* _ctx`. At the C boundary two kinds of wrapper bridge the
+  difference, collected by `collect_boundary_code`: a trampoline
+  `fc_ctramp_<name>` drops the context so C can call a static FC function,
+  and `fc_cwrap_<C name>` adds it so an extern can be an FC value (spec
+  §Static functions).
 - `const` is emitted after the type it applies to (east const), so it binds to
   the pointee even when the pointee is itself a pointer (`int32_t* const*`).
 

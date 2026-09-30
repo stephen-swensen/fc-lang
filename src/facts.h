@@ -53,13 +53,17 @@ bool ptr_value_provably_null(const Expr *e);
 bool int_value_provably_nonzero(const Expr *e);
 bool int_value_provably_zero(const Expr *e);
 
-/* Whether function value `e` is code known at compile time, with no context,
- * which C can call as a raw function pointer through a trampoline: a function
- * named at top level or in a module, a non-capturing lambda literal, or a
- * local `let` bound to one (Expr.ident.fn_literal, which pass2 sets). pass2
- * accepts only such a value at `&f` and at an extern call's function
- * parameter; codegen emits a trampoline for exactly these. */
-bool fn_value_is_context_free(const Expr *e);
+/* A static function is one whose code the source fixes: a declared function
+ * (a `let` bound to a lambda literal, at any scope), a non-variadic extern, a
+ * non-capturing lambda literal, or an immutable `let` bound to a static
+ * function (Expr.ident.static_fn for a local, Decl.let.static_fn for a global
+ * or module member, both set by pass2). A static function's name is a
+ * constant, and only a static function can be handed to C as a function
+ * pointer (`&f`, an extern callback argument). Returns the expression that
+ * names the function itself (the lambda, or the identifier or member naming
+ * the declared function or extern), following aliases; NULL when `e`'s
+ * function is known only at run time. */
+const Expr *fn_static_target(const Expr *e);
 
 /* If e is a resolved reference to a declared error constant (a member of an
  * `error` group, reached as `group.member`/`mod.group.member` or through an

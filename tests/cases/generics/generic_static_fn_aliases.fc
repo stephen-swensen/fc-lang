@@ -1,0 +1,26 @@
+// Static functions inside a generic body: a local alias of a top-level
+// function, of an extern, and of a lambda (whose C name carries the
+// instance's suffix) name the same code as the function itself, in every
+// instance, for `&`, a C callback argument and an FC call alike.
+module c from "stdlib.h" =
+    extern abs: (i32) -> i32
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> i32) -> void
+
+let inc = (x: i32) -> x + 1
+
+let gen = (n: 'a) ->
+    let f = c.abs
+    let g = inc
+    let lam = (x: 'a) -> x
+    let lam2 = lam
+    assert(&lam2 == &lam)
+    assert(&g == &inc)
+    let cmp = (a: const any*, b: const any*) -> (i32) sizeof('a) - (i32) sizeof('a)
+    let cmp2 = cmp
+    let mut xs = i32[2] { 2, 1 }
+    c.qsort(xs.ptr, 2usize, (usize) sizeof(i32), cmp2)
+    f(0 - 2) + g(1)
+
+let main = (args: str[]) ->
+    assert(gen(1) == 4 && gen(1.5) == 4)
+    0

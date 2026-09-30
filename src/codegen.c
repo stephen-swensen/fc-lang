@@ -312,19 +312,65 @@ static const char *lambda_c_name(Expr *lam) {
     return arena_sprintf(g_arena, "%s__%s", lam->func.lifted_name, g_lambda_suffix);
 }
 
-/* The C function a context-free function value (fn_value_is_context_free)
- * names; its trampoline is `fc_ctramp_` followed by this name. */
-static const char *trampoline_target(Expr *e) {
-    switch (e->kind) {
+/* The extern a global name or module member declares, else NULL. */
+static const Decl *extern_decl_of(const Symbol *s) {
+    return s && s->decl && s->decl->kind == DECL_EXTERN ? s->decl : NULL;
+}
+
+/* The C function behind a static function value (fn_static_target): a
+ * lambda's or FC function's C name, whose signature ends in the context
+ * argument, or an extern's C symbol, which has none (*is_extern). */
+static const char *static_fn_c_name(const Expr *e, bool *is_extern) {
+    const Expr *t = fn_static_target(e);
+    *is_extern = false;
+    const Decl *ext = NULL;
+    switch (t ? t->kind : EXPR_ERROR) {
+    case EXPR_FUNC:
+        return lambda_c_name((Expr *)t);
     case EXPR_IDENT:
-        if (e->ident.fn_literal) return lambda_c_name(e->ident.fn_literal);
-        return e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
-    case EXPR_FIELD: return e->field.codegen_name;
-    case EXPR_FUNC:  return lambda_c_name(e);
+        ext = extern_decl_of(t->ident.resolved_sym);
+        if (!ext) return t->ident.codegen_name ? t->ident.codegen_name : t->ident.name;
+        break;
+    case EXPR_FIELD:
+        ext = extern_decl_of(t->field.resolved_member);
+        if (!ext) return t->field.codegen_name;
+        break;
     default:
-        internal_error(e->loc, "no trampoline for this function value");
+        internal_error(e->loc, "not a static function");
         return "";
     }
+    *is_extern = true;
+    return ext->ext.name;
+}
+
+/* A static function as C sees it, a plain function pointer: an extern's own
+ * symbol, or the trampoline that calls an FC function without its context. */
+static void emit_c_fn_pointer(const Expr *e, FILE *out) {
+    bool is_extern;
+    const char *name = static_fn_c_name(e, &is_extern);
+    fprintf(out, is_extern ? "%s" : "fc_ctramp_%s", name);
+}
+
+/* A function value built from code that takes no context: a compound literal,
+ * or in a constant context the brace initializer C requires there. */
+static void emit_fn_value(Type *ft, const char *code, FILE *out) {
+    if (g_const_context) {
+        fprintf(out, "{ .fn_ptr = %s, .ctx = NULL }", code);
+        return;
+    }
+    fprintf(out, "(");
+    emit_type(ft, out);
+    fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }", code);
+}
+
+/* A static function as an FC value: its code with a null context. An extern
+ * is reached through its wrapper, `fc_cwrap_` and its C name, which adds the
+ * context argument; an alias through the function it names. */
+static void emit_static_fn_value(Expr *e, FILE *out) {
+    bool is_extern;
+    const char *name = static_fn_c_name(e, &is_extern);
+    emit_fn_value(e->type, is_extern ? arena_sprintf(g_arena, "fc_cwrap_%s", name) : name,
+                  out);
 }
 
 static bool is_hoisted(const char *codegen_name) {
@@ -1319,7 +1365,14 @@ static bool seq_needed(Expr ***slots, int n) {
  * cannot prove pure, so a false here costs nothing. */
 static bool expr_structurally_equal(Expr *a, Expr *b) {
     if (a == b) return a != NULL;
-    if (!a || !b || a->kind != b->kind) return false;
+    if (!a || !b) return false;
+    /* Two spellings of one static function (a name and its alias, say) emit
+     * the same C. */
+    if (fn_static_target(a) && fn_static_target(b)) {
+        bool a_ext, b_ext;
+        return strcmp(static_fn_c_name(a, &a_ext), static_fn_c_name(b, &b_ext)) == 0;
+    }
+    if (a->kind != b->kind) return false;
     switch (a->kind) {
     case EXPR_INT_LIT:   return a->int_lit.value == b->int_lit.value;
     case EXPR_FLOAT_LIT: return a->float_lit.value == b->float_lit.value;
@@ -1498,9 +1551,18 @@ static bool emit_self_parens(Expr *e) {
  * but void** does not). */
 static void emit_extern_arg(Expr *e, Type *param_type, FILE *out) {
     if (param_type && param_type->kind == TYPE_FUNC) {
-        /* Function at the C boundary: pass its C-compatible trampoline. pass2
+        /* A callback: pass the static function as a C function pointer. pass2
          * rejects any other function value passed to an extern. */
-        fprintf(out, "fc_ctramp_%s", trampoline_target(e));
+        emit_c_fn_pointer(e, out);
+        return;
+    }
+    if (param_type && param_type->kind == TYPE_OPTION && param_type->option.inner &&
+        param_type->option.inner->kind == TYPE_FUNC) {
+        /* An optional callback: `some(f)` passes f, and `none` passes NULL. */
+        if (e->kind == EXPR_SOME)
+            emit_c_fn_pointer(e->some_expr.value, out);
+        else
+            fprintf(out, "NULL");
         return;
     }
     if (param_type && is_cstr_type(param_type)) {
@@ -3716,13 +3778,9 @@ static void emit_fixed_array_view(Expr *e, const char *access, FILE *out) {
 static void emit_field(Expr *e, FILE *out) {
     /* Module member access: emit mangled name directly */
     if (e->field.codegen_name) {
-        if (e->type && e->type->kind == TYPE_FUNC &&
-            !(e->field.resolved_member && decl_is_variable(e->field.resolved_member->decl))) {
-            /* Module function used as a value: wrap in a fat pointer */
-            fprintf(out, "(");
-            emit_type(e->type, out);
-            fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }",
-                e->field.codegen_name);
+        if (fn_static_target(e)) {
+            /* A module function, extern or alias used as a value */
+            emit_static_fn_value(e, out);
         } else if (is_cstr_type(e->type)) {
             /* C string #defines are char*; FC cstr is uint8_t*, so cast at the boundary.
              * Outer parens are required so a following postfix (e.g. `c.s[0]`)
@@ -4320,9 +4378,8 @@ static void emit_unary_prefix(Expr *e, FILE *out) {
     /* &f on a top-level function or non-capturing lambda: emit the raw
      * C-boundary trampoline instead of the address of a fat-pointer literal.
      * This is the C-interop escape hatch documented in the spec. */
-    if (e->unary_prefix.op == TOK_AMP &&
-        fn_value_is_context_free(e->unary_prefix.operand)) {
-        fprintf(out, "fc_ctramp_%s", trampoline_target(e->unary_prefix.operand));
+    if (e->unary_prefix.op == TOK_AMP && fn_static_target(e->unary_prefix.operand)) {
+        emit_c_fn_pointer(e->unary_prefix.operand, out);
         return;
     }
     const char *op_str;
@@ -4419,13 +4476,9 @@ static void emit_expr(Expr *e, FILE *out) {
             fprintf(out, "(void*)%s", e->ident.name);
             break;
         }
-        if (e->type && e->type->kind == TYPE_FUNC && !e->ident.is_local &&
-            !(e->ident.resolved_sym && decl_is_variable(e->ident.resolved_sym->decl))) {
-            /* Top-level function used as a value: wrap in a fat pointer */
-            fprintf(out, "(");
-            emit_type(e->type, out);
-            fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }",
-                e->ident.codegen_name ? e->ident.codegen_name : e->ident.name);
+        if (!e->ident.is_local && fn_static_target(e)) {
+            /* A top-level function, extern or alias used as a value */
+            emit_static_fn_value(e, out);
         } else {
             fprintf(out, "%s", e->ident.codegen_name ? e->ident.codegen_name : e->ident.name);
         }
@@ -5145,10 +5198,7 @@ static void emit_expr(Expr *e, FILE *out) {
             internal_error(e->loc, "capturing lambda without a context slot");
         } else {
             /* Non-capturing lambda: NULL context */
-            fprintf(out, "(");
-            emit_type(e->type, out);
-            fprintf(out, "){ .fn_ptr = %s, .ctx = NULL }",
-                lambda_c_name(e));
+            emit_fn_value(e->type, lambda_c_name(e), out);
         }
         break;
     }
@@ -5895,27 +5945,79 @@ static void collect_const_backings(Expr *e, void *rodata) {
     expr_for_each_child(e, collect_const_backings, rodata);
 }
 
-/* Record the FC functions that are handed to C as raw function pointers and so
- * need a trampoline: arguments of function type at an extern call, and `&f`.
- * `set` is a TrampolineSet. */
-static void collect_trampolines_expr(Expr *e, void *set) {
+/* The externs used as FC values, each once: each gets a wrapper,
+ * `fc_cwrap_<C name>`, that takes the context argument and calls it. */
+typedef struct {
+    const Symbol **syms;
+    int count;
+    int cap;
+} ExternWrapSet;
+
+static void extern_wrap_add(ExternWrapSet *ws, const Symbol *sym) {
+    for (int i = 0; i < ws->count; i++)
+        if (ws->syms[i]->decl == sym->decl) return;
+    DA_APPEND(ws->syms, ws->count, ws->cap, sym);
+}
+
+/* What the code crossing the C boundary needs, in both directions. */
+typedef struct {
+    TrampolineSet *trampolines;   /* FC functions handed to C */
+    ExternWrapSet *extern_wraps;  /* externs used as FC values */
+} BoundaryCode;
+
+/* A static function handed to C as a plain function pointer: an FC function
+ * needs its trampoline; an extern is passed as itself. */
+static void boundary_c_pointer(BoundaryCode *bc, Expr *e) {
+    bool is_extern;
+    const char *name = static_fn_c_name(e, &is_extern);
+    if (!is_extern) trampolineset_add(bc->trampolines, name, instance_type(e->type));
+}
+
+/* Record the functions that cross the C boundary: static functions handed to
+ * C (a callback argument of an extern call, and `&f`), which need a
+ * trampoline, and externs used as FC values, which need a wrapper. A direct
+ * call names its function and uses neither. `ctx` is a BoundaryCode. */
+static void collect_boundary_code(Expr *e, void *ctx) {
     if (!e) return;
-    TrampolineSet *ts = set;
-    if (e->kind == EXPR_CALL && e->call.is_extern_call) {
-        Type *call_ft = e->call.func->type;
+    BoundaryCode *bc = ctx;
+    switch (e->kind) {
+    case EXPR_CALL: {
+        if (e->call.is_indirect) collect_boundary_code(e->call.func, ctx);
+        Type *ft = e->call.func->type;
         for (int i = 0; i < e->call.arg_count; i++) {
-            Type *pt = (call_ft && call_ft->kind == TYPE_FUNC && i < call_ft->func.param_count)
-                ? call_ft->func.param_types[i] : NULL;
+            Type *pt = e->call.is_extern_call && ft && ft->kind == TYPE_FUNC &&
+                       i < ft->func.param_count ? ft->func.param_types[i] : NULL;
             Expr *arg = e->call.args[i];
-            if (pt && pt->kind == TYPE_FUNC && fn_value_is_context_free(arg))
-                trampolineset_add(ts, trampoline_target(arg), instance_type(arg->type));
+            if (pt && pt->kind == TYPE_FUNC) {
+                boundary_c_pointer(bc, arg);
+            } else if (pt && pt->kind == TYPE_OPTION && pt->option.inner &&
+                       pt->option.inner->kind == TYPE_FUNC) {
+                if (arg->kind == EXPR_SOME) boundary_c_pointer(bc, arg->some_expr.value);
+            } else {
+                collect_boundary_code(arg, ctx);
+            }
         }
-    } else if (e->kind == EXPR_UNARY_PREFIX && e->unary_prefix.op == TOK_AMP) {
-        Expr *operand = e->unary_prefix.operand;
-        if (fn_value_is_context_free(operand))
-            trampolineset_add(ts, trampoline_target(operand), instance_type(operand->type));
+        return;
     }
-    expr_for_each_child(e, collect_trampolines_expr, set);
+    case EXPR_UNARY_PREFIX:
+        if (e->unary_prefix.op == TOK_AMP && fn_static_target(e->unary_prefix.operand)) {
+            boundary_c_pointer(bc, e->unary_prefix.operand);
+            return;
+        }
+        break;
+    case EXPR_IDENT:
+    case EXPR_FIELD: {
+        const Expr *t = fn_static_target(e);
+        const Symbol *sym = !t ? NULL
+                          : t->kind == EXPR_IDENT ? t->ident.resolved_sym
+                          : t->kind == EXPR_FIELD ? t->field.resolved_member : NULL;
+        if (extern_decl_of(sym)) extern_wrap_add(bc->extern_wraps, sym);
+        break;
+    }
+    default:
+        break;
+    }
+    expr_for_each_child(e, collect_boundary_code, ctx);
 }
 
 /* Collect every lambda that is lifted to its own C function, in source order.
@@ -5924,6 +6026,9 @@ static void collect_lambdas_expr(Expr *e, void *set) {
     if (!e) return;
     if (e->kind == EXPR_FUNC && e->func.lifted_name) {
         LambdaSet *ls = set;
+        /* A module constant copied into another shares its lambdas. */
+        for (int i = 0; i < ls->count; i++)
+            if (ls->exprs[i] == e) return;
         DA_APPEND(ls->exprs, ls->count, ls->cap, e);
     }
     expr_for_each_child(e, collect_lambdas_expr, set);
@@ -6663,6 +6768,7 @@ typedef struct {
     LambdaSet lambdas;          /* lambdas of the non-generic declarations */
     LambdaSet *inst_lambdas;    /* per generic instance, indexed like mono->entries */
     TrampolineSet trampolines;
+    ExternWrapSet extern_wraps;
 } EmittedCode;
 
 /* The #defines and #includes the program needs, then the settings every
@@ -7270,12 +7376,15 @@ static void collect_code(EmittedCode *code, Decl **all_decls, int all_count,
         }
     }
 
-    /* Collect code->trampolines: FC functions handed to C as raw function
-     * pointers. Walk all non-generic bodies and all monomorphized bodies. */
+    /* Collect the code crossing the C boundary: trampolines for FC functions
+     * handed to C, and wrappers for externs used as values. Walk every
+     * non-generic declaration (global initializers included) and every
+     * monomorphized body. */
+    BoundaryCode bc = { &code->trampolines, &code->extern_wraps };
     for (int i = 0; i < all_count; i++) {
         if (all_decls[i]->kind == DECL_LET && all_decls[i]->let.init &&
             !is_generic_decl(all_decls[i])) {
-            collect_trampolines_expr(all_decls[i]->let.init, &code->trampolines);
+            collect_boundary_code(all_decls[i]->let.init, &bc);
         }
     }
     /* Also walk monomorphized function bodies */
@@ -7288,14 +7397,87 @@ static void collect_code(EmittedCode *code, Decl **all_decls, int all_count,
         SubstCtx subst;
         enter_instance(inst, &subst);
         for (int j = 0; j < fn->func.body_count; j++)
-            collect_trampolines_expr(fn->func.body[j], &code->trampolines);
+            collect_boundary_code(fn->func.body[j], &bc);
         leave_instance();
     }
 }
 
 /* Global data: the static backing arrays of slice literals in module
  * constants, then every non-function global. */
-static void emit_globals(FILE *out, Decl **all_decls, int all_count) {
+/* An extern used as an FC value: `fc_cwrap_<C name>`, which takes the
+ * context argument every FC function value's code takes and calls the extern
+ * exactly as a direct call does (boundary casts, error protocol), by emitting
+ * that call. Only the prototype when !body. */
+static void emit_extern_wrapper(const Symbol *sym, bool body, FILE *out) {
+    const Decl *d = sym->decl;
+    Type *ft = d->ext.type;
+    int n = ft->func.param_count;
+    Param *params = arena_alloc(g_arena, sizeof(Param) * (size_t)(n > 0 ? n : 1));
+    for (int i = 0; i < n; i++) {
+        params[i].name = params[i].codegen_name = arena_sprintf(g_arena, "_p%d", i);
+        params[i].type = ft->func.param_types[i];
+    }
+    emit_fn_signature(arena_sprintf(g_arena, "fc_cwrap_%s", d->ext.name),
+                      ft->func.return_type, params, n, out);
+    if (!body) {
+        fprintf(out, ";\n");
+        return;
+    }
+    Expr *callee = arena_alloc(g_arena, sizeof(Expr));
+    callee->kind = EXPR_IDENT;
+    callee->loc = d->loc;
+    callee->type = ft;
+    callee->ident.name = callee->ident.codegen_name = d->ext.name;
+    callee->ident.resolved_sym = (Symbol *)sym;
+    Expr **args = arena_alloc(g_arena, sizeof(Expr *) * (size_t)(n > 0 ? n : 1));
+    for (int i = 0; i < n; i++) {
+        Expr *a = arena_alloc(g_arena, sizeof(Expr));
+        a->kind = EXPR_IDENT;
+        a->loc = d->loc;
+        a->type = params[i].type;
+        a->ident.name = a->ident.codegen_name = params[i].codegen_name;
+        a->ident.is_local = true;
+        args[i] = a;
+    }
+    Expr *call = arena_alloc(g_arena, sizeof(Expr));
+    call->kind = EXPR_CALL;
+    call->loc = d->loc;
+    call->type = ft->func.return_type;
+    call->call.func = callee;
+    call->call.args = args;
+    call->call.arg_count = n;
+    call->call.is_extern_call = true;
+    call->call.resolved_callee = (Symbol *)sym;
+    fprintf(out, " {\n    %s", ft->func.return_type->kind == TYPE_VOID ? "" : "return ");
+    emit_expr(call, out);
+    fprintf(out, ";\n}\n");
+}
+
+/* Declare the lambdas inside a global initializer, whose definitions come
+ * after the globals. `out` is the FILE. */
+static void emit_init_lambda_protos(Expr *e, void *out) {
+    if (!e) return;
+    if (e->kind == EXPR_FUNC && e->func.lifted_name) {
+        emit_fn_signature(lambda_c_name(e), e->type->func.return_type,
+                          e->func.params, e->func.param_count, out);
+        fprintf(out, ";\n");
+        return;
+    }
+    expr_for_each_child(e, emit_init_lambda_protos, out);
+}
+
+static void emit_globals(FILE *out, Decl **all_decls, int all_count, EmittedCode *code) {
+    /* A module member's initializer may name a lambda or an extern used as a
+     * value (a function variable's initial value, a table of functions),
+     * whose code is defined further down; declare it first. */
+    for (int i = 0; i < code->extern_wraps.count; i++)
+        emit_extern_wrapper(code->extern_wraps.syms[i], false, out);
+    for (int i = 0; i < all_count; i++) {
+        Decl *d = all_decls[i];
+        if (d->kind == DECL_LET && !is_func_decl(d) && d->let.is_module_member)
+            emit_init_lambda_protos(d->let.init, out);
+    }
+
     /* Pre-pass: walk module-member inits and lift every EXPR_ARRAY_LIT into a
      * static backing array.  Nested array lits inside struct/variant/some
      * initializers are all collected; the use sites then emit slice headers
@@ -7353,15 +7535,6 @@ static void emit_globals(FILE *out, Decl **all_decls, int all_count) {
         Decl *d = all_decls[i];
         if (d->kind == DECL_LET && !is_func_decl(d)) {
             const char *cname = d->let.codegen_name ? d->let.codegen_name : d->let.name;
-            Expr *init = d->let.init;
-            bool fn_var = d->let.is_module_member && init && init->kind == EXPR_FUNC;
-            if (fn_var) {
-                /* A function variable's initial lambda is defined with the
-                 * other lambdas, further down; declare it for the initializer. */
-                emit_fn_signature(lambda_c_name(init), init->type->func.return_type,
-                                  init->func.params, init->func.param_count, out);
-                fprintf(out, ";\n");
-            }
             emit_type(d->let.resolved_type, out);
             if (d->let.is_module_member) {
                 /* Module member: emit with initializer (must be const expr).
@@ -7378,10 +7551,6 @@ static void emit_globals(FILE *out, Decl **all_decls, int all_count) {
                  * freeze the pointee instead. */
                 if (!d->let.is_mut) fprintf(out, " const");
                 fprintf(out, " %s = ", cname);
-                if (fn_var) {
-                    fprintf(out, "{ .fn_ptr = %s, .ctx = NULL };\n", lambda_c_name(init));
-                    continue;
-                }
                 g_const_context = true;
                 emit_expr(d->let.init, out);
                 g_const_context = false;
@@ -7466,6 +7635,11 @@ static void emit_functions(FILE *out, Decl **all_decls, int all_count,
         fprintf(out, "}\n\n");
         leave_instance();
     }
+
+    /* Emit the wrappers of externs used as values */
+    for (int i = 0; i < code->extern_wraps.count; i++)
+        emit_extern_wrapper(code->extern_wraps.syms[i], true, out);
+    free(code->extern_wraps.syms);
 
     /* Emit C-boundary trampoline definitions */
     for (int i = 0; i < code->trampolines.count; i++) {
@@ -7619,7 +7793,7 @@ void codegen_emit(Program *prog, FILE *out, MonoTable *mono,
     emit_prototypes(out, all_decls, all_count, mono);
     EmittedCode code = {0};
     collect_code(&code, all_decls, all_count, mono);
-    emit_globals(out, all_decls, all_count);
+    emit_globals(out, all_decls, all_count, &code);
     emit_functions(out, all_decls, all_count, mono, &code);
 
     fflush(out);

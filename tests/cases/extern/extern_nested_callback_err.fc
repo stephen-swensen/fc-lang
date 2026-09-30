@@ -1,0 +1,6 @@
+// A C callback is a plain function pointer whose own parameters and result
+// are C types: a callback that takes a callback has no C form FC can supply.
+module c from "stdlib.h" =
+    extern visit: ((i32, (i32) -> i32) -> i32) -> void
+
+let main = (args: str[]) -> 0
