@@ -297,7 +297,7 @@ checks its reserved-word lists against the lexer.
 
 ### Releases
 
-The version is `VERSION` (a SemVer string such as `1.0.0-rc.7`); `fcc
+The version is `VERSION` (a SemVer string such as `1.0.0-rc.8`); `fcc
 --version` adds the commit hash and date at build time. A release updates
 `VERSION` and every other spelling of the old version, which `README.md` and
 `spec/fc-spec.html` repeat (`grep -rn` for it).
