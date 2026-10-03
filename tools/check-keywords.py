@@ -6,8 +6,9 @@ repeat it and must agree:
 
   - token_kind_name in src/token.c spells each keyword token as 'word';
   - the spec's "reserved words" and "reserved identifiers" lists;
-  - the VS Code TextMate grammar and the Vim syntax file, which highlight
-    keywords (and must not highlight words that are not keywords);
+  - the VS Code TextMate grammar, the Vim syntax file, and the highlight.js
+    grammar embedded in the spec, which highlight keywords (and must not
+    highlight words that are not keywords);
   - src/builtin_docs.inc, the language server's hover text: every reserved
     identifier (a built-in operator) has an entry, and every entry names a
     keyword or a built-in global.
@@ -105,6 +106,17 @@ for line in read("editors/vim/fc.vim").splitlines():
     if m and "contained" not in m.group(1).split():   # not the TODO group
         vwords.update(m.group(1).split())
 check_editor("editors/vim/fc.vim", vwords)
+
+# The spec's highlight.js grammar: every '\\b(a|b|c)\\b' alternation (written
+# with doubled backslashes inside a JavaScript string) in the registered block.
+m = re.search(r"hljs\.registerLanguage\('fc'.*?</script>", spec, re.S)
+if not m:
+    fail("spec/fc-spec.html: no hljs.registerLanguage('fc', ...) block found")
+else:
+    hwords = set()
+    for group in re.findall(r"\\\\b\(([a-z_|0-9]+)\)\\\\b", m.group(0)):
+        hwords.update(group.split("|"))
+    check_editor("spec/fc-spec.html (highlight.js grammar)", hwords)
 
 # Hover docs for built-ins: BUILTIN_DOCS entries are `{ "name", ...`.
 docs = set(re.findall(r'^\s*\{ "([a-z_]+)"', read("src/builtin_docs.inc"), re.M))
