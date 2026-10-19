@@ -51,7 +51,7 @@ typedef struct {
     Flag        *flags;      /* owned array; name/value borrow ExpandedArgs   */
     int          flag_count, flag_cap;
     bool         backtraces;
-    bool         native;     /* --native: x86-64 assembly instead of C */
+    bool         native;     /* --native: an x86-64 object file instead of C */
     int          len_repr;   /* stored slice-len width: 16, 32 or 64 */
     char        *error;      /* owned message if parsing failed, else NULL   */
 } CompileArgs;

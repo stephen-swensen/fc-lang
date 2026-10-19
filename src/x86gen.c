@@ -32,9 +32,23 @@
 #define _DEFAULT_SOURCE
 
 #include "x86gen.h"
+#include "diag.h"
+
+#if !defined(__linux__) || !defined(__x86_64__)
+
+/* The objects are ELF, the calls name the Linux C library's symbols, and the
+ * C header shim runs through /bin/sh, so the backend is built only on Linux
+ * x86-64. Elsewhere the rest of fcc is unaffected and --native is an error. */
+void x86gen_emit(Program *prog, FILE *out, MonoTable *mono,
+                 Arena *arena, InternTable *intern, SymbolTable *symtab) {
+    (void)prog; (void)out; (void)mono; (void)arena; (void)intern; (void)symtab;
+    diag_error((SrcLoc){0}, "--native is supported only on Linux x86-64");
+}
+
+#else /* Linux x86-64: the backend */
+
 #include "x86asm.h"
 #include "facts.h"
-#include "diag.h"
 #include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
@@ -5977,3 +5991,5 @@ done:
     free_cenv();
     free(all);
 }
+
+#endif /* Linux x86-64 */

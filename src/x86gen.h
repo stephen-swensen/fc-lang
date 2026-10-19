@@ -9,6 +9,6 @@
  * backend is an alternative to codegen_emit for fast development builds: the
  * output is linked against the C library with `cc out.o -o prog`, with no
  * assembler. It follows the semantics of the emitted C exactly; it does not
- * optimize. */
+ * optimize. Linux x86-64 only: on any other host it reports an error. */
 void x86gen_emit(Program *prog, FILE *out, MonoTable *mono,
                  Arena *arena, InternTable *intern, SymbolTable *symtab);

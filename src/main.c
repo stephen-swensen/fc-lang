@@ -39,7 +39,8 @@ static void print_usage(FILE *f) {
           "  --backtraces           print an FC backtrace when the program aborts\n"
           "  --len-repr <16|32|64>  stored width of slice lengths (default 64)\n"
           "  --native               write an x86-64 object file (.o) instead of C,\n"
-          "                         for a fast build: cc out.o -o prog (experimental)\n"
+          "                         for a fast build: cc out.o -o prog (experimental;\n"
+          "                         Linux x86-64 only)\n"
           "  --lsp                  run as a language server on stdin/stdout\n"
           "  -V, --version          print version and build information\n"
           "  -h, --help             print this help\n", f);

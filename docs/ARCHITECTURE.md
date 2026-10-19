@@ -209,6 +209,12 @@ cannot see the caller's frame (no pending defer, no address of a local, stack
 slice literal, interpolation buffer, `alloca` or capturing closure in the
 function, all arguments in registers).
 
+The backend is built only on Linux x86-64, since its objects are ELF, its
+calls name the Linux C library's symbols (`stderr`, `__errno_location`) and it
+runs the C compiler through `/bin/sh`. On any other host `x86gen.c` compiles
+to a stub whose `x86gen_emit` reports `--native` as unsupported, and the rest
+of fcc builds and works as usual.
+
 The emitter calls the encoder in `x86asm.c` once per instruction, through
 macros named after the AT&T mnemonics with the operands in AT&T order
 (`movq(R(RAX), fp(off))` is `movq %rax, off(%rbp)`). Each instruction is
