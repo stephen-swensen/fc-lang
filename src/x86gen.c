@@ -28,7 +28,7 @@
  * are callable from C and the debugger. A call in tail position is a jump
  * when nothing in the current frame can be referenced by the callee. */
 
-/* mkdtemp() under -std=c11. Must precede every #include. */
+/* mkdtemp(), mkstemp() and st_mtim under -std=c11. Must precede every #include. */
 #define _DEFAULT_SOURCE
 
 #include "x86gen.h"
@@ -54,6 +54,8 @@ void x86gen_emit(Program *prog, FILE *out, MonoTable *mono,
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <time.h>
 
 /* ================================================================
  * Text buffers (C sources for the probe and shim, format strings) and
@@ -5494,22 +5496,132 @@ static int xp_sym(const char *cname) {
     return s;
 }
 
+/* ---- The C compiler's cache ----
+ * The probe's output and the shim's object are kept in $XDG_CACHE_HOME/fcc
+ * (else ~/.cache/fcc), keyed by the C compiler, the include path and the C
+ * source. An entry also lists every file the compiler read, system headers
+ * included, with its size and times, and is used only while each one is
+ * unchanged: editing a header compiles again. An entry is
+ *     fcc-cache 1
+ *     <size> <mtime s> <mtime ns> <ctime s> <ctime ns> <path>     (per file)
+ *     -
+ *     <the output> */
+
+#define CACHE_MAGIC "fcc-cache 1\n"
+
+static void put_dep(Buf *b, const char *path, const struct stat *st) {
+    buf_printf(b, "%lld %lld %ld %lld %ld %s\n", (long long)st->st_size,
+               (long long)st->st_mtim.tv_sec, (long)st->st_mtim.tv_nsec,
+               (long long)st->st_ctim.tv_sec, (long)st->st_ctim.tv_nsec, path);
+}
+
+/* The output in the cache entry at `path`, with its length in *len; NULL if
+ * there is no entry or a file it lists has changed since. */
+static char *cache_read(const char *path, int *len) {
+    int n = 0;
+    char *e = read_file(path, &n);
+    if (!e) return NULL;
+    size_t ml = strlen(CACHE_MAGIC);
+    bool ok = (size_t)n >= ml && memcmp(e, CACHE_MAGIC, ml) == 0;
+    char *p = e + ml, *end = e + n;
+    Buf now = { 0 };
+    while (ok) {
+        char *eol = memchr(p, '\n', (size_t)(end - p));
+        if (!eol) { ok = false; break; }
+        if (eol - p == 1 && *p == '-') { p = eol + 1; break; }
+        /* the path follows five numbers; the line must read the same now */
+        char *q = p;
+        for (int i = 0; i < 5 && q; i++) {
+            q = memchr(q, ' ', (size_t)(eol - q));
+            if (q) q++;
+        }
+        char *dep = q ? str_ndup(q, (size_t)(eol - q)) : NULL;
+        struct stat st;
+        now.len = 0;
+        ok = dep && stat(dep, &st) == 0;
+        if (ok) {
+            put_dep(&now, dep, &st);
+            ok = now.len == (size_t)(eol + 1 - p) && memcmp(now.p, p, now.len) == 0;
+        }
+        free(dep);
+        p = eol + 1;
+    }
+    buf_free(&now);
+    if (!ok) { free(e); return NULL; }
+    *len = (int)(end - p);
+    memmove(e, p, (size_t)*len);
+    e[*len] = '\0';
+    return e;
+}
+
+/* Append an entry line to *b for each file the dependency file `depfile`
+ * (written by -MD -MT x) lists, except those under `skip`, the work
+ * directory. False if one cannot be read, or was changed too close to `start`,
+ * when the compiler began: it may have changed while the compiler read it. */
+static bool cache_deps(const char *depfile, const char *skip, time_t start, Buf *b) {
+    char *d = read_file(depfile, NULL);
+    bool ok = d && strncmp(d, "x:", 2) == 0;
+    Buf name = { 0 };
+    for (const char *p = ok ? d + 2 : ""; ok; ) {
+        while (*p == ' ' || *p == '\t' || *p == '\n' || (*p == '\\' && p[1] == '\n'))
+            p += *p == '\\' ? 2 : 1;
+        if (!*p) break;
+        /* a name, in make's quoting: "\ " and "\#" for the character, "$$" for '$' */
+        name.len = 0;
+        for (; *p && *p != ' ' && *p != '\t' && *p != '\n' && !(*p == '\\' && p[1] == '\n'); p++) {
+            if ((*p == '\\' && (p[1] == ' ' || p[1] == '#')) || (*p == '$' && p[1] == '$')) p++;
+            buf_put(&name, p, 1);
+        }
+        if (strncmp(name.p, skip, strlen(skip)) == 0) continue;
+        struct stat st;
+        ok = stat(name.p, &st) == 0 && st.st_mtim.tv_sec < start - 1 && st.st_ctim.tv_sec < start - 1;
+        if (ok) put_dep(b, name.p, &st);
+    }
+    buf_free(&name);
+    free(d);
+    return ok;
+}
+
+/* Write a cache entry whole: into a new file beside it, renamed over it, so
+ * an fcc running alongside never reads part of one. */
+static void cache_write(const char *dir, const char *path, const Buf *entry) {
+    char *mk = str_sprintf("mkdir -p '%s'", dir);
+    bool have_dir = system(mk) == 0;
+    free(mk);
+    if (!have_dir) return;
+    char *tmp = str_sprintf("%s.XXXXXX", path);
+    int fd = mkstemp(tmp);
+    if (fd >= 0) {
+        FILE *f = fdopen(fd, "wb");
+        bool ok = f && fwrite(entry->p, 1, entry->len, f) == entry->len;
+        if (f) ok = fclose(f) == 0 && ok;
+        else close(fd);
+        if (!ok || rename(tmp, path) != 0) remove(tmp);
+    }
+    free(tmp);
+}
+
 /* Compile C source `src` with the program's include path and return the
  * output: the program's stdout ("probe") or the relocatable object ("shim"),
- * with its length in *len. Cached by the source, so the C compiler runs only
- * when it changes. NULL on failure (reported). */
+ * with its length in *len. Cached, so the C compiler runs only when the
+ * source or a header it includes changes. NULL on failure (reported). */
 static char *cc_cached(const char *kind, Buf *src, int *len) {
-    bool object = strcmp(kind, "shim") == 0;
-    uint64_t h = hash_bytes(src->p, src->len);
-    h ^= hash_bytes(g_ciflags.p ? g_ciflags.p : "", g_ciflags.len) * 31;
-    h ^= hash_bytes(kind, strlen(kind)) * 131;
+    const char *cc = getenv("CC");
+    if (!cc || !*cc) cc = "cc";
+    const char *ifl = g_ciflags.p ? g_ciflags.p : "";
+    Buf key = { 0 };
+    buf_puts(&key, kind); buf_put(&key, "", 1);
+    buf_puts(&key, cc); buf_put(&key, "", 1);
+    buf_puts(&key, ifl); buf_put(&key, "", 1);
+    buf_put(&key, src->p, src->len);
+    uint64_t h = hash_bytes(key.p, key.len);
+    buf_free(&key);
     const char *xdg = getenv("XDG_CACHE_HOME");
     const char *home = getenv("HOME");
     char *cache_dir = xdg && *xdg ? str_sprintf("%s/fcc", xdg)
                     : str_sprintf("%s/.cache/fcc", home ? home : "/tmp");
-    char *cache = str_sprintf("%s/%s-%016llx.%s", cache_dir, kind, (unsigned long long)h,
-                              object ? "o" : "txt");
-    char *text = read_file(cache, len);
+    char *cache = str_sprintf("%s/%s-%016llx", cache_dir, kind, (unsigned long long)h);
+    char *text = cache_read(cache, len);
     if (text) { free(cache); free(cache_dir); return text; }
     const char *tmp = getenv("TMPDIR");
     char *work = str_sprintf("%s/fcc-%s-XXXXXX", tmp && *tmp ? tmp : "/tmp", kind);
@@ -5521,14 +5633,13 @@ static char *cc_cached(const char *kind, Buf *src, int *len) {
     char *cpath = str_sprintf("%s/x.c", work);
     FILE *f = fopen(cpath, "w");
     if (f) { fwrite(src->p, 1, src->len, f); fclose(f); }
-    const char *cc = getenv("CC");
-    if (!cc || !*cc) cc = "cc";
-    const char *ifl = g_ciflags.p ? g_ciflags.p : "";
     char *cmd = strcmp(kind, "probe") == 0
-        ? str_sprintf("%s -w -o '%s/x' '%s'%s 2>'%s/err' && '%s/x' >'%s/out'",
-                      cc, work, cpath, ifl, work, work, work)
-        : str_sprintf("%s -w -c -O1 -fPIC -fno-asynchronous-unwind-tables -o '%s/out' '%s'%s 2>'%s/err'",
-                      cc, work, cpath, ifl, work);
+        ? str_sprintf("%s -w -MD -MF '%s/deps' -MT x -o '%s/x' '%s'%s 2>'%s/err' && '%s/x' >'%s/out'",
+                      cc, work, work, cpath, ifl, work, work, work)
+        : str_sprintf("%s -w -c -O1 -fPIC -fno-asynchronous-unwind-tables -MD -MF '%s/deps' -MT x "
+                      "-o '%s/out' '%s'%s 2>'%s/err'",
+                      cc, work, work, cpath, ifl, work);
+    time_t start = time(NULL);
     int rc = system(cmd);
     if (rc != 0) {
         char *errp = str_sprintf("%s/err", work);
@@ -5541,16 +5652,21 @@ static char *cc_cached(const char *kind, Buf *src, int *len) {
         text = read_file(outp, len);
         free(outp);
         if (text) {
-            char *mk = str_sprintf("mkdir -p '%s'", cache_dir);
-            if (system(mk) == 0) {
-                FILE *cf = fopen(cache, "wb");
-                if (cf) { fwrite(text, 1, (size_t)*len, cf); fclose(cf); }
+            Buf entry = { 0 };
+            buf_puts(&entry, CACHE_MAGIC);
+            char *depf = str_sprintf("%s/deps", work);
+            char *skip = str_sprintf("%s/", work);
+            if (cache_deps(depf, skip, start, &entry)) {
+                buf_puts(&entry, "-\n");
+                buf_put(&entry, text, (size_t)*len);
+                cache_write(cache_dir, cache, &entry);
             }
-            free(mk);
+            free(skip); free(depf);
+            buf_free(&entry);
         }
     }
-    char *rm = str_sprintf("rm -f '%s/x' '%s/x.c' '%s/err' '%s/out'; rmdir '%s'",
-                           work, work, work, work, work);
+    char *rm = str_sprintf("rm -f '%s/x' '%s/x.c' '%s/err' '%s/out' '%s/deps'; rmdir '%s'",
+                           work, work, work, work, work, work);
     if (system(rm) != 0) { /* leftovers in TMPDIR are harmless */ }
     free(rm); free(cmd); free(cpath); free(work); free(cache); free(cache_dir);
     return text;

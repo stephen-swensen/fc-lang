@@ -240,10 +240,16 @@ and run once, prints each extern constant the program uses and the layout of
 each extern struct field it uses (a bit field, or a member wider or narrower
 than its FC type, is read and written with conversion). Functions defined in
 a header beside the sources are compiled by the C compiler into a shim
-object of function pointers, which is merged into the output. Both are cached by their source in
-`$XDG_CACHE_HOME/fcc` (`~/.cache/fcc`), so the C compiler runs only when the
-declarations change. `--backtraces` and a `--len-repr` other than 64 are not
-supported yet.
+object of function pointers, which is merged into the output. Both are cached
+in `$XDG_CACHE_HOME/fcc` (`~/.cache/fcc`), keyed by the C compiler, the
+include path and the C source. Each entry lists every file the compiler read
+(from `-MD`), with its size and times, and is used only while all of them are
+unchanged, so the C compiler runs again when the declarations or a header
+change. A result is not cached when a file it read changed in the second or
+two before the compile, since the compiler may have seen it mid-edit.
+Entries are written to a temporary file and renamed into place, so parallel
+builds never read a partial one. `--backtraces` and a `--len-repr` other than
+64 are not supported yet.
 
 ## Invariants
 
