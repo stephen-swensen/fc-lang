@@ -77,6 +77,7 @@ The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 | `facts.c/h` | Facts about expressions that pass2 judges by and codegen emits by, so the two agree: which operations `checked` and `unguarded` govern, which functions are static (`fn_static_target`: constants, and the only functions that cross to C), whether a pointer or integer is provably null/non-zero, error-constant values, and how interpolated-string segments are sized. |
 | `monomorph.c/h` | The instance table (`mono_register`), transitive discovery, and the finalize step that resolves instance type names. |
 | `codegen.c/h` | The C emitter. |
+| `x86gen.c/h` | The native x86-64 emitter (`--native`, experimental): GNU assembler text for Linux, linked against the C library. See [Native backend](#native-backend). |
 | `diag.c/h` | Error reporting. In server mode it reports to a sink and turns a fatal error into a `longjmp`. |
 | `common.c/h` | The arena allocator; the `xmalloc`/`xcalloc`/`xrealloc` wrappers, which exit on out-of-memory; growable arrays (`DA_APPEND`); exact-size string builders; the intern table (the parser interns every name, so names compare by pointer); file reading; name helpers shared by several passes (`c_safe_ident`, `is_mangled_root_name`, `mangled_source_name`, `ns_display`); string-literal decoding and the one escape table (`simple_escape_byte`); the one format-spec reader and conversion table (`interp_spec_scan`, `interp_conv_class`), shared by the lexer, facts and codegen; and `g_len_repr`, the `--len-repr` setting. |
 | `analyze.c/h` | The non-fatal front end used by the language server. |
@@ -192,6 +193,37 @@ body is written first, into the output file itself; the headers the preamble
 includes and the runtime helpers it defines are then chosen by what the body
 uses (`scan_body_needs`), and the file is rewritten as preamble, runtime
 support, body. No emitter reports what it needs.
+
+### Native backend
+
+`fcc --native` replaces `codegen_emit` with `x86gen_emit`, which writes x86-64
+assembly (AT&T syntax, System V ABI, position-independent) for a fast
+development build: `cc out.s -o prog` assembles and links it with no C
+compilation. It walks the same typed, monomorphized AST as the C emitter and
+must mean exactly what the emitted C means; `make test-native` runs the suite
+through it. It does not optimize, so its code runs at roughly `gcc -O0`
+speed, except that a call in tail position is a jump whenever the callee
+cannot see the caller's frame (no pending defer, no address of a local, stack
+slice literal, interpolation buffer, `alloca` or capturing closure in the
+function, all arguments in registers).
+
+Values: an integer, bool, enum, pointer or null-sentinel option is in `%rax`,
+sign- or zero-extended to 64 bits by its type; a float is in `%xmm0`; every
+aggregate is in memory and `%rax` holds its address. Every binding and
+temporary has a fixed `%rbp`-relative slot, and nothing is pushed, so `%rsp`
+stays 16-byte aligned throughout a body. Layouts follow the C rules, so FC
+types and C types agree at the boundary; FC functions use the System V
+calling convention, with the context pointer as a trailing argument.
+
+What only a C header knows comes from a probe: a small C program, compiled
+and run once, prints each extern constant the program uses and the layout of
+each extern struct field it uses (a bit field, or a member wider or narrower
+than its FC type, is read and written with conversion). Functions defined in
+a header beside the sources are compiled by the C compiler into a shim of
+function pointers appended to the output. Both are cached by their source in
+`$XDG_CACHE_HOME/fcc` (`~/.cache/fcc`), so the C compiler runs only when the
+declarations change. `--backtraces` and a `--len-repr` other than 64 are not
+supported yet.
 
 ## Invariants
 

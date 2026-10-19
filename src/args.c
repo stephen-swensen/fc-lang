@@ -413,6 +413,8 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
             }
         } else if (strcmp(a, "--backtraces") == 0) {
             out->backtraces = true;
+        } else if (strcmp(a, "--native") == 0) {
+            out->native = true;
         } else if (strcmp(a, "--flag") == 0) {
             const char *arg = e->tokens[++i];      /* borrowed: name/value point into e */
             const char *eq = strchr(arg, '=');

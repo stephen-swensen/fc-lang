@@ -84,6 +84,13 @@ run_one_test() {
     src_dir="$(dirname "$(echo $fc_args | awk '{print $1}')")"
     local fcc_cmd="$FCC $fc_args${FCC_EXTRA_ARGS:+ $FCC_EXTRA_ARGS} -o $c_file"
     local cc_cmd="$CC -std=c11 -Wall -Werror${CC_OPT:+ $CC_OPT} -I $src_dir -o $bin_file $c_file -lm${EXTRA_LIBS:+ $EXTRA_LIBS}"
+    # NATIVE=1: the native backend writes assembly, which cc assembles and
+    # links (no C compilation).
+    if [ -n "${NATIVE:-}" ]; then
+        c_file="$TMPDIR/${slug}.s"
+        fcc_cmd="$FCC --native $fc_args${FCC_EXTRA_ARGS:+ $FCC_EXTRA_ARGS} -o $c_file"
+        cc_cmd="$CC -o $bin_file $c_file -lm${EXTRA_LIBS:+ $EXTRA_LIBS}"
+    fi
 
     # How to repeat the failing steps by hand, from the repository root. The
     # work directory is gone after the run, so the commands write to /tmp.
@@ -193,7 +200,7 @@ run_one_test() {
 }
 
 export -f run_one_test exit_matches
-export FCC CC CC_OPT FCC_EXTRA_ARGS TMPDIR EXTRA_LIBS IS_WINDOWS
+export FCC CC CC_OPT FCC_EXTRA_ARGS TMPDIR EXTRA_LIBS IS_WINDOWS NATIVE
 
 # List every test, one per line: name|fcc args|error|exit|stderr_contains|skip.
 # The last field names why this run skips the test, or is empty.

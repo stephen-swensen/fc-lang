@@ -4,6 +4,7 @@
 #include "pass1.h"
 #include "pass2.h"
 #include "codegen.h"
+#include "x86gen.h"
 #include "monomorph.h"
 #include "diag.h"
 #include "platform.h"
@@ -37,6 +38,8 @@ static void print_usage(FILE *f) {
           "  --no-auto-detect       don't set the host's os/arch/env flags\n"
           "  --backtraces           print an FC backtrace when the program aborts\n"
           "  --len-repr <16|32|64>  stored width of slice lengths (default 64)\n"
+          "  --native               write x86-64 assembly (.s) instead of C, for a\n"
+          "                         fast build: cc out.s -o prog (experimental)\n"
           "  --lsp                  run as a language server on stdin/stdout\n"
           "  -V, --version          print version and build information\n"
           "  -h, --help             print this help\n", f);
@@ -183,7 +186,7 @@ int main(int argc, char **argv) {
 
     /* Code generation */
     if (!output_path) {
-        output_path = change_extension(input_paths[0], ".c");
+        output_path = change_extension(input_paths[0], ca.native ? ".s" : ".c");
     }
 
     /* Opened for update: codegen writes the body, reads it back to choose the
@@ -193,8 +196,15 @@ int main(int argc, char **argv) {
         diag_fatal_simple("cannot open output '%s'", output_path);
     }
 
-    CodegenOptions cg_opts = { .backtraces = backtraces };
-    codegen_emit(prog, out, &mono, &arena, &intern_table, &symtab, &cg_opts);
+    if (ca.native) {
+        if (backtraces)
+            diag_error((SrcLoc){0}, "--backtraces is not supported by the native backend");
+        else
+            x86gen_emit(prog, out, &mono, &arena, &intern_table, &symtab);
+    } else {
+        CodegenOptions cg_opts = { .backtraces = backtraces };
+        codegen_emit(prog, out, &mono, &arena, &intern_table, &symtab, &cg_opts);
+    }
     fclose(out);
 
     if (diag_error_count() > 0) {
