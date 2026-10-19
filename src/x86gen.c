@@ -1,10 +1,11 @@
 /* x86gen.c: the native x86-64 backend.
  *
  * An alternative to the C emitter for fast development builds. It walks the
- * same typed, monomorphized AST that codegen.c walks and writes GNU assembler
- * text (AT&T syntax) for x86-64 System V, position-independent, so the result
- * links against the C library with a plain `cc out.s`. It does not optimize;
- * its job is to mean exactly what the emitted C means, quickly.
+ * same typed, monomorphized AST that codegen.c walks and emits x86-64 machine
+ * code for System V, position-independent, as an ELF relocatable object
+ * (through x86asm.c), so the result links against the C library with a plain
+ * `cc out.o`. No assembly text is written and no assembler runs. It does not
+ * optimize; its job is to mean exactly what the emitted C means, quickly.
  *
  * Value model. Every expression leaves its value in a fixed place:
  *   - an integer, bool, enum, pointer or null-sentinel option: %rax, sign- or
@@ -31,6 +32,7 @@
 #define _DEFAULT_SOURCE
 
 #include "x86gen.h"
+#include "x86asm.h"
 #include "facts.h"
 #include "diag.h"
 #include <inttypes.h>
@@ -40,7 +42,8 @@
 #include <unistd.h>
 
 /* ================================================================
- * Output buffers
+ * Text buffers (C sources for the probe and shim, format strings) and
+ * the code buffers
  * ================================================================ */
 
 typedef struct { char *p; size_t len, cap; } Buf;
@@ -84,37 +87,89 @@ static void buf_printf(Buf *b, const char *fmt, ...) {
 
 static void buf_free(Buf *b) { free(b->p); b->p = NULL; b->len = b->cap = 0; }
 
-static Buf *g_cur;          /* where instructions go */
-static Buf g_fnbody;        /* the body of the function being emitted */
-static Buf g_cold;          /* its out-of-line failure paths */
-static Buf g_text;          /* finished functions */
-static Buf g_rodata;        /* strings and read-only constants */
-static Buf g_relro;         /* constants holding addresses */
-static Buf g_data;          /* writable initialized globals */
-static Buf g_bss;           /* zero-initialized globals */
+static Code *g_cur;         /* where instructions go */
+static Code g_fnbody;       /* the body of the function being emitted */
+static Code g_cold;         /* its out-of-line failure paths */
+static Code g_text;         /* finished functions */
 
-/* One instruction, tab-indented. */
-static void ins(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    buf_put(g_cur, "\t", 1);
-    buf_vprintf(g_cur, fmt, ap);
-    buf_put(g_cur, "\n", 1);
-    va_end(ap);
-}
+/* The instructions by their AT&T mnemonics, operands in AT&T order (source
+ * first), into the current buffer. */
+#define movq(s, d)      x_mov(g_cur, 8, s, d)
+#define movl(s, d)      x_mov(g_cur, 4, s, d)
+#define movw(s, d)      x_mov(g_cur, 2, s, d)
+#define movb(s, d)      x_mov(g_cur, 1, s, d)
+#define movd(s, d)      x_mov(g_cur, 4, s, d)
+#define movabsq(v, d)   x_movabs(g_cur, v, d)
+#define leaq(s, d)      x_lea(g_cur, s, d)
+#define addq(s, d)      x_alu(g_cur, ALU_ADD, 8, s, d)
+#define addl(s, d)      x_alu(g_cur, ALU_ADD, 4, s, d)
+#define subq(s, d)      x_alu(g_cur, ALU_SUB, 8, s, d)
+#define andq(s, d)      x_alu(g_cur, ALU_AND, 8, s, d)
+#define andl(s, d)      x_alu(g_cur, ALU_AND, 4, s, d)
+#define andb(s, d)      x_alu(g_cur, ALU_AND, 1, s, d)
+#define orq(s, d)       x_alu(g_cur, ALU_OR, 8, s, d)
+#define orb(s, d)       x_alu(g_cur, ALU_OR, 1, s, d)
+#define xorq(s, d)      x_alu(g_cur, ALU_XOR, 8, s, d)
+#define xorl(s, d)      x_alu(g_cur, ALU_XOR, 4, s, d)
+#define cmpq(s, d)      x_alu(g_cur, ALU_CMP, 8, s, d)
+#define cmpl(s, d)      x_alu(g_cur, ALU_CMP, 4, s, d)
+#define cmpb(s, d)      x_alu(g_cur, ALU_CMP, 1, s, d)
+#define testq(s, d)     x_test(g_cur, 8, s, d)
+#define testl(s, d)     x_test(g_cur, 4, s, d)
+#define testb(s, d)     x_test(g_cur, 1, s, d)
+#define imulq(s, d)     x_imul(g_cur, 8, s, d)
+#define imulq3(v, s, d) x_imul3(g_cur, 8, v, s, d)
+#define shlq(n, d)      x_shift(g_cur, SH_SHL, 8, n, d)
+#define shrq(n, d)      x_shift(g_cur, SH_SHR, 8, n, d)
+#define sarq(n, d)      x_shift(g_cur, SH_SAR, 8, n, d)
+#define negq(d)         x_unary(g_cur, UN_NEG, 8, d)
+#define notq(d)         x_unary(g_cur, UN_NOT, 8, d)
+#define incq(d)         x_unary(g_cur, UN_INC, 8, d)
+#define mulq(d)         x_unary(g_cur, UN_MUL, 8, d)
+#define divq(d)         x_unary(g_cur, UN_DIV, 8, d)
+#define idivq(d)        x_unary(g_cur, UN_IDIV, 8, d)
+#define movzbl(s, d)    x_movx(g_cur, 1, 4, false, s, d)
+#define movzwl(s, d)    x_movx(g_cur, 2, 4, false, s, d)
+#define movsbq(s, d)    x_movx(g_cur, 1, 8, true, s, d)
+#define movswq(s, d)    x_movx(g_cur, 2, 8, true, s, d)
+#define movslq(s, d)    x_movx(g_cur, 4, 8, true, s, d)
+#define setcc(cc, d)    x_setcc(g_cur, cc, d)
+#define cmovq(cc, s, d) x_cmov(g_cur, cc, 8, s, d)
+#define btcq(n, d)      x_btc(g_cur, 8, n, d)
+#define sse(op, s, d)   x_sse(g_cur, op, s, d)
+#define movss(s, d)     sse(SSE_MOVSS, s, d)
+#define movsd(s, d)     sse(SSE_MOVSD, s, d)
+#define movaps(s, d)    sse(SSE_MOVAPS, s, d)
+#define xorps(s, d)     sse(SSE_XORPS, s, d)
+#define addss(s, d)     sse(SSE_ADDSS, s, d)
+#define addsd(s, d)     sse(SSE_ADDSD, s, d)
+#define subsd(s, d)     sse(SSE_SUBSD, s, d)
+#define ucomisd(s, d)   sse(SSE_UCOMISD, s, d)
+#define ucomiss(s, d)   sse(SSE_UCOMISS, s, d)
+#define cvtss2sd(s, d)  sse(SSE_CVTSS2SD, s, d)
+#define cvtsd2ss(s, d)  sse(SSE_CVTSD2SS, s, d)
+#define cvttsd2siq(s, d) sse(SSE_CVTTSD2SIQ, s, d)
+#define cvtsi2sdq(s, d) sse(SSE_CVTSI2SDQ, s, d)
+#define cvtsi2ssq(s, d) sse(SSE_CVTSI2SSQ, s, d)
+#define cqo()           x_op0(g_cur, OP_CQO)
+#define leave()         x_op0(g_cur, OP_LEAVE)
+#define mfence()        x_op0(g_cur, OP_MFENCE)
+#define rep_movsb()     x_op0(g_cur, OP_REP_MOVSB)
+#define rep_stosb()     x_op0(g_cur, OP_REP_STOSB)
+#define jmp(l)          x_jmp(g_cur, l)
+#define jcc(cc, l)      x_jcc(g_cur, cc, l)
+#define jmp_sym(name)   x_jmp(g_cur, asm_sym(name))
+#define jmp_plt(name)   x_jmp_plt(g_cur, asm_sym(name))
+#define jmp_ind(t)      x_jmp_ind(g_cur, t)
+#define call_sym(name)  x_call(g_cur, asm_sym(name), false)
+#define call_plt(name)  x_call(g_cur, asm_sym(name), true)
+#define call_ind(t)     x_call_ind(g_cur, t)
 
-static int g_label_counter = 0;
-static int new_label(void) { return ++g_label_counter; }
-static void label(int l) { buf_printf(g_cur, ".Lq%d:\n", l); }
+static int new_label(void) { return asm_label(); }
+static void label(int l) { x_label(g_cur, l); }
 
-/* `off(%rbp)` from a small ring, so several fit in one ins() call. */
-static const char *fp(int32_t off) {
-    static char ring[8][24];
-    static int k = 0;
-    char *s = ring[k++ & 7];
-    snprintf(s, 24, "%d(%%rbp)", (int)off);
-    return s;
-}
+/* `off(%rbp)`: a frame slot. */
+static Opnd fp(int32_t off) { return M(RBP, off); }
 
 /* ================================================================
  * String-keyed hash map
@@ -834,108 +889,103 @@ static void local_bind(const char *name, int32_t off) {
 
 /* ---- Loads, stores, normalization ---- */
 
-static const char *reg_for_width(int w) {
-    return w == 1 ? "%al" : w == 2 ? "%ax" : w == 4 ? "%eax" : "%rax";
-}
-
 /* Re-extend %rax to canonical form for VK_INT type t. */
 static void normalize(Type *t) {
     int w = int_width(t);
     bool s = int_signed(t);
-    if (conc(t)->kind == TYPE_BOOL) { ins("movzbl %%al, %%eax"); return; }
+    if (conc(t)->kind == TYPE_BOOL) { movzbl(R(RAX), R(RAX)); return; }
     switch (w) {
-    case 1: ins(s ? "movsbq %%al, %%rax" : "movzbl %%al, %%eax"); break;
-    case 2: ins(s ? "movswq %%ax, %%rax" : "movzwl %%ax, %%eax"); break;
-    case 4: ins(s ? "movslq %%eax, %%rax" : "movl %%eax, %%eax"); break;
+    case 1: (s ? movsbq(R(RAX), R(RAX)) : movzbl(R(RAX), R(RAX))); break;
+    case 2: (s ? movswq(R(RAX), R(RAX)) : movzwl(R(RAX), R(RAX))); break;
+    case 4: (s ? movslq(R(RAX), R(RAX)) : movl(R(RAX), R(RAX))); break;
     default: break;
     }
 }
 
-static void load_int(Type *t, const char *mem) {
+static void load_int(Type *t, Opnd mem) {
     int w = int_width(t);
     bool s = int_signed(t);
     switch (w) {
-    case 1: ins(s ? "movsbq %s, %%rax" : "movzbl %s, %%eax", mem); break;
-    case 2: ins(s ? "movswq %s, %%rax" : "movzwl %s, %%eax", mem); break;
-    case 4: ins(s ? "movslq %s, %%rax" : "movl %s, %%eax", mem); break;
-    default: ins("movq %s, %%rax", mem); break;
+    case 1: (s ? movsbq(mem, R(RAX)) : movzbl(mem, R(RAX))); break;
+    case 2: (s ? movswq(mem, R(RAX)) : movzwl(mem, R(RAX))); break;
+    case 4: (s ? movslq(mem, R(RAX)) : movl(mem, R(RAX))); break;
+    default: movq(mem, R(RAX)); break;
     }
 }
 
-static void store_int(Type *t, const char *mem) {
-    ins("mov %s, %s", reg_for_width(int_width(t)), mem);
+static void store_int(Type *t, Opnd mem) {
+    x_mov(g_cur, int_width(t), R(RAX), mem);
 }
 
 /* Load the value of type t stored at mem into the value registers (an
  * aggregate's address into %rax). */
-static void load_val(Type *t, const char *mem) {
+static void load_val(Type *t, Opnd mem) {
     switch (val_kind(t)) {
     case VK_INT: load_int(t, mem); break;
-    case VK_FLOAT: ins(is_f32(t) ? "movss %s, %%xmm0" : "movsd %s, %%xmm0", mem); break;
-    case VK_AGG: ins("leaq %s, %%rax", mem); break;
+    case VK_FLOAT: (is_f32(t) ? movss(mem, X(0)) : movsd(mem, X(0))); break;
+    case VK_AGG: leaq(mem, R(RAX)); break;
     case VK_VOID: break;
     }
 }
 
 /* Copy `size` bytes from src_off(%src) to dst_off(%dst). Scratch: %r11, and
  * %rsi/%rdi/%rcx for large copies. */
-static void copy_mem(const char *dst, int64_t dst_off, const char *src, int64_t src_off, int64_t size) {
+static void copy_mem(Reg dst, int64_t dst_off, Reg src, int64_t src_off, int64_t size) {
     if (size <= 0) return;
     if (size > 128) {
-        ins("leaq %lld(%s), %%r11", (long long)src_off, src);
-        ins("leaq %lld(%s), %%rdi", (long long)dst_off, dst);
-        ins("movq %%r11, %%rsi");
-        ins("movq $%lld, %%rcx", (long long)size);
-        ins("rep movsb");
+        leaq(M(src, src_off), R(R11));
+        leaq(M(dst, dst_off), R(RDI));
+        movq(R(R11), R(RSI));
+        movq(IMM(size), R(RCX));
+        rep_movsb();
         return;
     }
     int64_t i = 0;
     for (; i + 8 <= size; i += 8) {
-        ins("movq %lld(%s), %%r11", (long long)(src_off + i), src);
-        ins("movq %%r11, %lld(%s)", (long long)(dst_off + i), dst);
+        movq(M(src, (src_off + i)), R(R11));
+        movq(R(R11), M(dst, (dst_off + i)));
     }
     if (i + 4 <= size) {
-        ins("movl %lld(%s), %%r11d", (long long)(src_off + i), src);
-        ins("movl %%r11d, %lld(%s)", (long long)(dst_off + i), dst);
+        movl(M(src, (src_off + i)), R(R11));
+        movl(R(R11), M(dst, (dst_off + i)));
         i += 4;
     }
     if (i + 2 <= size) {
-        ins("movw %lld(%s), %%r11w", (long long)(src_off + i), src);
-        ins("movw %%r11w, %lld(%s)", (long long)(dst_off + i), dst);
+        movw(M(src, (src_off + i)), R(R11));
+        movw(R(R11), M(dst, (dst_off + i)));
         i += 2;
     }
     if (i < size) {
-        ins("movb %lld(%s), %%r11b", (long long)(src_off + i), src);
-        ins("movb %%r11b, %lld(%s)", (long long)(dst_off + i), dst);
+        movb(M(src, (src_off + i)), R(R11));
+        movb(R(R11), M(dst, (dst_off + i)));
     }
 }
 
 /* Zero `size` bytes at off(%base). Large fills clobber %rax, %rcx, %rdi. */
-static void zero_mem(const char *base, int64_t off, int64_t size) {
+static void zero_mem(Reg base, int64_t off, int64_t size) {
     if (size <= 0) return;
     if (size > 128) {
-        ins("leaq %lld(%s), %%rdi", (long long)off, base);
-        ins("xorl %%eax, %%eax");
-        ins("movq $%lld, %%rcx", (long long)size);
-        ins("rep stosb");
+        leaq(M(base, off), R(RDI));
+        xorl(R(RAX), R(RAX));
+        movq(IMM(size), R(RCX));
+        rep_stosb();
         return;
     }
     int64_t i = 0;
-    for (; i + 8 <= size; i += 8) ins("movq $0, %lld(%s)", (long long)(off + i), base);
-    if (i + 4 <= size) { ins("movl $0, %lld(%s)", (long long)(off + i), base); i += 4; }
-    if (i + 2 <= size) { ins("movw $0, %lld(%s)", (long long)(off + i), base); i += 2; }
-    if (i < size) ins("movb $0, %lld(%s)", (long long)(off + i), base);
+    for (; i + 8 <= size; i += 8) movq(IMM(0), M(base, (off + i)));
+    if (i + 4 <= size) { movl(IMM(0), M(base, (off + i))); i += 4; }
+    if (i + 2 <= size) { movw(IMM(0), M(base, (off + i))); i += 2; }
+    if (i < size) movb(IMM(0), M(base, (off + i)));
 }
 
 /* Store the current value (registers, or the aggregate at (%rax)) into
  * off(%base). The base must not be %rax for an aggregate, nor %r11. */
-static void store_val(Type *t, const char *base, int64_t off) {
-    char mem[48];
-    snprintf(mem, sizeof mem, "%lld(%s)", (long long)off, base);
+static void store_val(Type *t, Reg base, int64_t off) {
+    Opnd mem = M(base, off);
     switch (val_kind(t)) {
     case VK_INT: store_int(t, mem); break;
-    case VK_FLOAT: ins(is_f32(t) ? "movss %%xmm0, %s" : "movsd %%xmm0, %s", mem); break;
-    case VK_AGG: copy_mem(base, off, "%rax", 0, ty_size(t)); break;
+    case VK_FLOAT: (is_f32(t) ? movss(X(0), mem) : movsd(X(0), mem)); break;
+    case VK_AGG: copy_mem(base, off, RAX, 0, ty_size(t)); break;
     case VK_VOID: break;
     }
 }
@@ -953,83 +1003,79 @@ static void bit_window(ExtField *x, int64_t *wlo, int *wbytes, int *shift) {
     *shift = (int)(x->bit_off - lo * 8);
 }
 
-static void load_window_r11(int w, const char *mem) {
+static void load_window_r11(int w, Opnd mem) {
     switch (w) {
-    case 1: ins("movzbl %s, %%r11d", mem); break;
-    case 2: ins("movzwl %s, %%r11d", mem); break;
-    case 4: ins("movl %s, %%r11d", mem); break;
-    default: ins("movq %s, %%r11", mem); break;
+    case 1: movzbl(mem, R(R11)); break;
+    case 2: movzwl(mem, R(R11)); break;
+    case 4: movl(mem, R(R11)); break;
+    default: movq(mem, R(R11)); break;
     }
 }
 
 /* Load the field at (struct_off, field_off) from `base` into %rax as its FC
  * type. The base must not be %rax, %rcx, %rdi or %r11. */
-static void load_ext_field(Type *ft, ExtField *x, const char *base, int64_t struct_off, int64_t field_off) {
-    char mem[48];
+static void load_ext_field(Type *ft, ExtField *x, Reg base, int64_t struct_off, int64_t field_off) {
     if (!x->is_bit) {
-        snprintf(mem, sizeof mem, "%lld(%s)", (long long)field_off, base);
+        Opnd mem = M(base, field_off);
         switch (x->csize) {
-        case 1: ins(x->csigned ? "movsbq %s, %%rax" : "movzbl %s, %%eax", mem); break;
-        case 2: ins(x->csigned ? "movswq %s, %%rax" : "movzwl %s, %%eax", mem); break;
-        case 4: ins(x->csigned ? "movslq %s, %%rax" : "movl %s, %%eax", mem); break;
-        default: ins("movq %s, %%rax", mem); break;
+        case 1: (x->csigned ? movsbq(mem, R(RAX)) : movzbl(mem, R(RAX))); break;
+        case 2: (x->csigned ? movswq(mem, R(RAX)) : movzwl(mem, R(RAX))); break;
+        case 4: (x->csigned ? movslq(mem, R(RAX)) : movl(mem, R(RAX))); break;
+        default: movq(mem, R(RAX)); break;
         }
         normalize(ft);
         return;
     }
     int64_t wlo; int w, shift;
     bit_window(x, &wlo, &w, &shift);
-    snprintf(mem, sizeof mem, "%lld(%s)", (long long)(struct_off + wlo), base);
-    load_window_r11(w, mem);
-    if (shift) ins("shrq $%d, %%r11", shift);
+    load_window_r11(w, M(base, struct_off + wlo));
+    if (shift) shrq(IMM(shift), R(R11));
     int up = 64 - (int)x->bit_width;
     if (up > 0) {
-        ins("shlq $%d, %%r11", up);
-        ins(x->csigned ? "sarq $%d, %%r11" : "shrq $%d, %%r11", up);
+        shlq(IMM(up), R(R11));
+        (x->csigned ? sarq(IMM(up), R(R11)) : shrq(IMM(up), R(R11)));
     }
-    ins("movq %%r11, %%rax");
+    movq(R(R11), R(RAX));
     normalize(ft);
 }
 
 /* Store %rax (an FC value) into the field. Same register rules. */
-static void store_ext_field(ExtField *x, const char *base, int64_t struct_off, int64_t field_off) {
-    char mem[48];
+static void store_ext_field(ExtField *x, Reg base, int64_t struct_off, int64_t field_off) {
     if (!x->is_bit) {
-        snprintf(mem, sizeof mem, "%lld(%s)", (long long)field_off, base);
-        ins("mov %s, %s", reg_for_width((int)x->csize), mem);
+        x_mov(g_cur, (int)x->csize, R(RAX), M(base, field_off));
         return;
     }
     int64_t wlo; int w, shift;
     bit_window(x, &wlo, &w, &shift);
-    snprintf(mem, sizeof mem, "%lld(%s)", (long long)(struct_off + wlo), base);
+    Opnd mem = M(base, struct_off + wlo);
     int up = 64 - (int)x->bit_width;
-    ins("movq %%rax, %%rcx");
-    if (up > 0) { ins("shlq $%d, %%rcx", up); ins("shrq $%d, %%rcx", up); }
-    if (shift) ins("shlq $%d, %%rcx", shift);
+    movq(R(RAX), R(RCX));
+    if (up > 0) { shlq(IMM(up), R(RCX)); shrq(IMM(up), R(RCX)); }
+    if (shift) shlq(IMM(shift), R(RCX));
     load_window_r11(w, mem);
     uint64_t m = (x->bit_width >= 64 ? ~0ULL : ((1ULL << x->bit_width) - 1)) << shift;
-    ins("movabsq $%lld, %%rdi", (long long)~m);
-    ins("andq %%rdi, %%r11");
-    ins("orq %%rcx, %%r11");
+    movabsq(~m, R(RDI));
+    andq(R(RDI), R(R11));
+    orq(R(RCX), R(R11));
     switch (w) {
-    case 1: ins("movb %%r11b, %s", mem); break;
-    case 2: ins("movw %%r11w, %s", mem); break;
-    case 4: ins("movl %%r11d, %s", mem); break;
-    default: ins("movq %%r11, %s", mem); break;
+    case 1: movb(R(R11), mem); break;
+    case 2: movw(R(R11), mem); break;
+    case 4: movl(R(R11), mem); break;
+    default: movq(R(R11), mem); break;
     }
 }
 
 /* Load an immediate into %rax. */
 static void mov_imm(int64_t v) {
-    if (v == 0) ins("xorl %%eax, %%eax");
-    else if (v >= INT32_MIN && v <= INT32_MAX) ins("movq $%lld, %%rax", (long long)v);
-    else if (v > 0 && v <= (int64_t)UINT32_MAX) ins("movl $%lld, %%eax", (long long)v);
-    else ins("movabsq $%lld, %%rax", (long long)v);
+    if (v == 0) xorl(R(RAX), R(RAX));
+    else if (v >= INT32_MIN && v <= INT32_MAX) movq(IMM(v), R(RAX));
+    else if (v > 0 && v <= (int64_t)UINT32_MAX) movl(IMM(v), R(RAX));
+    else movabsq(v, R(RAX));
 }
 
-static void mov_imm_reg(int64_t v, const char *reg64) {
-    if (v >= INT32_MIN && v <= INT32_MAX) ins("movq $%lld, %s", (long long)v, reg64);
-    else ins("movabsq $%lld, %s", (long long)v, reg64);
+static void mov_imm_reg(int64_t v, Opnd reg64) {
+    if (v >= INT32_MIN && v <= INT32_MAX) movq(IMM(v), reg64);
+    else movabsq(v, reg64);
 }
 
 static void float_const(double v, bool f32) {
@@ -1037,13 +1083,13 @@ static void float_const(double v, bool f32) {
         float f = (float)v;
         uint32_t bits;
         memcpy(&bits, &f, 4);
-        ins("movl $%u, %%eax", (unsigned)bits);
-        ins("movd %%eax, %%xmm0");
+        movl(IMM(bits), R(RAX));
+        movd(R(RAX), X(0));
     } else {
         uint64_t bits;
         memcpy(&bits, &v, 8);
-        ins("movabsq $%lld, %%rax", (long long)bits);
-        ins("movq %%rax, %%xmm0");
+        movabsq(bits, R(RAX));
+        movq(R(RAX), X(0));
     }
 }
 
@@ -1054,11 +1100,11 @@ typedef struct { ValKind k; int32_t slot; } Snap;
 static Snap snap_save(Type *t) {
     Snap s = { val_kind(t), 0 };
     switch (s.k) {
-    case VK_INT: s.slot = spill_push(); ins("movq %%rax, %s", fp(s.slot)); break;
-    case VK_FLOAT: s.slot = spill_push(); ins("movq %%xmm0, %s", fp(s.slot)); break;
+    case VK_INT: s.slot = spill_push(); movq(R(RAX), fp(s.slot)); break;
+    case VK_FLOAT: s.slot = spill_push(); movq(X(0), fp(s.slot)); break;
     case VK_AGG:
         s.slot = temp_alloc(t);
-        copy_mem("%rbp", s.slot, "%rax", 0, ty_size(t));
+        copy_mem(RBP, s.slot, RAX, 0, ty_size(t));
         break;
     case VK_VOID: break;
     }
@@ -1067,9 +1113,9 @@ static Snap snap_save(Type *t) {
 
 static void snap_restore(Snap s) {
     switch (s.k) {
-    case VK_INT: ins("movq %s, %%rax", fp(s.slot)); spill_pop(); break;
-    case VK_FLOAT: ins("movq %s, %%xmm0", fp(s.slot)); spill_pop(); break;
-    case VK_AGG: ins("leaq %s, %%rax", fp(s.slot)); break;
+    case VK_INT: movq(fp(s.slot), R(RAX)); spill_pop(); break;
+    case VK_FLOAT: movq(fp(s.slot), X(0)); spill_pop(); break;
+    case VK_AGG: leaq(fp(s.slot), R(RAX)); break;
     case VK_VOID: break;
     }
 }
@@ -1082,17 +1128,6 @@ static HMap g_strings;      /* bytes -> label */
 static HMap g_strhdrs;      /* bytes -> header label */
 static HMap g_fnvals;       /* symbol -> function-value label */
 
-static void emit_ascii(Buf *b, const unsigned char *s, int n) {
-    buf_puts(b, "\t.string \"");
-    for (int i = 0; i < n; i++) {
-        unsigned char c = s[i];
-        if (c == '"' || c == '\\') { char t[3] = { '\\', (char)c, 0 }; buf_puts(b, t); }
-        else if (c >= 0x20 && c < 0x7f) buf_put(b, (const char *)&c, 1);
-        else buf_printf(b, "\\%03o", c);
-    }
-    buf_puts(b, "\"\n");
-}
-
 /* The label of a NUL-terminated copy of `n` bytes in .rodata. */
 static int str_label(const unsigned char *s, int n) {
     HEnt *e = hmap_get(&g_strings, (const char *)s, (size_t)n);
@@ -1101,8 +1136,8 @@ static int str_label(const unsigned char *s, int n) {
     memcpy(k, s, (size_t)n);
     k[n] = 0;
     int l = new_label();
-    buf_printf(&g_rodata, ".Lq%d:\n", l);
-    emit_ascii(&g_rodata, s, n);
+    d_def(ASM_RODATA, l);
+    d_bytes(ASM_RODATA, k, n + 1);
     hmap_put(&g_strings, k, (size_t)n)->val = l;
     return l;
 }
@@ -1118,7 +1153,10 @@ static int strhdr_label(const unsigned char *s, int n) {
     memcpy(k, s, (size_t)n);
     k[n] = 0;
     int l = new_label();
-    buf_printf(&g_relro, "\t.p2align 3\n.Lq%d:\n\t.quad .Lq%d\n\t.quad %d\n", l, sl, n);
+    d_align(ASM_RELRO, 8);
+    d_def(ASM_RELRO, l);
+    d_addr(ASM_RELRO, sl, 0);
+    d_int(ASM_RELRO, (uint64_t)n, 8);
     hmap_put(&g_strhdrs, k, (size_t)n)->val = l;
     return l;
 }
@@ -1128,7 +1166,10 @@ static int fnval_label(const char *sym) {
     HEnt *e = hmap_get(&g_fnvals, sym, strlen(sym));
     if (e) return (int)e->val;
     int l = new_label();
-    buf_printf(&g_relro, "\t.p2align 3\n.Lq%d:\n\t.quad %s\n\t.quad 0\n", l, sym);
+    d_align(ASM_RELRO, 8);
+    d_def(ASM_RELRO, l);
+    d_addr(ASM_RELRO, asm_sym(sym), 0);
+    d_zero(ASM_RELRO, 8);
     hmap_put(&g_fnvals, sym, strlen(sym))->val = l;
     return l;
 }
@@ -1170,7 +1211,7 @@ static int msg_label(SrcLoc loc, const char *rest) {
  * jump); the caller moves the message's arguments into %rdx, %rcx, %r8, %r9;
  * fail_end prints with fprintf(stderr, ...) and aborts. Registers hold their
  * values from the jump site. */
-static Buf *g_cur_saved;
+static Code *g_cur_saved;
 
 static int fail_begin(void) {
     int l = new_label();
@@ -1181,12 +1222,12 @@ static int fail_begin(void) {
 }
 
 static void fail_end(int msg) {
-    ins("movq stderr@GOTPCREL(%%rip), %%rdi");
-    ins("movq (%%rdi), %%rdi");
-    ins("leaq .Lq%d(%%rip), %%rsi", msg);
-    ins("xorl %%eax, %%eax");
-    ins("call fprintf@PLT");
-    ins("call abort@PLT");
+    movq(GOTREL(asm_sym("stderr")), R(RDI));
+    movq(M(RDI, 0), R(RDI));
+    leaq(RIPREL(msg, 0), R(RSI));
+    xorl(R(RAX), R(RAX));
+    call_plt("fprintf");
+    call_plt("abort");
     g_cur = g_cur_saved;
 }
 
@@ -1198,10 +1239,9 @@ static int fail_simple(SrcLoc loc, const char *rest) {
     return l;
 }
 
-/* ---- Source lines (.loc) ---- */
+/* ---- Source lines ---- */
 
 static HMap g_files;
-static Buf g_file_dirs;
 static int g_file_count;
 static int g_loc_file, g_loc_line;
 
@@ -1214,18 +1254,12 @@ static void emit_loc(SrcLoc loc) {
     else {
         id = ++g_file_count;
         hmap_put(&g_files, loc.filename, n)->val = id;
-        buf_printf(&g_file_dirs, "\t.file %d \"", id);
-        for (size_t i = 0; i < n; i++) {
-            char c = loc.filename[i];
-            if (c == '"' || c == '\\') buf_put(&g_file_dirs, "\\", 1);
-            buf_put(&g_file_dirs, &c, 1);
-        }
-        buf_puts(&g_file_dirs, "\"\n");
+        asm_file(id, loc.filename);
     }
     if (id == g_loc_file && loc.line == g_loc_line) return;
     g_loc_file = id;
     g_loc_line = loc.line;
-    buf_printf(g_cur, "\t.loc %d %d\n", id, loc.line);
+    x_loc(g_cur, id, loc.line);
 }
 
 /* ---- Defer scopes and loops ---- */
@@ -1284,6 +1318,7 @@ static const char *ctramp_sym(const char *fn_sym, Type *ft);
 static bool extern_const_value(const char *cname, Type *t, int64_t *iv, double *fv);
 static bool extern_via_shim(const Decl *d);
 static const char *shim_ref(const char *cname);
+static int xp_sym(const char *cname);
 static void gen_interp(Expr *e, Type *alloc_opt);
 
 enum { TAIL_VALUE, TAIL_DISCARD, TAIL_RETURN };
@@ -1385,7 +1420,7 @@ static void gen_static_fn_value(Expr *e) {
         const Symbol *s = t->kind == EXPR_IDENT ? t->ident.resolved_sym : t->field.resolved_member;
         sym = cwrap_sym(s->decl);
     }
-    ins("leaq .Lq%d(%%rip), %%rax", fnval_label(sym));
+    leaq(RIPREL(fnval_label(sym), 0), R(RAX));
 }
 
 /* A static function as a C function pointer: an FC function's trampoline
@@ -1396,9 +1431,9 @@ static void gen_c_fn_pointer(Expr *e) {
     const Expr *tg = fn_static_target(e);
     const Symbol *ts = !tg ? NULL : tg->kind == EXPR_IDENT ? tg->ident.resolved_sym
                      : tg->kind == EXPR_FIELD ? tg->field.resolved_member : NULL;
-    if (is_extern && ts && extern_via_shim(ts->decl)) ins("movq fc_xp_%s(%%rip), %%rax", shim_ref(sym));
-    else if (is_extern) ins("movq %s@GOTPCREL(%%rip), %%rax", sym);
-    else ins("leaq %s(%%rip), %%rax", ctramp_sym(sym, conc(e->type)));
+    if (is_extern && ts && extern_via_shim(ts->decl)) movq(RIPREL(xp_sym(shim_ref(sym)), 0), R(RAX));
+    else if (is_extern) movq(GOTREL(asm_sym(sym)), R(RAX));
+    else leaq(RIPREL(asm_sym(ctramp_sym(sym, conc(e->type))), 0), R(RAX));
 }
 
 static void gen_extern_const(const char *cname, Type *t, SrcLoc loc) {
@@ -1410,14 +1445,14 @@ static void gen_extern_const(const char *cname, Type *t, SrcLoc loc) {
     if (val_kind(t) == VK_FLOAT) float_const(fv, is_f32(t));
     else if (is_cstr_type(conc(t))) {
         /* A string #define: the probe recorded its bytes. */
-        ins("leaq .Lq%d(%%rip), %%rax", (int)iv);
+        leaq(RIPREL((int)iv, 0), R(RAX));
     } else mov_imm(canon_const((uint64_t)iv, t));
 }
 
 static void gen_ident(Expr *e) {
     if (e->ident.is_std_stream) {
-        ins("movq %s@GOTPCREL(%%rip), %%rax", e->ident.name);
-        ins("movq (%%rax), %%rax");
+        movq(GOTREL(asm_sym(e->ident.name)), R(RAX));
+        movq(M(RAX, 0), R(RAX));
         return;
     }
     if (!e->ident.is_local && fn_static_target(e)) {
@@ -1439,7 +1474,7 @@ static void gen_ident(Expr *e) {
         gen_extern_const(s->decl->ext.name, e->type, e->loc);
         return;
     }
-    load_val(e->type, arena_sprintf(g_arena, "%s(%%rip)", name));
+    load_val(e->type, RIPREL(asm_sym(name), 0));
 }
 
 /* ---- Address of an lvalue ---- */
@@ -1453,19 +1488,19 @@ static void gen_addr(Expr *e) {
         if (e->ident.is_local) {
             int32_t off;
             if (!local_find(name, &off)) { internal_error(e->loc, "unknown local '%s'", name); return; }
-            ins("leaq %s, %%rax", fp(off));
+            leaq(fp(off), R(RAX));
         } else {
-            ins("leaq %s(%%rip), %%rax", name);
+            leaq(RIPREL(asm_sym(name), 0), R(RAX));
         }
         return;
     }
     case EXPR_FIELD: {
-        if (e->field.codegen_name) { ins("leaq %s(%%rip), %%rax", e->field.codegen_name); return; }
+        if (e->field.codegen_name) { leaq(RIPREL(asm_sym(e->field.codegen_name), 0), R(RAX)); return; }
         int64_t off; Type *ft; ExtField *x;
         gen_expr(e->field.object);
         if (field_info_x(e->field.object->type, e->field.name, &off, &ft, &x)) {
             if (x) internal_error(e->loc, "the address of C field '%s' (a bit field, or a different width)", e->field.name);
-            if (off) ins("leaq %lld(%%rax), %%rax", (long long)off);
+            if (off) leaq(M(RAX, off), R(RAX));
         } else internal_error(e->loc, "no field '%s'", e->field.name);
         return;
     }
@@ -1475,7 +1510,7 @@ static void gen_addr(Expr *e) {
         Type *pt = conc(e->field.object->type);
         if (field_info_x(pt->pointer.pointee, e->field.name, &off, &ft, &x)) {
             if (x) internal_error(e->loc, "the address of C field '%s' (a bit field, or a different width)", e->field.name);
-            if (off) ins("leaq %lld(%%rax), %%rax", (long long)off);
+            if (off) leaq(M(RAX, off), R(RAX));
         } else internal_error(e->loc, "no field '%s'", e->field.name);
         return;
     }
@@ -1487,7 +1522,7 @@ static void gen_addr(Expr *e) {
             snprintf(nm, sizeof nm, "e%llu", (unsigned long long)e->index.index->int_lit.value);
             int64_t off; Type *ft;
             if (field_info(ot, intern_cstr(g_intern, nm), &off, &ft) && off)
-                ins("leaq %lld(%%rax), %%rax", (long long)off);
+                leaq(M(RAX, off), R(RAX));
             return;
         }
         if (ot->kind == TYPE_SLICE) { gen_slice_elem_addr(e); return; }
@@ -1495,10 +1530,10 @@ static void gen_addr(Expr *e) {
         int64_t es = ty_size(ot->pointer.pointee);
         gen_expr(e->index.object);
         int32_t s = spill_push();
-        ins("movq %%rax, %s", fp(s));
+        movq(R(RAX), fp(s));
         gen_expr(e->index.index);
-        if (es != 1) ins("imulq $%lld, %%rax, %%rax", (long long)es);
-        ins("addq %s, %%rax", fp(s));
+        if (es != 1) imulq3(es, R(RAX), R(RAX));
+        addq(fp(s), R(RAX));
         spill_pop();
         return;
     }
@@ -1527,23 +1562,23 @@ static void gen_slice_elem_addr(Expr *e) {
     int64_t es = ty_size(ot->slice.elem);
     gen_expr(e->index.object);
     int32_t s = spill_push();
-    ins("movq %%rax, %s", fp(s));
+    movq(R(RAX), fp(s));
     gen_expr(e->index.index);
-    ins("movq %s, %%rdx", fp(s));
+    movq(fp(s), R(RDX));
     spill_pop();
     if (!(g_guards_suppressed && facts_guard_governs(e, subst_resolve))) {
         bool uns = !int_signed(e->index.index->type);
-        ins("movq 8(%%rdx), %%rcx");
-        ins("cmpq %%rcx, %%rax");
+        movq(M(RDX, 8), R(RCX));
+        cmpq(R(RCX), R(RAX));
         int m = msg_label(e->loc, uns ? "slice index out of range: index=%llu len=%llu\n"
                                       : "slice index out of range: index=%lld len=%llu\n");
         int l = fail_begin();
-        ins("movq %%rax, %%rdx");
+        movq(R(RAX), R(RDX));
         fail_end(m);
-        ins("jae .Lq%d", l);
+        jcc(CC_AE, l);
     }
-    if (es != 1) ins("imulq $%lld, %%rax, %%rax", (long long)es);
-    ins("addq (%%rdx), %%rax");
+    if (es != 1) imulq3(es, R(RAX), R(RAX));
+    addq(M(RDX, 0), R(RAX));
 }
 
 /* ---- Fields ---- */
@@ -1571,16 +1606,16 @@ static void gen_field(Expr *e) {
             gen_extern_const(e->field.codegen_name, e->type, e->loc);
             return;
         }
-        load_val(e->type, arena_sprintf(g_arena, "%s(%%rip)", e->field.codegen_name));
+        load_val(e->type, RIPREL(asm_sym(e->field.codegen_name), 0));
         return;
     }
     if (e->field.is_variant_constructor) {
         Type *t = conc(e->type);
         if (t->kind == TYPE_ENUM) { mov_imm(enum_variant_value(t, e->field.name)); return; }
         int32_t tmp = temp_alloc(t);
-        zero_mem("%rbp", tmp, ty_size(t));
-        ins("movl $%d, %s", union_variant_index(t, e->field.name), fp(tmp));
-        ins("leaq %s, %%rax", fp(tmp));
+        zero_mem(RBP, tmp, ty_size(t));
+        movl(IMM(union_variant_index(t, e->field.name)), fp(tmp));
+        leaq(fp(tmp), R(RAX));
         return;
     }
     if (e->field.object->kind == EXPR_TYPE_VAR_REF && g_subst) {
@@ -1598,31 +1633,31 @@ static void gen_field(Expr *e) {
         Type *fat = e->field.fixed_array_type;
         gen_addr(e);
         int32_t tmp = slot_alloc(16, 8);
-        ins("movq %%rax, %s", fp(tmp));
-        ins("movq $%lld, %s", (long long)fixarr_size(fat), fp(tmp + 8));
-        ins("leaq %s, %%rax", fp(tmp));
+        movq(R(RAX), fp(tmp));
+        movq(IMM(fixarr_size(fat)), fp(tmp + 8));
+        leaq(fp(tmp), R(RAX));
         return;
     }
     if (ot->kind == TYPE_OPTION) {
         bool some = strcmp(e->field.name, "is_some") == 0;
         gen_expr(e->field.object);
-        if (is_null_sentinel(ot)) ins("testq %%rax, %%rax");
-        else ins("cmpb $0, %lld(%%rax)", (long long)ty_size(ot->option.inner));
-        ins(some ? "setne %%al" : "sete %%al");
-        ins("movzbl %%al, %%eax");
+        if (is_null_sentinel(ot)) testq(R(RAX), R(RAX));
+        else cmpb(IMM(0), M(RAX, ty_size(ot->option.inner)));
+        (some ? setcc(CC_NE, R(RAX)) : setcc(CC_E, R(RAX)));
+        movzbl(R(RAX), R(RAX));
         return;
     }
     if (ot->kind == TYPE_RESULT) {
         bool okf = strcmp(e->field.name, "is_ok") == 0;
         gen_expr(e->field.object);
-        ins("cmpl $0, (%%rax)");
-        ins(okf ? "sete %%al" : "setne %%al");
-        ins("movzbl %%al, %%eax");
+        cmpl(IMM(0), M(RAX, 0));
+        (okf ? setcc(CC_E, R(RAX)) : setcc(CC_NE, R(RAX)));
+        movzbl(R(RAX), R(RAX));
         return;
     }
     if (ot->kind == TYPE_SLICE) {
         gen_expr(e->field.object);
-        ins(strcmp(e->field.name, "len") == 0 ? "movq 8(%%rax), %%rax" : "movq (%%rax), %%rax");
+        (strcmp(e->field.name, "len") == 0 ? movq(M(RAX, 8), R(RAX)) : movq(M(RAX, 0), R(RAX)));
         return;
     }
     int64_t off; Type *ft; ExtField *x;
@@ -1631,10 +1666,8 @@ static void gen_field(Expr *e) {
         internal_error(e->loc, "no field '%s' in %s", e->field.name, type_name(ot));
         return;
     }
-    if (x) { ins("movq %%rax, %%rdx"); load_ext_field(ft, x, "%rdx", 0, off); return; }
-    char mem[48];
-    snprintf(mem, sizeof mem, "%lld(%%rax)", (long long)off);
-    load_val(ft, mem);
+    if (x) { movq(R(RAX), R(RDX)); load_ext_field(ft, x, RDX, 0, off); return; }
+    load_val(ft, M(RAX, off));
 }
 
 static void gen_deref_field(Expr *e) {
@@ -1643,14 +1676,14 @@ static void gen_deref_field(Expr *e) {
     if (e->field.fixed_array_type) {
         gen_addr(e);
         int32_t tmp = slot_alloc(16, 8);
-        ins("movq %%rax, %s", fp(tmp));
-        ins("movq $%lld, %s", (long long)fixarr_size(e->field.fixed_array_type), fp(tmp + 8));
-        ins("leaq %s, %%rax", fp(tmp));
+        movq(R(RAX), fp(tmp));
+        movq(IMM(fixarr_size(e->field.fixed_array_type)), fp(tmp + 8));
+        leaq(fp(tmp), R(RAX));
         return;
     }
     gen_expr(e->field.object);
     if (st->kind == TYPE_SLICE) {
-        ins(strcmp(e->field.name, "len") == 0 ? "movq 8(%%rax), %%rax" : "movq (%%rax), %%rax");
+        (strcmp(e->field.name, "len") == 0 ? movq(M(RAX, 8), R(RAX)) : movq(M(RAX, 0), R(RAX)));
         return;
     }
     int64_t off; Type *ft; ExtField *x;
@@ -1658,31 +1691,30 @@ static void gen_deref_field(Expr *e) {
         internal_error(e->loc, "no field '%s'", e->field.name);
         return;
     }
-    if (x) { ins("movq %%rax, %%rdx"); load_ext_field(ft, x, "%rdx", 0, off); return; }
-    char mem[48];
-    snprintf(mem, sizeof mem, "%lld(%%rax)", (long long)off);
-    load_val(ft, mem);
+    if (x) { movq(R(RAX), R(RDX)); load_ext_field(ft, x, RDX, 0, off); return; }
+    load_val(ft, M(RAX, off));
 }
 
 /* ---- Binary operators ---- */
 
-static const char *setcc_for(int op, bool sgn) {
+/* The condition a comparison operator tests, or -1. */
+static int cond_for(int op, bool sgn) {
     switch (op) {
-    case TOK_EQEQ: return "sete";
-    case TOK_BANGEQ: return "setne";
-    case TOK_LT: return sgn ? "setl" : "setb";
-    case TOK_LTEQ: return sgn ? "setle" : "setbe";
-    case TOK_GT: return sgn ? "setg" : "seta";
-    case TOK_GTEQ: return sgn ? "setge" : "setae";
-    default: return NULL;
+    case TOK_EQEQ: return CC_E;
+    case TOK_BANGEQ: return CC_NE;
+    case TOK_LT: return sgn ? CC_L : CC_B;
+    case TOK_LTEQ: return sgn ? CC_LE : CC_BE;
+    case TOK_GT: return sgn ? CC_G : CC_A;
+    case TOK_GTEQ: return sgn ? CC_GE : CC_AE;
+    default: return -1;
     }
 }
 
-static void overflow_fail_jump(SrcLoc loc, const char *what, const char *jcc) {
+static void overflow_fail_jump(SrcLoc loc, const char *what, Cond cc) {
     char *rest = str_sprintf("integer overflow in %s\n", what);
     int l = fail_simple(loc, rest);
     free(rest);
-    ins("%s .Lq%d", jcc, l);
+    jcc(cc, l);
 }
 
 /* Evaluate two operands: left into %rax, right into %rcx (ints), or left into
@@ -1691,19 +1723,19 @@ static void gen_operands(Expr *l, Expr *r) {
     if (val_kind(l->type) == VK_FLOAT) {
         gen_expr(l);
         int32_t s = spill_push();
-        ins("movq %%xmm0, %s", fp(s));
+        movq(X(0), fp(s));
         gen_expr(r);
-        ins("movaps %%xmm0, %%xmm1");
-        ins("movq %s, %%xmm0", fp(s));
+        movaps(X(0), X(1));
+        movq(fp(s), X(0));
         spill_pop();
         return;
     }
     gen_expr(l);
     int32_t s = spill_push();
-    ins("movq %%rax, %s", fp(s));
+    movq(R(RAX), fp(s));
     gen_expr(r);
-    ins("movq %%rax, %%rcx");
-    ins("movq %s, %%rax", fp(s));
+    movq(R(RAX), R(RCX));
+    movq(fp(s), R(RAX));
     spill_pop();
 }
 
@@ -1714,37 +1746,37 @@ static void gen_divmod(Expr *e, Type *rt) {
     bool need_zero = !(g_guards_suppressed && facts_guard_governs(e, subst_resolve));
     if (need_zero) {
         int l = fail_simple(e->loc, op == TOK_SLASH ? "divide by zero\n" : "modulo by zero\n");
-        ins("testq %%rcx, %%rcx");
-        ins("jz .Lq%d", l);
+        testq(R(RCX), R(RCX));
+        jcc(CC_E, l);
     }
     if (!sgn) {
-        ins("xorl %%edx, %%edx");
-        ins("divq %%rcx");
-        if (op == TOK_PERCENT) ins("movq %%rdx, %%rax");
+        xorl(R(RDX), R(RDX));
+        divq(R(RCX));
+        if (op == TOK_PERCENT) movq(R(RDX), R(RAX));
         normalize(rt);
         return;
     }
     int lnorm = new_label(), ldone = new_label();
-    ins("cmpq $-1, %%rcx");
-    ins("jne .Lq%d", lnorm);
+    cmpq(IMM(-1), R(RCX));
+    jcc(CC_NE, lnorm);
     if (op == TOK_PERCENT) {
-        ins("xorl %%eax, %%eax");
+        xorl(R(RAX), R(RAX));
     } else {
         if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
             int64_t mn; double fv; bool isf;
             type_prop_value(conc(rt), "min", &mn, &fv, &isf);
-            mov_imm_reg(mn, "%rdx");
-            ins("cmpq %%rdx, %%rax");
-            overflow_fail_jump(e->loc, "divide", "je");
+            mov_imm_reg(mn, R(RDX));
+            cmpq(R(RDX), R(RAX));
+            overflow_fail_jump(e->loc, "divide", CC_E);
         }
-        ins("negq %%rax");
+        negq(R(RAX));
         normalize(rt);
     }
-    ins("jmp .Lq%d", ldone);
+    jmp(ldone);
     label(lnorm);
-    ins("cqo");
-    ins("idivq %%rcx");
-    if (op == TOK_PERCENT) ins("movq %%rdx, %%rax");
+    cqo();
+    idivq(R(RCX));
+    if (op == TOK_PERCENT) movq(R(RDX), R(RAX));
     normalize(rt);
     label(ldone);
 }
@@ -1752,32 +1784,38 @@ static void gen_divmod(Expr *e, Type *rt) {
 static void gen_float_binary(Expr *e) {
     int op = e->binary.op;
     bool f = is_f32(e->binary.left->type);
-    const char *sfx = f ? "ss" : "sd";
     gen_operands(e->binary.left, e->binary.right);
     switch (op) {
-    case TOK_PLUS: ins("add%s %%xmm1, %%xmm0", sfx); return;
-    case TOK_MINUS: ins("sub%s %%xmm1, %%xmm0", sfx); return;
-    case TOK_STAR: ins("mul%s %%xmm1, %%xmm0", sfx); return;
-    case TOK_SLASH: ins("div%s %%xmm1, %%xmm0", sfx); return;
+    case TOK_PLUS: sse(f ? SSE_ADDSS : SSE_ADDSD, X(1), X(0)); return;
+    case TOK_MINUS: sse(f ? SSE_SUBSS : SSE_SUBSD, X(1), X(0)); return;
+    case TOK_STAR: sse(f ? SSE_MULSS : SSE_MULSD, X(1), X(0)); return;
+    case TOK_SLASH: sse(f ? SSE_DIVSS : SSE_DIVSD, X(1), X(0)); return;
     default: break;
     }
-    const char *uc = f ? "ucomiss" : "ucomisd";
+    SseOp uc = f ? SSE_UCOMISS : SSE_UCOMISD;
     switch (op) {
     case TOK_EQEQ:
-        ins("%s %%xmm1, %%xmm0", uc); ins("sete %%al"); ins("setnp %%cl"); ins("andb %%cl, %%al");
+        sse(uc, X(1), X(0)); setcc(CC_E, R(RAX)); setcc(CC_NP, R(RCX)); andb(R(RCX), R(RAX));
         break;
     case TOK_BANGEQ:
-        ins("%s %%xmm1, %%xmm0", uc); ins("setne %%al"); ins("setp %%cl"); ins("orb %%cl, %%al");
+        sse(uc, X(1), X(0)); setcc(CC_NE, R(RAX)); setcc(CC_P, R(RCX)); orb(R(RCX), R(RAX));
         break;
-    case TOK_GT: ins("%s %%xmm1, %%xmm0", uc); ins("seta %%al"); break;
-    case TOK_GTEQ: ins("%s %%xmm1, %%xmm0", uc); ins("setae %%al"); break;
-    case TOK_LT: ins("%s %%xmm0, %%xmm1", uc); ins("seta %%al"); break;
-    case TOK_LTEQ: ins("%s %%xmm0, %%xmm1", uc); ins("setae %%al"); break;
+    case TOK_GT: sse(uc, X(1), X(0)); setcc(CC_A, R(RAX)); break;
+    case TOK_GTEQ: sse(uc, X(1), X(0)); setcc(CC_AE, R(RAX)); break;
+    case TOK_LT: sse(uc, X(0), X(1)); setcc(CC_A, R(RAX)); break;
+    case TOK_LTEQ: sse(uc, X(0), X(1)); setcc(CC_AE, R(RAX)); break;
     default:
         internal_error(e->loc, "float operator %s", token_kind_name(op));
         return;
     }
-    ins("movzbl %%al, %%eax");
+    movzbl(R(RAX), R(RAX));
+}
+
+/* %rax op= %rcx for +, - and *. */
+static void gen_arith_rcx(int op) {
+    if (op == TOK_PLUS) addq(R(RCX), R(RAX));
+    else if (op == TOK_MINUS) subq(R(RCX), R(RAX));
+    else imulq(R(RCX), R(RAX));
 }
 
 static void gen_binary_op(Expr *e) {
@@ -1789,11 +1827,11 @@ static void gen_binary_op(Expr *e) {
         gen_expr(e->binary.left);
         Snap sn = snap_save(lt);   /* the right operand may change the left's storage */
         gen_expr(e->binary.right);
-        ins("movq %%rax, %%rsi");
-        ins("leaq %s, %%rdi", fp(sn.slot));
-        ins("call %s", eq_helper(lt));
-        ins("movzbl %%al, %%eax");
-        if (op == TOK_BANGEQ) ins("xorl $1, %%eax");
+        movq(R(RAX), R(RSI));
+        leaq(fp(sn.slot), R(RDI));
+        call_sym(eq_helper(lt));
+        movzbl(R(RAX), R(RAX));
+        if (op == TOK_BANGEQ) xorl(IMM(1), R(RAX));
         return;
     }
     if (val_kind(lt) == VK_FLOAT) { gen_float_binary(e); return; }
@@ -1801,8 +1839,8 @@ static void gen_binary_op(Expr *e) {
     if (op == TOK_AMPAMP || op == TOK_PIPEPIPE) {
         int lend = new_label();
         gen_expr(e->binary.left);
-        ins("testq %%rax, %%rax");
-        ins(op == TOK_AMPAMP ? "jz .Lq%d" : "jnz .Lq%d", lend);
+        testq(R(RAX), R(RAX));
+        (op == TOK_AMPAMP ? jcc(CC_E, lend) : jcc(CC_NE, lend));
         gen_expr(e->binary.right);
         label(lend);
         return;
@@ -1815,56 +1853,55 @@ static void gen_binary_op(Expr *e) {
         gen_operands(e->binary.left, e->binary.right);
         if (lt->kind == TYPE_POINTER && rtt->kind == TYPE_POINTER) {
             int64_t es = ty_size(lt->pointer.pointee);
-            ins("subq %%rcx, %%rax");
-            if (es > 1) { ins("movq $%lld, %%rcx", (long long)es); ins("cqo"); ins("idivq %%rcx"); }
+            subq(R(RCX), R(RAX));
+            if (es > 1) { movq(IMM(es), R(RCX)); cqo(); idivq(R(RCX)); }
             return;
         }
         if (lt->kind == TYPE_POINTER) {
             int64_t es = ty_size(lt->pointer.pointee);
-            if (es != 1) ins("imulq $%lld, %%rcx, %%rcx", (long long)es);
-            ins(op == TOK_PLUS ? "addq %%rcx, %%rax" : "subq %%rcx, %%rax");
+            if (es != 1) imulq3(es, R(RCX), R(RCX));
+            (op == TOK_PLUS ? addq(R(RCX), R(RAX)) : subq(R(RCX), R(RAX)));
         } else {
             int64_t es = ty_size(rtt->pointer.pointee);
-            if (es != 1) ins("imulq $%lld, %%rax, %%rax", (long long)es);
-            ins("addq %%rcx, %%rax");
+            if (es != 1) imulq3(es, R(RAX), R(RAX));
+            addq(R(RCX), R(RAX));
         }
         return;
     }
 
-    const char *cc = setcc_for(op, int_signed(lt));
-    if (cc) {
+    int cc = cond_for(op, int_signed(lt));
+    if (cc >= 0) {
         gen_operands(e->binary.left, e->binary.right);
-        ins("cmpq %%rcx, %%rax");
-        ins("%s %%al", cc);
-        ins("movzbl %%al, %%eax");
+        cmpq(R(RCX), R(RAX));
+        setcc((Cond)cc, R(RAX));
+        movzbl(R(RAX), R(RAX));
         return;
     }
 
     switch (op) {
     case TOK_PLUS: case TOK_MINUS: case TOK_STAR: {
         gen_operands(e->binary.left, e->binary.right);
-        const char *mn = op == TOK_PLUS ? "addq" : op == TOK_MINUS ? "subq" : "imulq";
         const char *what = op == TOK_PLUS ? "+" : op == TOK_MINUS ? "-" : "*";
         bool checked = g_overflow_checked && facts_overflow_governs(e, subst_resolve);
         if (checked && int_width(rt) == 8) {
             if (int_signed(rt)) {
-                ins("%s %%rcx, %%rax", mn);
-                overflow_fail_jump(e->loc, what, "jo");
+                gen_arith_rcx(op);
+                overflow_fail_jump(e->loc, what, CC_O);
             } else if (op == TOK_STAR) {
-                ins("mulq %%rcx");
-                overflow_fail_jump(e->loc, what, "jo");
+                mulq(R(RCX));
+                overflow_fail_jump(e->loc, what, CC_O);
             } else {
-                ins("%s %%rcx, %%rax", mn);
-                overflow_fail_jump(e->loc, what, "jc");
+                gen_arith_rcx(op);
+                overflow_fail_jump(e->loc, what, CC_B);
             }
             return;
         }
-        ins("%s %%rcx, %%rax", mn);
+        gen_arith_rcx(op);
         if (checked) {
-            ins("movq %%rax, %%rdx");
+            movq(R(RAX), R(RDX));
             normalize(rt);
-            ins("cmpq %%rax, %%rdx");
-            overflow_fail_jump(e->loc, what, "jne");
+            cmpq(R(RAX), R(RDX));
+            overflow_fail_jump(e->loc, what, CC_NE);
         } else {
             normalize(rt);
         }
@@ -1875,17 +1912,17 @@ static void gen_binary_op(Expr *e) {
         return;
     case TOK_AMP: case TOK_PIPE: case TOK_CARET:
         gen_operands(e->binary.left, e->binary.right);
-        ins(op == TOK_AMP ? "andq %%rcx, %%rax" : op == TOK_PIPE ? "orq %%rcx, %%rax" : "xorq %%rcx, %%rax");
+        (op == TOK_AMP ? andq(R(RCX), R(RAX)) : (op == TOK_PIPE ? orq(R(RCX), R(RAX)) : xorq(R(RCX), R(RAX))));
         return;
     case TOK_LTLT: case TOK_GTGT: {
         gen_operands(e->binary.left, e->binary.right);
         int bits = int_width(rt) * 8;
-        ins("andl $%d, %%ecx", bits - 1);
+        andl(IMM(bits - 1), R(RCX));
         if (op == TOK_LTLT) {
-            ins("shlq %%cl, %%rax");
+            shlq(R(RCX), R(RAX));
             normalize(rt);
         } else {
-            ins(int_signed(rt) ? "sarq %%cl, %%rax" : "shrq %%cl, %%rax");
+            (int_signed(rt) ? sarq(R(RCX), R(RAX)) : shrq(R(RCX), R(RAX)));
         }
         return;
     }
@@ -1919,38 +1956,38 @@ static void gen_unary_prefix(Expr *e) {
     }
     if (op == TOK_STAR) {
         gen_expr(e->unary_prefix.operand);
-        load_val(e->type, "(%rax)");
+        load_val(e->type, M(RAX, 0));
         return;
     }
     gen_expr(e->unary_prefix.operand);
     switch (op) {
     case TOK_MINUS:
         if (val_kind(rt) == VK_FLOAT) {
-            if (is_f32(rt)) { ins("movd %%xmm0, %%eax"); ins("xorl $0x80000000, %%eax"); ins("movd %%eax, %%xmm0"); }
-            else { ins("movq %%xmm0, %%rax"); ins("btcq $63, %%rax"); ins("movq %%rax, %%xmm0"); }
+            if (is_f32(rt)) { movd(X(0), R(RAX)); xorl(IMM(0x80000000), R(RAX)); movd(R(RAX), X(0)); }
+            else { movq(X(0), R(RAX)); btcq(63, R(RAX)); movq(R(RAX), X(0)); }
             return;
         }
         if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
             if (int_width(rt) == 8 && int_signed(rt)) {
-                ins("negq %%rax");
-                overflow_fail_jump(e->loc, "negation", "jo");
+                negq(R(RAX));
+                overflow_fail_jump(e->loc, "negation", CC_O);
             } else {
-                ins("negq %%rax");
-                ins("movq %%rax, %%rdx");
+                negq(R(RAX));
+                movq(R(RAX), R(RDX));
                 normalize(rt);
-                ins("cmpq %%rax, %%rdx");
-                overflow_fail_jump(e->loc, "negation", "jne");
+                cmpq(R(RAX), R(RDX));
+                overflow_fail_jump(e->loc, "negation", CC_NE);
             }
             return;
         }
-        ins("negq %%rax");
+        negq(R(RAX));
         normalize(rt);
         return;
     case TOK_BANG:
-        ins("xorl $1, %%eax");
+        xorl(IMM(1), R(RAX));
         return;
     case TOK_TILDE:
-        ins("notq %%rax");
+        notq(R(RAX));
         normalize(rt);
         return;
     default:
@@ -1969,16 +2006,16 @@ static void move_to_return_regs(void) {
     }
     Abi a = abi_classify(t);
     if (a.n == -1) {
-        ins("movq %s, %%rdi", fp(g_hidden_ret));
-        copy_mem("%rdi", 0, "%rax", 0, ty_size(t));
-        ins("movq %s, %%rax", fp(g_hidden_ret));
+        movq(fp(g_hidden_ret), R(RDI));
+        copy_mem(RDI, 0, RAX, 0, ty_size(t));
+        movq(fp(g_hidden_ret), R(RAX));
         return;
     }
-    ins("movq %%rax, %%r11");
+    movq(R(RAX), R(R11));
     int ni = 0, ns = 0;
     for (int k = 0; k < a.n; k++) {
-        if (a.cls[k] == 'I') ins("movq %d(%%r11), %s", 8 * k, ni++ ? "%rdx" : "%rax");
-        else ins("movq %d(%%r11), %s", 8 * k, ns++ ? "%xmm1" : "%xmm0");
+        if (a.cls[k] == 'I') movq(M(R11, 8 * k), R(ni++ ? RDX : RAX));
+        else movq(M(R11, 8 * k), X(ns++ ? 1 : 0));
     }
 }
 
@@ -1989,17 +2026,17 @@ static void gen_failure_value(Type *ret) {
     if (ret->kind == TYPE_RESULT) {
         int32_t t = temp_alloc(ret);
         int32_t code = slot_alloc(8, 8);
-        ins("movq %%rcx, %s", fp(code));      /* a large zero fill clobbers %rcx */
-        zero_mem("%rbp", t, ty_size(ret));
-        ins("movq %s, %%rcx", fp(code));
-        ins("movl %%ecx, %s", fp(t));
-        ins("leaq %s, %%rax", fp(t));
+        movq(R(RCX), fp(code));      /* a large zero fill clobbers %rcx */
+        zero_mem(RBP, t, ty_size(ret));
+        movq(fp(code), R(RCX));
+        movl(R(RCX), fp(t));
+        leaq(fp(t), R(RAX));
     } else if (is_null_sentinel(ret)) {
-        ins("xorl %%eax, %%eax");
+        xorl(R(RAX), R(RAX));
     } else {
         int32_t t = temp_alloc(ret);
-        zero_mem("%rbp", t, ty_size(ret));
-        ins("leaq %s, %%rax", fp(t));
+        zero_mem(RBP, t, ty_size(ret));
+        leaq(fp(t), R(RAX));
     }
 }
 
@@ -2014,27 +2051,25 @@ static void gen_unary_postfix(Expr *e) {
             int m = msg_label(e->loc, rest);
             free(rest);
             int l = fail_begin();
-            ins("movslq (%%rax), %%rdx");
+            movslq(M(RAX, 0), R(RDX));
             fail_end(m);
-            ins("cmpl $0, (%%rax)");
-            ins("jne .Lq%d", l);
+            cmpl(IMM(0), M(RAX, 0));
+            jcc(CC_NE, l);
             Type *in = conc(ot->result.inner);
             if (in && in->kind != TYPE_VOID) {
-                char mem[48];
-                snprintf(mem, sizeof mem, "%lld(%%rax)", (long long)result_value_off(ot));
-                load_val(in, mem);
+                load_val(in, M(RAX, result_value_off(ot)));
             }
         } else {
             char *rest = str_sprintf("unwrap failed: %s\n", text);
             int l = fail_simple(e->loc, rest);
             free(rest);
             if (is_null_sentinel(ot)) {
-                ins("testq %%rax, %%rax");
-                ins("jz .Lq%d", l);
+                testq(R(RAX), R(RAX));
+                jcc(CC_E, l);
             } else {
-                ins("cmpb $0, %lld(%%rax)", (long long)ty_size(ot->option.inner));
-                ins("je .Lq%d", l);
-                load_val(ot->option.inner, "(%rax)");
+                cmpb(IMM(0), M(RAX, ty_size(ot->option.inner)));
+                jcc(CC_E, l);
+                load_val(ot->option.inner, M(RAX, 0));
             }
         }
         free(text);
@@ -2045,37 +2080,35 @@ static void gen_unary_postfix(Expr *e) {
     gen_expr(e->unary_postfix.operand);
     int lok = new_label();
     if (ot->kind == TYPE_RESULT) {
-        ins("movl (%%rax), %%ecx");
-        ins("testl %%ecx, %%ecx");
-        ins("jz .Lq%d", lok);
+        movl(M(RAX, 0), R(RCX));
+        testl(R(RCX), R(RCX));
+        jcc(CC_E, lok);
     } else if (is_null_sentinel(ot)) {
-        ins("testq %%rax, %%rax");
-        ins("jnz .Lq%d", lok);
+        testq(R(RAX), R(RAX));
+        jcc(CC_NE, lok);
     } else {
-        ins("cmpb $0, %lld(%%rax)", (long long)ty_size(ot->option.inner));
-        ins("jne .Lq%d", lok);
+        cmpb(IMM(0), M(RAX, ty_size(ot->option.inner)));
+        jcc(CC_NE, lok);
     }
     /* The failure branch. */
     if (has_pending_defers()) {
         int32_t s = spill_push();
-        ins("movq %%rcx, %s", fp(s));
+        movq(R(RCX), fp(s));
         emit_defers_to_func();
-        ins("movq %s, %%rcx", fp(s));
+        movq(fp(s), R(RCX));
         spill_pop();
     }
     gen_failure_value(e->unary_postfix.prop_fn_ret ? e->unary_postfix.prop_fn_ret : g_fn_ret);
     move_to_return_regs();
-    ins("jmp .Lq%d", g_ret_label);
+    jmp(g_ret_label);
     label(lok);
     if (ot->kind == TYPE_RESULT) {
         Type *in = conc(ot->result.inner);
         if (in && in->kind != TYPE_VOID) {
-            char mem[48];
-            snprintf(mem, sizeof mem, "%lld(%%rax)", (long long)result_value_off(ot));
-            load_val(in, mem);
+            load_val(in, M(RAX, result_value_off(ot)));
         }
     } else if (!is_null_sentinel(ot)) {
-        load_val(ot->option.inner, "(%rax)");
+        load_val(ot->option.inner, M(RAX, 0));
     }
 }
 
@@ -2099,8 +2132,7 @@ typedef struct {
     bool tail;
 } CallSpec;
 
-static const char *IREG64[6] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
-static const char *IREG32[6] = { "%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d" };
+static const Reg IREG[6] = { RDI, RSI, RDX, RCX, R8, R9 };
 
 /* Evaluate an argument into a fresh slot. Returns true when it took a
  * spill slot (the caller pops it after the call). */
@@ -2111,11 +2143,11 @@ static bool eval_arg(Expr *a, CallArg *ca) {
     ca->slot = 0;
     gen_expr(a);
     switch (val_kind(t)) {
-    case VK_INT: ca->slot = spill_push(); ins("movq %%rax, %s", fp(ca->slot)); return true;
-    case VK_FLOAT: ca->slot = spill_push(); ins("movq %%xmm0, %s", fp(ca->slot)); return true;
+    case VK_INT: ca->slot = spill_push(); movq(R(RAX), fp(ca->slot)); return true;
+    case VK_FLOAT: ca->slot = spill_push(); movq(X(0), fp(ca->slot)); return true;
     case VK_AGG:
         ca->slot = temp_alloc(t);
-        copy_mem("%rbp", ca->slot, "%rax", 0, ty_size(t));
+        copy_mem(RBP, ca->slot, RAX, 0, ty_size(t));
         return false;
     case VK_VOID: return false;
     }
@@ -2127,7 +2159,7 @@ static void arg_from_rax(CallArg *ca, Type *t) {
     ca->type = t;
     ca->zero = false;
     ca->slot = slot_alloc(8, 8);
-    ins("movq %%rax, %s", fp(ca->slot));
+    movq(R(RAX), fp(ca->slot));
 }
 
 /* Emit the call. With cs->tail, the call becomes a jump when its arguments
@@ -2160,67 +2192,66 @@ static bool emit_call(CallSpec *cs, CallArg *args, int n) {
     bool tail = cs->tail && total == 0 && (!mem_ret || g_hidden_ret);
     int32_t res = 0;
     if (mem_ret && !tail) res = temp_alloc(cs->ret);
-    if (total) ins("subq $%lld, %%rsp", (long long)total);
+    if (total) subq(IMM(total), R(RSP));
     for (int i = 0; i < n; i++) {
         if (where[i] != 2) continue;
-        if (args[i].zero) { ins("movq $0, %lld(%%rsp)", (long long)soff[i]); continue; }
+        if (args[i].zero) { movq(IMM(0), M(RSP, soff[i])); continue; }
         if (val_kind(args[i].type) == VK_AGG)
-            copy_mem("%rsp", soff[i], "%rbp", args[i].slot, align_up(ty_size(args[i].type), 8));
+            copy_mem(RSP, soff[i], RBP, args[i].slot, align_up(ty_size(args[i].type), 8));
         else {
-            ins("movq %s, %%r11", fp(args[i].slot));
-            ins("movq %%r11, %lld(%%rsp)", (long long)soff[i]);
+            movq(fp(args[i].slot), R(R11));
+            movq(R(R11), M(RSP, soff[i]));
         }
     }
     ni = mem_ret ? 1 : 0;
     ns = 0;
     for (int i = 0; i < n; i++) {
         if (where[i] != 1) continue;
-        if (args[i].zero) { ins("xorl %s, %s", IREG32[ni], IREG32[ni]); ni++; continue; }
+        if (args[i].zero) { xorl(R(IREG[ni]), R(IREG[ni])); ni++; continue; }
         ValKind k = val_kind(args[i].type);
-        if (k == VK_INT) { ins("movq %s, %s", fp(args[i].slot), IREG64[ni++]); continue; }
-        if (k == VK_FLOAT) { ins("movq %s, %%xmm%d", fp(args[i].slot), ns++); continue; }
+        if (k == VK_INT) { movq(fp(args[i].slot), R(IREG[ni++])); continue; }
+        if (k == VK_FLOAT) { movq(fp(args[i].slot), X(ns++)); continue; }
         for (int q = 0; q < ab[i].n; q++) {
-            if (ab[i].cls[q] == 'I') ins("movq %s, %s", fp(args[i].slot + 8 * q), IREG64[ni++]);
-            else ins("movq %s, %%xmm%d", fp(args[i].slot + 8 * q), ns++);
+            if (ab[i].cls[q] == 'I') movq(fp(args[i].slot + 8 * q), R(IREG[ni++]));
+            else movq(fp(args[i].slot + 8 * q), X(ns++));
         }
     }
     if (mem_ret) {
-        if (tail) ins("movq %s, %%rdi", fp(g_hidden_ret));
-        else ins("leaq %s, %%rdi", fp(res));
+        if (tail) movq(fp(g_hidden_ret), R(RDI));
+        else leaq(fp(res), R(RDI));
     }
-    if (!cs->sym) ins("movq %s, %%r11", fp(cs->fn_slot));
-    if (cs->variadic) ins("movl $%d, %%eax", ns);
+    if (!cs->sym) movq(fp(cs->fn_slot), R(R11));
+    if (cs->variadic) movl(IMM(ns), R(RAX));
     free(where); free(soff); free(ab);
     if (tail) {
-        ins("leave");
-        ins(".cfi_remember_state");
-        ins(".cfi_def_cfa %%rsp, 8");
-        if (!cs->sym) ins("jmp *%%r11");
-        else if (cs->shim) ins("jmp *fc_xp_%s(%%rip)", shim_ref(cs->sym));
-        else if (cs->plt) ins("jmp %s@PLT", cs->sym);
-        else ins("jmp %s", cs->sym);
-        ins(".cfi_restore_state");
+        leave();
+        x_cfi(g_cur, CFI_LEFT);
+        if (!cs->sym) jmp_ind(R(R11));
+        else if (cs->shim) jmp_ind(RIPREL(xp_sym(shim_ref(cs->sym)), 0));
+        else if (cs->plt) jmp_plt(cs->sym);
+        else jmp_sym(cs->sym);
+        x_cfi(g_cur, CFI_RESTORE);
         return true;
     }
-    if (!cs->sym) ins("call *%%r11");
-    else if (cs->shim) ins("call *fc_xp_%s(%%rip)", shim_ref(cs->sym));
-    else if (cs->plt) ins("call %s@PLT", cs->sym);
-    else ins("call %s", cs->sym);
-    if (total) ins("addq $%lld, %%rsp", (long long)total);
+    if (!cs->sym) call_ind(R(R11));
+    else if (cs->shim) call_ind(RIPREL(xp_sym(shim_ref(cs->sym)), 0));
+    else if (cs->plt) call_plt(cs->sym);
+    else call_sym(cs->sym);
+    if (total) addq(IMM(total), R(RSP));
     switch (val_kind(cs->ret)) {
     case VK_INT: normalize(cs->ret); break;
     case VK_FLOAT: case VK_VOID: break;
     case VK_AGG:
-        if (mem_ret) { ins("leaq %s, %%rax", fp(res)); break; }
-        if (ra.n == 0) { int32_t t = slot_alloc(8, 8); ins("leaq %s, %%rax", fp(t)); break; }
+        if (mem_ret) { leaq(fp(res), R(RAX)); break; }
+        if (ra.n == 0) { int32_t t = slot_alloc(8, 8); leaq(fp(t), R(RAX)); break; }
         {
             int32_t t = temp_alloc(cs->ret);
             int ii = 0, ss = 0;
             for (int q = 0; q < ra.n; q++) {
-                if (ra.cls[q] == 'I') ins("movq %s, %s", ii++ ? "%rdx" : "%rax", fp(t + 8 * q));
-                else ins("movq %s, %s", ss++ ? "%xmm1" : "%xmm0", fp(t + 8 * q));
+                if (ra.cls[q] == 'I') movq(R(ii++ ? RDX : RAX), fp(t + 8 * q));
+                else movq(X(ss++ ? 1 : 0), fp(t + 8 * q));
             }
-            ins("leaq %s, %%rax", fp(t));
+            leaq(fp(t), R(RAX));
         }
         break;
     }
@@ -2228,7 +2259,7 @@ static bool emit_call(CallSpec *cs, CallArg *args, int n) {
 }
 
 /* A runtime library call with arguments already in registers. */
-static void call_c(const char *sym) { ins("call %s@PLT", sym); }
+static void call_c(const char *sym) { call_plt(sym); }
 
 static const char *resolve_direct_name(Expr *e) {
     Expr *callee = e->call.func;
@@ -2280,42 +2311,42 @@ static void gen_protocol_wrap(Expr *e, ExternProtocol proto, Type *ret) {
     int32_t t = temp_alloc(ret);
     int64_t voff = result_value_off(ret);
     int32_t raw = slot_alloc(8, 8);
-    ins("movq %%rax, %s", fp(raw));         /* a large zero fill clobbers %rax */
-    zero_mem("%rbp", t, ty_size(ret));
-    ins("movq %s, %%rax", fp(raw));
+    movq(R(RAX), fp(raw));         /* a large zero fill clobbers %rax */
+    zero_mem(RBP, t, ty_size(ret));
+    movq(fp(raw), R(RAX));
     if (proto == EXT_PROTO_STATUS) {
-        ins("movl %%eax, %s", fp(t));
-        ins("leaq %s, %%rax", fp(t));
+        movl(R(RAX), fp(t));
+        leaq(fp(t), R(RAX));
         return;
     }
     if (proto == EXT_PROTO_NEG_ERRNO || proto == EXT_PROTO_HRESULT) {
         int lok = new_label(), ld = new_label();
-        ins("testq %%rax, %%rax");
-        ins("jns .Lq%d", lok);
-        ins("movl %%eax, %s", fp(t));
-        ins("jmp .Lq%d", ld);
+        testq(R(RAX), R(RAX));
+        jcc(CC_NS, lok);
+        movl(R(RAX), fp(t));
+        jmp(ld);
         label(lok);
-        if (!pay_void) store_val(pay, "%rbp", t + voff);
+        if (!pay_void) store_val(pay, RBP, t + voff);
         label(ld);
-        ins("leaq %s, %%rax", fp(t));
+        leaq(fp(t), R(RAX));
         return;
     }
     if (proto == EXT_PROTO_ERRNO_NEG1 || proto == EXT_PROTO_ERRNO_NULL) {
         int lok = new_label(), ld = new_label();
-        if (proto == EXT_PROTO_ERRNO_NULL) ins("testq %%rax, %%rax");
-        else ins("cmpq $-1, %%rax");
-        ins("jne .Lq%d", lok);
+        if (proto == EXT_PROTO_ERRNO_NULL) testq(R(RAX), R(RAX));
+        else cmpq(IMM(-1), R(RAX));
+        jcc(CC_NE, lok);
         call_c("__errno_location");
-        ins("movl (%%rax), %%eax");
+        movl(M(RAX, 0), R(RAX));
         int l = fail_simple(e->loc, "err() with code 0 (0 is the ok tag; error codes must be non-zero)\n");
-        ins("testl %%eax, %%eax");
-        ins("jz .Lq%d", l);
-        ins("movl %%eax, %s", fp(t));
-        ins("jmp .Lq%d", ld);
+        testl(R(RAX), R(RAX));
+        jcc(CC_E, l);
+        movl(R(RAX), fp(t));
+        jmp(ld);
         label(lok);
-        if (!pay_void) store_val(pay, "%rbp", t + voff);
+        if (!pay_void) store_val(pay, RBP, t + voff);
         label(ld);
-        ins("leaq %s, %%rax", fp(t));
+        leaq(fp(t), R(RAX));
         return;
     }
     internal_error(e->loc, "error protocol not supported on this target");
@@ -2328,12 +2359,12 @@ static bool gen_call(Expr *e, bool want_tail) {
         Layout *L = agg_layout(ut);
         int idx = union_variant_index(ut, fn->field.name);
         int32_t t = temp_alloc(ut);
-        zero_mem("%rbp", t, L->size);
+        zero_mem(RBP, t, L->size);
         gen_expr(e->call.args[0]);
         Type *pt = union_variant_payload(ut, fn->field.name);
-        store_val(pt ? pt : e->call.args[0]->type, "%rbp", t + L->payload_off);
-        ins("movl $%d, %s", idx, fp(t));
-        ins("leaq %s, %%rax", fp(t));
+        store_val(pt ? pt : e->call.args[0]->type, RBP, t + L->payload_off);
+        movl(IMM(idx), fp(t));
+        leaq(fp(t), R(RAX));
         return false;
     }
     Type *ft = conc(fn->type);
@@ -2353,7 +2384,7 @@ static bool gen_call(Expr *e, bool want_tail) {
     if (e->call.is_indirect) {
         gen_expr(fn);
         int32_t fs = slot_alloc(16, 8);
-        copy_mem("%rbp", fs, "%rax", 0, 16);
+        copy_mem(RBP, fs, RAX, 0, 16);
         for (int i = 0; i < n; i++) nspill += eval_arg(e->call.args[i], &args[i]);
         args[n].type = type_any_ptr();
         args[n].slot = fs + 8;
@@ -2373,15 +2404,15 @@ static bool gen_call(Expr *e, bool want_tail) {
                 } else if (pt && pt->kind == TYPE_OPTION && pt->option.inner &&
                            conc(pt->option.inner)->kind == TYPE_FUNC) {
                     if (a->kind == EXPR_SOME) gen_c_fn_pointer(a->some_expr.value);
-                    else ins("xorl %%eax, %%eax");
+                    else xorl(R(RAX), R(RAX));
                     arg_from_rax(&args[i], type_any_ptr());
                 } else if (!pt && is_f32(a->type)) {
                     /* A variadic float travels as double. */
                     gen_expr(a);
-                    ins("cvtss2sd %%xmm0, %%xmm0");
+                    cvtss2sd(X(0), X(0));
                     args[i].type = type_float64();
                     args[i].slot = slot_alloc(8, 8);
-                    ins("movq %%xmm0, %s", fp(args[i].slot));
+                    movq(X(0), fp(args[i].slot));
                 } else {
                     nspill += eval_arg(a, &args[i]);
                 }
@@ -2440,8 +2471,8 @@ static F2i f2i_info(Type *t) {
 static void dbl_to_xmm1(double v) {
     uint64_t bits;
     memcpy(&bits, &v, 8);
-    ins("movabsq $%lld, %%r11", (long long)bits);
-    ins("movq %%r11, %%xmm1");
+    movabsq(bits, R(R11));
+    movq(R(R11), X(1));
 }
 
 /* Truncate the double in %xmm0 (in range for `to`) into %rax. */
@@ -2450,42 +2481,42 @@ static void cvt_double_to_int(Type *to) {
     if (t->kind == TYPE_UINT64 || t->kind == TYPE_USIZE) {
         int lbig = new_label(), ld = new_label();
         dbl_to_xmm1(9223372036854775808.0);
-        ins("ucomisd %%xmm1, %%xmm0");
-        ins("jae .Lq%d", lbig);
-        ins("cvttsd2siq %%xmm0, %%rax");
-        ins("jmp .Lq%d", ld);
+        ucomisd(X(1), X(0));
+        jcc(CC_AE, lbig);
+        cvttsd2siq(X(0), R(RAX));
+        jmp(ld);
         label(lbig);
-        ins("subsd %%xmm1, %%xmm0");
-        ins("cvttsd2siq %%xmm0, %%rax");
-        ins("btcq $63, %%rax");
+        subsd(X(1), X(0));
+        cvttsd2siq(X(0), R(RAX));
+        btcq(63, R(RAX));
         label(ld);
         return;
     }
-    ins("cvttsd2siq %%xmm0, %%rax");
+    cvttsd2siq(X(0), R(RAX));
     normalize(t);
 }
 
 static void gen_float_to_int(Type *from, Type *to, bool saturate) {
-    if (is_f32(from)) ins("cvtss2sd %%xmm0, %%xmm0");
+    if (is_f32(from)) cvtss2sd(X(0), X(0));
     if (!saturate) { cvt_double_to_int(to); return; }
     F2i fi = f2i_info(to);
     int lnan = new_label(), llo = new_label(), lhi = new_label(), ld = new_label();
-    ins("ucomisd %%xmm0, %%xmm0");
-    ins("jp .Lq%d", lnan);
+    ucomisd(X(0), X(0));
+    jcc(CC_P, lnan);
     dbl_to_xmm1(fi.lo);
-    ins("ucomisd %%xmm1, %%xmm0");
-    ins("jb .Lq%d", llo);
+    ucomisd(X(1), X(0));
+    jcc(CC_B, llo);
     dbl_to_xmm1(fi.hi);
-    ins("ucomisd %%xmm1, %%xmm0");
-    ins("jae .Lq%d", lhi);
+    ucomisd(X(1), X(0));
+    jcc(CC_AE, lhi);
     cvt_double_to_int(to);
-    ins("jmp .Lq%d", ld);
+    jmp(ld);
     label(lnan);
-    ins("xorl %%eax, %%eax");
-    ins("jmp .Lq%d", ld);
+    xorl(R(RAX), R(RAX));
+    jmp(ld);
     label(llo);
     mov_imm(canon_const((uint64_t)fi.imin, to));
-    ins("jmp .Lq%d", ld);
+    jmp(ld);
     label(lhi);
     mov_imm(canon_const((uint64_t)fi.imax, to));
     label(ld);
@@ -2496,21 +2527,21 @@ static void gen_int_to_float(Type *from, Type *to) {
     Type *ft = conc(from);
     if (ft->kind == TYPE_UINT64 || ft->kind == TYPE_USIZE) {
         int lbig = new_label(), ld = new_label();
-        ins("testq %%rax, %%rax");
-        ins("js .Lq%d", lbig);
-        ins(f ? "cvtsi2ssq %%rax, %%xmm0" : "cvtsi2sdq %%rax, %%xmm0");
-        ins("jmp .Lq%d", ld);
+        testq(R(RAX), R(RAX));
+        jcc(CC_S, lbig);
+        (f ? cvtsi2ssq(R(RAX), X(0)) : cvtsi2sdq(R(RAX), X(0)));
+        jmp(ld);
         label(lbig);
-        ins("movq %%rax, %%rcx");
-        ins("shrq %%rcx");
-        ins("andl $1, %%eax");
-        ins("orq %%rax, %%rcx");
-        ins(f ? "cvtsi2ssq %%rcx, %%xmm0" : "cvtsi2sdq %%rcx, %%xmm0");
-        ins(f ? "addss %%xmm0, %%xmm0" : "addsd %%xmm0, %%xmm0");
+        movq(R(RAX), R(RCX));
+        shrq(IMM(1), R(RCX));
+        andl(IMM(1), R(RAX));
+        orq(R(RAX), R(RCX));
+        (f ? cvtsi2ssq(R(RCX), X(0)) : cvtsi2sdq(R(RCX), X(0)));
+        (f ? addss(X(0), X(0)) : addsd(X(0), X(0)));
         label(ld);
         return;
     }
-    ins(f ? "cvtsi2ssq %%rax, %%xmm0" : "cvtsi2sdq %%rax, %%xmm0");
+    (f ? cvtsi2ssq(R(RAX), X(0)) : cvtsi2sdq(R(RAX), X(0)));
 }
 
 static void gen_checked_narrow(Type *from, Type *to, SrcLoc loc) {
@@ -2522,20 +2553,20 @@ static void gen_checked_narrow(Type *from, Type *to, SrcLoc loc) {
     bool to_u64 = (to->kind == TYPE_UINT64 || to->kind == TYPE_USIZE);
     if (!int_signed(from)) {
         if (!to_u64) {
-            mov_imm_reg(tmax, "%rdx");
-            ins("cmpq %%rdx, %%rax");
-            overflow_fail_jump(loc, "cast", "ja");
+            mov_imm_reg(tmax, R(RDX));
+            cmpq(R(RDX), R(RAX));
+            overflow_fail_jump(loc, "cast", CC_A);
         }
     } else if (to_u64) {
-        ins("testq %%rax, %%rax");
-        overflow_fail_jump(loc, "cast", "js");
+        testq(R(RAX), R(RAX));
+        overflow_fail_jump(loc, "cast", CC_S);
     } else {
-        mov_imm_reg(tmin, "%rdx");
-        ins("cmpq %%rdx, %%rax");
-        overflow_fail_jump(loc, "cast", "jl");
-        mov_imm_reg(tmax, "%rdx");
-        ins("cmpq %%rdx, %%rax");
-        overflow_fail_jump(loc, "cast", "jg");
+        mov_imm_reg(tmin, R(RDX));
+        cmpq(R(RDX), R(RAX));
+        overflow_fail_jump(loc, "cast", CC_L);
+        mov_imm_reg(tmax, R(RDX));
+        cmpq(R(RDX), R(RAX));
+        overflow_fail_jump(loc, "cast", CC_G);
     }
     normalize(to);
 }
@@ -2548,47 +2579,47 @@ static void gen_cast(Expr *e) {
         if (e->cast.bounded) {
             int64_t n = e->cast.buffer_size;
             int32_t back = slot_alloc(align_up(n, 8), 8);
-            ins("movq (%%rax), %%rsi");
-            ins("movq 8(%%rax), %%rdx");
+            movq(M(RAX, 0), R(RSI));
+            movq(M(RAX, 8), R(RDX));
             if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
                 char *rest = str_sprintf("string truncation in (cstr[%lld]) cast: len=%%lld max=%%lld\n", (long long)n);
                 int m = msg_label(e->loc, rest);
                 free(rest);
                 int l = fail_begin();
-                ins("movq $%lld, %%rcx", (long long)(n - 1));
+                movq(IMM((n - 1)), R(RCX));
                 fail_end(m);
-                ins("cmpq $%lld, %%rdx", (long long)(n - 1));
-                ins("jg .Lq%d", l);
+                cmpq(IMM((n - 1)), R(RDX));
+                jcc(CC_G, l);
             }
             int lle = new_label();
-            ins("cmpq $%lld, %%rdx", (long long)(n - 1));
-            ins("jle .Lq%d", lle);
-            ins("movq $%lld, %%rdx", (long long)(n - 1));
+            cmpq(IMM((n - 1)), R(RDX));
+            jcc(CC_LE, lle);
+            movq(IMM((n - 1)), R(RDX));
             label(lle);
             int32_t cn = spill_push();
-            ins("movq %%rdx, %s", fp(cn));
-            ins("leaq %s, %%rdi", fp(back));
+            movq(R(RDX), fp(cn));
+            leaq(fp(back), R(RDI));
             call_c("memcpy");
-            ins("movq %s, %%rcx", fp(cn));
+            movq(fp(cn), R(RCX));
             spill_pop();
-            ins("leaq %s, %%rax", fp(back));
-            ins("movb $0, (%%rax,%%rcx)");
+            leaq(fp(back), R(RAX));
+            movb(IMM(0), MI(RAX, RCX, 1, 0));
         } else {
             /* (cstr) under alloca: a dynamic stack copy. */
             int32_t sp = spill_push();
-            ins("movq %%rax, %s", fp(sp));
-            ins("movq 8(%%rax), %%rax");
-            ins("leaq 16(%%rax), %%rax");
-            ins("andq $-16, %%rax");
-            ins("subq %%rax, %%rsp");
-            ins("movq %s, %%rax", fp(sp));
-            ins("movq %%rsp, %%rdi");
-            ins("movq (%%rax), %%rsi");
-            ins("movq 8(%%rax), %%rdx");
+            movq(R(RAX), fp(sp));
+            movq(M(RAX, 8), R(RAX));
+            leaq(M(RAX, 16), R(RAX));
+            andq(IMM(-16), R(RAX));
+            subq(R(RAX), R(RSP));
+            movq(fp(sp), R(RAX));
+            movq(R(RSP), R(RDI));
+            movq(M(RAX, 0), R(RSI));
+            movq(M(RAX, 8), R(RDX));
             call_c("memcpy");
-            ins("movq %s, %%rcx", fp(sp));
-            ins("movq 8(%%rcx), %%rcx");
-            ins("movb $0, (%%rax,%%rcx)");
+            movq(fp(sp), R(RCX));
+            movq(M(RCX, 8), R(RCX));
+            movb(IMM(0), MI(RAX, RCX, 1, 0));
             spill_pop();
         }
         return;
@@ -2596,11 +2627,11 @@ static void gen_cast(Expr *e) {
     if (is_cstr_type(from) && is_str_type(to)) {
         gen_expr(op);
         int32_t t = slot_alloc(16, 8);
-        ins("movq %%rax, %s", fp(t));
-        ins("movq %%rax, %%rdi");
+        movq(R(RAX), fp(t));
+        movq(R(RAX), R(RDI));
         call_c("strlen");
-        ins("movq %%rax, %s", fp(t + 8));
-        ins("leaq %s, %%rax", fp(t));
+        movq(R(RAX), fp(t + 8));
+        leaq(fp(t), R(RAX));
         return;
     }
     ValKind fk = val_kind(from), tk = val_kind(to);
@@ -2620,8 +2651,8 @@ static void gen_cast(Expr *e) {
     }
     if (fk == VK_INT && tk == VK_FLOAT) { gen_int_to_float(from, to); return; }
     if (fk == VK_FLOAT && tk == VK_FLOAT) {
-        if (is_f32(from) && !is_f32(to)) ins("cvtss2sd %%xmm0, %%xmm0");
-        else if (!is_f32(from) && is_f32(to)) ins("cvtsd2ss %%xmm0, %%xmm0");
+        if (is_f32(from) && !is_f32(to)) cvtss2sd(X(0), X(0));
+        else if (!is_f32(from) && is_f32(to)) cvtsd2ss(X(0), X(0));
         return;
     }
     /* Aggregate-to-aggregate casts only move const: the bits are the same. */
@@ -2638,7 +2669,7 @@ static void gen_struct_lit(Expr *e) {
     bool fixed = false;
     for (int i = 0; i < L->n; i++)
         if (conc(L->ftype[i])->kind == TYPE_FIXED_ARRAY) fixed = true;
-    if (fixed || e->struct_lit.field_count < L->n) zero_mem("%rbp", t, L->size);
+    if (fixed || e->struct_lit.field_count < L->n) zero_mem(RBP, t, L->size);
     for (int i = 0; i < e->struct_lit.field_count; i++) {
         int64_t off; Type *ft; ExtField *x;
         if (!field_info_x(st, e->struct_lit.fields[i].name, &off, &ft, &x)) {
@@ -2647,7 +2678,7 @@ static void gen_struct_lit(Expr *e) {
         }
         if (x) {
             gen_expr(e->struct_lit.fields[i].value);
-            store_ext_field(x, "%rbp", t, t + off);
+            store_ext_field(x, RBP, t, t + off);
             continue;
         }
         Expr *v = e->struct_lit.fields[i].value;
@@ -2661,20 +2692,20 @@ static void gen_struct_lit(Expr *e) {
             free(rest);
             int l = fail_begin();
             fail_end(m);
-            ins("movq 8(%%rax), %%rdx");
-            ins("cmpq $%lld, %%rdx", (long long)cap);
-            ins("jg .Lq%d", l);
-            ins("movq (%%rax), %%rsi");
-            ins("leaq %s, %%rdi", fp(t + (int32_t)off));
-            if (es != 1) ins("imulq $%lld, %%rdx, %%rcx", (long long)es);
-            else ins("movq %%rdx, %%rcx");
-            ins("rep movsb");
+            movq(M(RAX, 8), R(RDX));
+            cmpq(IMM(cap), R(RDX));
+            jcc(CC_G, l);
+            movq(M(RAX, 0), R(RSI));
+            leaq(fp(t + (int32_t)off), R(RDI));
+            if (es != 1) imulq3(es, R(RDX), R(RCX));
+            else movq(R(RDX), R(RCX));
+            rep_movsb();
             continue;
         }
         gen_expr(v);
-        store_val(ft, "%rbp", t + off);
+        store_val(ft, RBP, t + off);
     }
-    ins("leaq %s, %%rax", fp(t));
+    leaq(fp(t), R(RAX));
 }
 
 static void gen_tuple_lit(Expr *e) {
@@ -2683,18 +2714,18 @@ static void gen_tuple_lit(Expr *e) {
     int32_t t = temp_alloc(tt);
     for (int i = 0; i < e->tuple_lit.elem_count && i < L->n; i++) {
         gen_expr(e->tuple_lit.elems[i]);
-        store_val(L->ftype[i], "%rbp", t + L->off[i]);
+        store_val(L->ftype[i], RBP, t + L->off[i]);
     }
-    ins("leaq %s, %%rax", fp(t));
+    leaq(fp(t), R(RAX));
 }
 
 /* Allocate `size_reg`-many bytes (in %rax) on the stack; the address lands
  * in %rax. */
 static void dyn_alloca_rax(void) {
-    ins("addq $15, %%rax");
-    ins("andq $-16, %%rax");
-    ins("subq %%rax, %%rsp");
-    ins("movq %%rsp, %%rax");
+    addq(IMM(15), R(RAX));
+    andq(IMM(-16), R(RAX));
+    subq(R(RAX), R(RSP));
+    movq(R(RSP), R(RAX));
 }
 
 /* T[N]{...}: a slice over a frame slot (fixed size), or over fresh stack
@@ -2710,61 +2741,61 @@ static void gen_array_lit(Expr *e, bool dynamic) {
     if (!const_n) {
         gen_expr(se);
         nslot = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(nslot));
+        movq(R(RAX), fp(nslot));
     }
     bool on_frame = const_n && !dynamic && N > 0;
     int32_t back = 0;
     if (on_frame) {
         back = slot_alloc(align_up(N * es, 8), ty_align(elem) > 8 ? ty_align(elem) : 8);
-        ins("leaq %s, %%rax", fp(back));
+        leaq(fp(back), R(RAX));
     } else if (const_n) {
         mov_imm(N * es);
         dyn_alloca_rax();
     } else {
-        ins("movq %s, %%rax", fp(nslot));
-        if (es != 1) ins("imulq $%lld, %%rax, %%rax", (long long)es);
+        movq(fp(nslot), R(RAX));
+        if (es != 1) imulq3(es, R(RAX), R(RAX));
         dyn_alloca_rax();
     }
-    ins("movq %%rax, %s", fp(hdr));
-    if (const_n) ins("movq $%lld, %s", (long long)N, fp(hdr + 8));
-    else { ins("movq %s, %%rcx", fp(nslot)); ins("movq %%rcx, %s", fp(hdr + 8)); }
+    movq(R(RAX), fp(hdr));
+    if (const_n) movq(IMM(N), fp(hdr + 8));
+    else { movq(fp(nslot), R(RCX)); movq(R(RCX), fp(hdr + 8)); }
     if (e->array_lit.elem_count == 0) {
-        if (on_frame) zero_mem("%rbp", back, N * es);
+        if (on_frame) zero_mem(RBP, back, N * es);
         else {
-            ins("movq %s, %%rdi", fp(hdr));
-            ins("movq %s, %%rcx", fp(hdr + 8));
-            if (es != 1) ins("imulq $%lld, %%rcx, %%rcx", (long long)es);
-            ins("xorl %%eax, %%eax");
-            ins("rep stosb");
+            movq(fp(hdr), R(RDI));
+            movq(fp(hdr + 8), R(RCX));
+            if (es != 1) imulq3(es, R(RCX), R(RCX));
+            xorl(R(RAX), R(RAX));
+            rep_stosb();
         }
     } else {
         for (int i = 0; i < e->array_lit.elem_count; i++) {
             gen_expr(e->array_lit.elems[i]);
-            if (on_frame) store_val(elem, "%rbp", back + i * es);
+            if (on_frame) store_val(elem, RBP, back + i * es);
             else {
-                ins("movq %s, %%rdx", fp(hdr));
-                store_val(elem, "%rdx", i * es);
+                movq(fp(hdr), R(RDX));
+                store_val(elem, RDX, i * es);
             }
         }
     }
-    ins("leaq %s, %%rax", fp(hdr));
+    leaq(fp(hdr), R(RAX));
 }
 
 static void gen_slice_lit(Expr *e) {
     int32_t t = slot_alloc(16, 8);
     gen_expr(e->slice_lit.ptr_expr);
-    ins("movq %%rax, %s", fp(t));
+    movq(R(RAX), fp(t));
     gen_expr(e->slice_lit.len_expr);
     if (!e->slice_lit.len_nonneg) {
         int m = msg_label(e->loc, "slice literal length is negative: len=%lld\n");
         int l = fail_begin();
-        ins("movq %%rax, %%rdx");
+        movq(R(RAX), R(RDX));
         fail_end(m);
-        ins("testq %%rax, %%rax");
-        ins("js .Lq%d", l);
+        testq(R(RAX), R(RAX));
+        jcc(CC_S, l);
     }
-    ins("movq %%rax, %s", fp(t + 8));
-    ins("leaq %s, %%rax", fp(t));
+    movq(R(RAX), fp(t + 8));
+    leaq(fp(t), R(RAX));
 }
 
 static void gen_some(Expr *e) {
@@ -2773,19 +2804,19 @@ static void gen_some(Expr *e) {
         gen_expr(e->some_expr.value);
         if (!ptr_value_provably_nonnull(e->some_expr.value)) {
             int l = fail_simple(e->loc, "some() of a null pointer (pointer options use null as the none sentinel)\n");
-            ins("testq %%rax, %%rax");
-            ins("jz .Lq%d", l);
+            testq(R(RAX), R(RAX));
+            jcc(CC_E, l);
         }
         return;
     }
     int32_t t = temp_alloc(ot);
     Type *in = conc(ot->option.inner);
     int64_t is = ty_size(in);
-    zero_mem("%rbp", t, ty_size(ot));
+    zero_mem(RBP, t, ty_size(ot));
     gen_expr(e->some_expr.value);
-    store_val(in, "%rbp", t);
-    ins("movb $1, %s", fp(t + (int32_t)is));
-    ins("leaq %s, %%rax", fp(t));
+    store_val(in, RBP, t);
+    movb(IMM(1), fp(t + (int32_t)is));
+    leaq(fp(t), R(RAX));
 }
 
 static void gen_ok(Expr *e) {
@@ -2793,10 +2824,10 @@ static void gen_ok(Expr *e) {
     int32_t t = temp_alloc(rt);
     if (e->ok_expr.value) {
         gen_expr(e->ok_expr.value);
-        store_val(rt->result.inner, "%rbp", t + result_value_off(rt));
+        store_val(rt->result.inner, RBP, t + result_value_off(rt));
     }
-    ins("movl $0, %s", fp(t));
-    ins("leaq %s, %%rax", fp(t));
+    movl(IMM(0), fp(t));
+    leaq(fp(t), R(RAX));
 }
 
 static void gen_err(Expr *e) {
@@ -2805,27 +2836,27 @@ static void gen_err(Expr *e) {
     gen_expr(e->err_expr.code);
     if (!int_value_provably_nonzero(e->err_expr.code)) {
         int l = fail_simple(e->loc, "err() with code 0 (0 is the ok tag; error codes must be non-zero)\n");
-        ins("testl %%eax, %%eax");
-        ins("jz .Lq%d", l);
+        testl(R(RAX), R(RAX));
+        jcc(CC_E, l);
     }
     int32_t cs = spill_push();
-    ins("movq %%rax, %s", fp(cs));
-    zero_mem("%rbp", t, ty_size(rt));
-    ins("movq %s, %%rax", fp(cs));
+    movq(R(RAX), fp(cs));
+    zero_mem(RBP, t, ty_size(rt));
+    movq(fp(cs), R(RAX));
     spill_pop();
-    ins("movl %%eax, %s", fp(t));
-    ins("leaq %s, %%rax", fp(t));
+    movl(R(RAX), fp(t));
+    leaq(fp(t), R(RAX));
 }
 
 static void gen_default(Type *t) {
     switch (val_kind(t)) {
-    case VK_INT: ins("xorl %%eax, %%eax"); return;
-    case VK_FLOAT: ins("xorps %%xmm0, %%xmm0"); return;
+    case VK_INT: xorl(R(RAX), R(RAX)); return;
+    case VK_FLOAT: xorps(X(0), X(0)); return;
     case VK_VOID: return;
     case VK_AGG: {
         int32_t s = temp_alloc(t);
-        zero_mem("%rbp", s, ty_size(t));
-        ins("leaq %s, %%rax", fp(s));
+        zero_mem(RBP, s, ty_size(t));
+        leaq(fp(s), R(RAX));
         return;
     }
     }
@@ -2848,7 +2879,7 @@ static int64_t ctx_layout(Expr *lam, int64_t *offs, int64_t *align_out) {
 
 /* Store each capture's current value into the context at (%rdx base +
  * offset) or a frame slot. */
-static void fill_captures(Expr *lam, const char *base, int64_t base_off) {
+static void fill_captures(Expr *lam, Reg base, int64_t base_off) {
     int n = lam->func.capture_count;
     int64_t *offs = xcalloc((size_t)(n ? n : 1), sizeof(int64_t));
     ctx_layout(lam, offs, NULL);
@@ -2860,12 +2891,12 @@ static void fill_captures(Expr *lam, const char *base, int64_t base_off) {
             continue;
         }
         load_val(c->type, fp(loc));
-        if (strcmp(base, "%rbp") != 0) {
+        if (base != RBP) {
             /* the base pointer lives in a spill slot passed as base_off */
-            ins("movq %s, %%rdx", fp((int32_t)base_off));
-            store_val(c->type, "%rdx", offs[i]);
+            movq(fp((int32_t)base_off), R(RDX));
+            store_val(c->type, RDX, offs[i]);
         } else {
-            store_val(c->type, "%rbp", base_off + offs[i]);
+            store_val(c->type, RBP, base_off + offs[i]);
         }
     }
     free(offs);
@@ -2874,19 +2905,19 @@ static void fill_captures(Expr *lam, const char *base, int64_t base_off) {
 static void gen_func_value(Expr *e) {
     const char *sym = lambda_c_name(e);
     if (e->func.capture_count == 0) {
-        ins("leaq .Lq%d(%%rip), %%rax", fnval_label(sym));
+        leaq(RIPREL(fnval_label(sym), 0), R(RAX));
         return;
     }
     int64_t al;
     int64_t size = ctx_layout(e, NULL, &al);
     int32_t ctx = slot_alloc(align_up(size, 8), al > 8 ? al : 8);
-    fill_captures(e, "%rbp", ctx);
+    fill_captures(e, RBP, ctx);
     int32_t fv = slot_alloc(16, 8);
-    ins("leaq %s(%%rip), %%rax", sym);
-    ins("movq %%rax, %s", fp(fv));
-    ins("leaq %s, %%rax", fp(ctx));
-    ins("movq %%rax, %s", fp(fv + 8));
-    ins("leaq %s, %%rax", fp(fv));
+    leaq(RIPREL(asm_sym(sym), 0), R(RAX));
+    movq(R(RAX), fp(fv));
+    leaq(fp(ctx), R(RAX));
+    movq(R(RAX), fp(fv + 8));
+    leaq(fp(fv), R(RAX));
 }
 
 /* ================================================================
@@ -2895,26 +2926,26 @@ static void gen_func_value(Expr *e) {
 
 /* %rdi = max(%rax, 1): an element count for a heap request that may be 0. */
 static void alloc_n_rdi(void) {
-    ins("movq %%rax, %%rdi");
-    ins("testq %%rdi, %%rdi");
-    ins("movl $1, %%ecx");
-    ins("cmovle %%rcx, %%rdi");
+    movq(R(RAX), R(RDI));
+    testq(R(RDI), R(RDI));
+    movl(IMM(1), R(RCX));
+    cmovq(CC_LE, R(RCX), R(RDI));
 }
 
 /* Build an option over a slice from %rax (pointer, NULL on failure) and the
  * length in `len_slot`; leaves the option's address in %rax. */
 static void some_slice_or_none(Type *opt, int32_t len_slot) {
     int32_t t = temp_alloc(opt);
-    zero_mem("%rbp", t, ty_size(opt));     /* small: does not touch %rax */
+    zero_mem(RBP, t, ty_size(opt));     /* small: does not touch %rax */
     int lnone = new_label();
-    ins("testq %%rax, %%rax");
-    ins("jz .Lq%d", lnone);
-    ins("movq %%rax, %s", fp(t));
-    ins("movq %s, %%rcx", fp(len_slot));
-    ins("movq %%rcx, %s", fp(t + 8));
-    ins("movb $1, %s", fp(t + 16));
+    testq(R(RAX), R(RAX));
+    jcc(CC_E, lnone);
+    movq(R(RAX), fp(t));
+    movq(fp(len_slot), R(RCX));
+    movq(R(RCX), fp(t + 8));
+    movb(IMM(1), fp(t + 16));
     label(lnone);
-    ins("leaq %s, %%rax", fp(t));
+    leaq(fp(t), R(RAX));
 }
 
 static void gen_alloc(Expr *e) {
@@ -2924,23 +2955,23 @@ static void gen_alloc(Expr *e) {
         if (at && e->alloc_expr.size_expr && e->alloc_expr.alloc_raw) {
             gen_expr(e->alloc_expr.size_expr);
             int64_t es = ty_size(at);
-            if (es != 1) ins("imulq $%lld, %%rax, %%rax", (long long)es);
+            if (es != 1) imulq3(es, R(RAX), R(RAX));
             dyn_alloca_rax();
         } else if (at && e->alloc_expr.size_expr) {
             int64_t es = ty_size(at);
             gen_expr(e->alloc_expr.size_expr);
             int32_t t = slot_alloc(16, 8);
-            ins("movq %%rax, %s", fp(t + 8));
-            if (es != 1) ins("imulq $%lld, %%rax, %%rax", (long long)es);
+            movq(R(RAX), fp(t + 8));
+            if (es != 1) imulq3(es, R(RAX), R(RAX));
             int32_t bytes = slot_alloc(8, 8);
-            ins("movq %%rax, %s", fp(bytes));
+            movq(R(RAX), fp(bytes));
             dyn_alloca_rax();
-            ins("movq %%rax, %s", fp(t));
-            ins("movq %%rax, %%rdi");
-            ins("movq %s, %%rcx", fp(bytes));
-            ins("xorl %%eax, %%eax");
-            ins("rep stosb");
-            ins("leaq %s, %%rax", fp(t));
+            movq(R(RAX), fp(t));
+            movq(R(RAX), R(RDI));
+            movq(fp(bytes), R(RCX));
+            xorl(R(RAX), R(RAX));
+            rep_stosb();
+            leaq(fp(t), R(RAX));
         } else if (init && init->kind == EXPR_INTERP_STRING) {
             gen_interp(init, NULL);
         } else if (init && init->kind == EXPR_ARRAY_LIT) {
@@ -2953,23 +2984,23 @@ static void gen_alloc(Expr *e) {
     if (at && e->alloc_expr.size_expr && e->alloc_expr.alloc_raw) {
         gen_expr(e->alloc_expr.size_expr);
         alloc_n_rdi();
-        ins("movq $%lld, %%rsi", (long long)ty_size(at));
+        movq(IMM(ty_size(at)), R(RSI));
         call_c("calloc");
         return;
     }
     if (at && e->alloc_expr.size_expr) {
         gen_expr(e->alloc_expr.size_expr);
         int32_t ls = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(ls));
+        movq(R(RAX), fp(ls));
         alloc_n_rdi();
-        ins("movq $%lld, %%rsi", (long long)ty_size(at));
+        movq(IMM(ty_size(at)), R(RSI));
         call_c("calloc");
         some_slice_or_none(conc(e->type), ls);
         return;
     }
     if (at) {
-        ins("movl $1, %%edi");
-        ins("movq $%lld, %%rsi", (long long)ty_size(at));
+        movl(IMM(1), R(RDI));
+        movq(IMM(ty_size(at)), R(RSI));
         call_c("calloc");
         return;
     }
@@ -2979,15 +3010,15 @@ static void gen_alloc(Expr *e) {
         int sl = str_label(b, n);
         free(b);
         int32_t ls = slot_alloc(8, 8);
-        ins("movq $%d, %s", n, fp(ls));
-        ins("movl $%d, %%edi", n > 0 ? n : 1);
+        movq(IMM(n), fp(ls));
+        movl(IMM(n > 0 ? n : 1), R(RDI));
         call_c("malloc");
         int lnull = new_label();
-        ins("testq %%rax, %%rax");
-        ins("jz .Lq%d", lnull);
-        ins("movq %%rax, %%rdi");
-        ins("leaq .Lq%d(%%rip), %%rsi", sl);
-        ins("movl $%d, %%edx", n);
+        testq(R(RAX), R(RAX));
+        jcc(CC_E, lnull);
+        movq(R(RAX), R(RDI));
+        leaq(RIPREL(sl, 0), R(RSI));
+        movl(IMM(n), R(RDX));
         call_c("memcpy");
         label(lnull);
         some_slice_or_none(conc(e->type), ls);
@@ -2998,14 +3029,14 @@ static void gen_alloc(Expr *e) {
         unsigned char *b = decode_lit(init->cstring_lit.value, init->cstring_lit.length, &n);
         int sl = str_label(b, n);
         free(b);
-        ins("movl $%d, %%edi", n + 1);
+        movl(IMM(n + 1), R(RDI));
         call_c("malloc");
         int lnull = new_label();
-        ins("testq %%rax, %%rax");
-        ins("jz .Lq%d", lnull);
-        ins("movq %%rax, %%rdi");
-        ins("leaq .Lq%d(%%rip), %%rsi", sl);
-        ins("movl $%d, %%edx", n + 1);
+        testq(R(RAX), R(RAX));
+        jcc(CC_E, lnull);
+        movq(R(RAX), R(RDI));
+        leaq(RIPREL(sl, 0), R(RSI));
+        movl(IMM(n + 1), R(RDX));
         call_c("memcpy");
         label(lnull);
         return;
@@ -3013,22 +3044,22 @@ static void gen_alloc(Expr *e) {
     if (init->kind == EXPR_CAST && is_cstr_type(conc(init->type))) {
         gen_expr(init->cast.operand);
         int32_t s = slot_alloc(16, 8);
-        copy_mem("%rbp", s, "%rax", 0, 16);
-        ins("movq %s, %%rdi", fp(s + 8));
-        ins("incq %%rdi");
+        copy_mem(RBP, s, RAX, 0, 16);
+        movq(fp(s + 8), R(RDI));
+        incq(R(RDI));
         call_c("malloc");
         int lnull = new_label();
-        ins("testq %%rax, %%rax");
-        ins("jz .Lq%d", lnull);
+        testq(R(RAX), R(RAX));
+        jcc(CC_E, lnull);
         int32_t p = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(p));
-        ins("movq %%rax, %%rdi");
-        ins("movq %s, %%rsi", fp(s));
-        ins("movq %s, %%rdx", fp(s + 8));
+        movq(R(RAX), fp(p));
+        movq(R(RAX), R(RDI));
+        movq(fp(s), R(RSI));
+        movq(fp(s + 8), R(RDX));
         call_c("memcpy");
-        ins("movq %s, %%rcx", fp(s + 8));
-        ins("movb $0, (%%rax,%%rcx)");
-        ins("movq %s, %%rax", fp(p));
+        movq(fp(s + 8), R(RCX));
+        movb(IMM(0), MI(RAX, RCX, 1, 0));
+        movq(fp(p), R(RAX));
         label(lnull);
         return;
     }
@@ -3039,27 +3070,27 @@ static void gen_alloc(Expr *e) {
         int64_t N = init->array_lit.size_expr->int_lit.value;
         int ec = init->array_lit.elem_count;
         int32_t ls = slot_alloc(8, 8);
-        ins("movq $%lld, %s", (long long)N, fp(ls));
+        movq(IMM(N), fp(ls));
         if (ec == 0) {
-            ins("movq $%lld, %%rdi", (long long)(N > 0 ? N : 1));
-            ins("movq $%lld, %%rsi", (long long)es);
+            movq(IMM((N > 0 ? N : 1)), R(RDI));
+            movq(IMM(es), R(RSI));
             call_c("calloc");
         } else {
-            ins("movq $%lld, %%rdi", (long long)(N * es > 0 ? N * es : 1));
+            movq(IMM((N * es > 0 ? N * es : 1)), R(RDI));
             call_c("malloc");
         }
         int32_t p = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(p));
+        movq(R(RAX), fp(p));
         int lnull = new_label();
-        ins("testq %%rax, %%rax");
-        ins("jz .Lq%d", lnull);
+        testq(R(RAX), R(RAX));
+        jcc(CC_E, lnull);
         for (int i = 0; i < ec; i++) {
             gen_expr(init->array_lit.elems[i]);
-            ins("movq %s, %%rdx", fp(p));
-            store_val(elem, "%rdx", i * es);
+            movq(fp(p), R(RDX));
+            store_val(elem, RDX, i * es);
         }
         label(lnull);
-        ins("movq %s, %%rax", fp(p));
+        movq(fp(p), R(RAX));
         some_slice_or_none(conc(e->type), ls);
         return;
     }
@@ -3073,74 +3104,74 @@ static void gen_alloc(Expr *e) {
         if (!literal) {
             gen_expr(init);
             src = slot_alloc(16, 8);
-            copy_mem("%rbp", src, "%rax", 0, 16);
+            copy_mem(RBP, src, RAX, 0, 16);
         }
-        ins("movq $%lld, %%rdi", (long long)(size > 0 ? size : 1));
+        movq(IMM((size > 0 ? size : 1)), R(RDI));
         call_c("malloc");
         int32_t p = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(p));
+        movq(R(RAX), fp(p));
         int32_t t = temp_alloc(opt);
-        zero_mem("%rbp", t, ty_size(opt));
+        zero_mem(RBP, t, ty_size(opt));
         int lnull = new_label();
-        ins("movq %s, %%rax", fp(p));
-        ins("testq %%rax, %%rax");
-        ins("jz .Lq%d", lnull);
+        movq(fp(p), R(RAX));
+        testq(R(RAX), R(RAX));
+        jcc(CC_E, lnull);
         if (literal) {
-            fill_captures(lam, "%rdx", p);
-            ins("leaq %s(%%rip), %%rax", lambda_c_name(lam));
+            fill_captures(lam, RDX, p);
+            leaq(RIPREL(asm_sym(lambda_c_name(lam)), 0), R(RAX));
         } else {
-            ins("movq %s, %%rdi", fp(p));
-            ins("movq %s, %%rsi", fp(src + 8));
-            ins("movq $%lld, %%rdx", (long long)size);
+            movq(fp(p), R(RDI));
+            movq(fp(src + 8), R(RSI));
+            movq(IMM(size), R(RDX));
             call_c("memcpy");
-            ins("movq %s, %%rax", fp(src));
+            movq(fp(src), R(RAX));
         }
-        ins("movq %%rax, %s", fp(t));
-        ins("movq %s, %%rax", fp(p));
-        ins("movq %%rax, %s", fp(t + 8));
-        ins("movb $1, %s", fp(t + 16));
+        movq(R(RAX), fp(t));
+        movq(fp(p), R(RAX));
+        movq(R(RAX), fp(t + 8));
+        movb(IMM(1), fp(t + 16));
         label(lnull);
-        ins("leaq %s, %%rax", fp(t));
+        leaq(fp(t), R(RAX));
         return;
     }
     Type *it = conc(init->type);
     if (init->kind == EXPR_STRUCT_LIT || it->kind == TYPE_UNION) {
         int64_t sz = ty_size(it);
-        ins("movq $%lld, %%rdi", (long long)(sz > 0 ? sz : 1));
+        movq(IMM((sz > 0 ? sz : 1)), R(RDI));
         call_c("malloc");
         int32_t p = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(p));
+        movq(R(RAX), fp(p));
         int lnull = new_label();
-        ins("testq %%rax, %%rax");
-        ins("jz .Lq%d", lnull);
+        testq(R(RAX), R(RAX));
+        jcc(CC_E, lnull);
         gen_expr(init);
-        ins("movq %s, %%rdx", fp(p));
-        store_val(it, "%rdx", 0);
+        movq(fp(p), R(RDX));
+        store_val(it, RDX, 0);
         label(lnull);
-        ins("movq %s, %%rax", fp(p));
+        movq(fp(p), R(RAX));
         return;
     }
     if (it->kind == TYPE_SLICE) {
         int64_t es = ty_size(it->slice.elem);
         gen_expr(init);
         int32_t s = slot_alloc(16, 8);
-        copy_mem("%rbp", s, "%rax", 0, 16);
-        ins("movq %s, %%rax", fp(s + 8));
+        copy_mem(RBP, s, RAX, 0, 16);
+        movq(fp(s + 8), R(RAX));
         alloc_n_rdi();
-        if (es != 1) ins("imulq $%lld, %%rdi, %%rdi", (long long)es);
+        if (es != 1) imulq3(es, R(RDI), R(RDI));
         call_c("malloc");
         int lnull = new_label();
         int32_t p = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(p));
-        ins("testq %%rax, %%rax");
-        ins("jz .Lq%d", lnull);
-        ins("movq %%rax, %%rdi");
-        ins("movq %s, %%rsi", fp(s));
-        ins("movq %s, %%rdx", fp(s + 8));
-        if (es != 1) ins("imulq $%lld, %%rdx, %%rdx", (long long)es);
+        movq(R(RAX), fp(p));
+        testq(R(RAX), R(RAX));
+        jcc(CC_E, lnull);
+        movq(R(RAX), R(RDI));
+        movq(fp(s), R(RSI));
+        movq(fp(s + 8), R(RDX));
+        if (es != 1) imulq3(es, R(RDX), R(RDX));
         call_c("memcpy");
         label(lnull);
-        ins("movq %s, %%rax", fp(p));
+        movq(fp(p), R(RAX));
         some_slice_or_none(conc(e->type), s + 8);
         return;
     }
@@ -3150,9 +3181,9 @@ static void gen_alloc(Expr *e) {
 static void gen_free(Expr *e) {
     Type *ot = conc(e->free_expr.operand->type);
     gen_expr(e->free_expr.operand);
-    if (ot->kind == TYPE_SLICE) ins("movq (%%rax), %%rdi");
-    else if (ot->kind == TYPE_FUNC) ins("movq 8(%%rax), %%rdi");
-    else ins("movq %%rax, %%rdi");
+    if (ot->kind == TYPE_SLICE) movq(M(RAX, 0), R(RDI));
+    else if (ot->kind == TYPE_FUNC) movq(M(RAX, 8), R(RDI));
+    else movq(R(RAX), R(RDI));
     call_c("free");
 }
 
@@ -3181,10 +3212,10 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
         gen_expr(segs[i].expr);
         if (val_kind(t) == VK_AGG) {
             sslot[i] = temp_alloc(t);
-            copy_mem("%rbp", sslot[i], "%rax", 0, ty_size(t));
+            copy_mem(RBP, sslot[i], RAX, 0, ty_size(t));
         } else {
             sslot[i] = slot_alloc(8, 8);
-            ins(val_kind(t) == VK_FLOAT ? "movq %%xmm0, %s" : "movq %%rax, %s", fp(sslot[i]));
+            (val_kind(t) == VK_FLOAT ? movq(X(0), fp(sslot[i])) : movq(R(RAX), fp(sslot[i])));
         }
     }
 
@@ -3198,26 +3229,26 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
             free(rest);
             if (is_str_type(stype[i])) {
                 int l = fail_begin();
-                ins("movq $%d, %%rcx", prec);
+                movq(IMM(prec), R(RCX));
                 fail_end(m);
-                ins("movq %s, %%rdx", fp(sslot[i] + 8));
-                ins("cmpq $%d, %%rdx", prec);
-                ins("jg .Lq%d", l);
+                movq(fp(sslot[i] + 8), R(RDX));
+                cmpq(IMM(prec), R(RDX));
+                jcc(CC_G, l);
             } else {
                 int lok = new_label();
-                ins("movq %s, %%rdi", fp(sslot[i]));
-                ins("xorl %%esi, %%esi");
-                ins("movl $%d, %%edx", prec + 1);
+                movq(fp(sslot[i]), R(RDI));
+                xorl(R(RSI), R(RSI));
+                movl(IMM(prec + 1), R(RDX));
                 call_c("memchr");
-                ins("testq %%rax, %%rax");
-                ins("jnz .Lq%d", lok);
-                ins("movq %s, %%rdi", fp(sslot[i]));
+                testq(R(RAX), R(RAX));
+                jcc(CC_NE, lok);
+                movq(fp(sslot[i]), R(RDI));
                 call_c("strlen");
                 int l = fail_begin();
-                ins("movq %%rax, %%rdx");
-                ins("movq $%d, %%rcx", prec);
+                movq(R(RAX), R(RDX));
+                movq(IMM(prec), R(RCX));
                 fail_end(m);
-                ins("jmp .Lq%d", l);
+                jmp(l);
                 label(lok);
             }
         }
@@ -3226,22 +3257,22 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
     /* The byte budget. */
     int32_t flen = slot_alloc(8, 8);
     int64_t konst = 0;
-    ins("movq $0, %s", fp(flen));
+    movq(IMM(0), fp(flen));
     for (int i = 0; i < nseg; i++) {
         InterpSegment *seg = &segs[i];
         Type *t = seg->is_literal ? NULL : instance_type(seg->expr->type);
         InterpSegBudget b = interp_seg_budget(seg, t);
         if (!b.runtime) { konst += b.bytes; continue; }
-        if (is_str_type(stype[i])) ins("movq %s, %%rax", fp(sslot[i] + 8));
-        else { ins("movq %s, %%rdi", fp(sslot[i])); call_c("strlen"); }
+        if (is_str_type(stype[i])) movq(fp(sslot[i] + 8), R(RAX));
+        else { movq(fp(sslot[i]), R(RDI)); call_c("strlen"); }
         if (b.bytes > 0) {
-            ins("movq $%lld, %%rcx", (long long)b.bytes);
-            ins("cmpq %%rcx, %%rax");
-            ins("cmovl %%rcx, %%rax");
+            movq(IMM(b.bytes), R(RCX));
+            cmpq(R(RCX), R(RAX));
+            cmovq(CC_L, R(RCX), R(RAX));
         }
-        ins("addq %%rax, %s", fp(flen));
+        addq(R(RAX), fp(flen));
     }
-    if (konst) ins("addq $%lld, %s", (long long)konst, fp(flen));
+    if (konst) addq(IMM(konst), fp(flen));
 
     /* The buffer. */
     int32_t buf = slot_alloc(8, 8);
@@ -3249,18 +3280,18 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
     bool fixed = !heap && interp_const_buffer_size(e, instance_type, &bsize) &&
                  !e->interp_string.wrapped;
     if (heap) {
-        ins("movq %s, %%rdi", fp(flen));
-        ins("incq %%rdi");
+        movq(fp(flen), R(RDI));
+        incq(R(RDI));
         call_c("malloc");
     } else if (fixed) {
         int32_t back = slot_alloc(align_up(bsize + 1, 8), 8);
-        ins("leaq %s, %%rax", fp(back));
+        leaq(fp(back), R(RAX));
     } else {
-        ins("movq %s, %%rax", fp(flen));
-        ins("incq %%rax");
+        movq(fp(flen), R(RAX));
+        incq(R(RAX));
         dyn_alloca_rax();
     }
-    ins("movq %%rax, %s", fp(buf));
+    movq(R(RAX), fp(buf));
 
     /* The format string and arguments. */
     Buf fmt = { 0 };
@@ -3268,9 +3299,9 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
     int na = 0, acap = 3 + 2 * nseg + 64;
     args[na].type = type_any_ptr(); args[na++].slot = buf;
     int32_t size_slot = slot_alloc(8, 8);
-    ins("movq %s, %%rax", fp(flen));
-    ins("incq %%rax");
-    ins("movq %%rax, %s", fp(size_slot));
+    movq(fp(flen), R(RAX));
+    incq(R(RAX));
+    movq(R(RAX), fp(size_slot));
     args[na].type = type_int64(); args[na++].slot = size_slot;
     int32_t fmt_slot = slot_alloc(8, 8);
     args[na].type = type_any_ptr(); args[na++].slot = fmt_slot;
@@ -3302,17 +3333,17 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
             interp_seg_spec(seg, &sp);
             buf_printf(&fmt, "%%%.*s.*s", sp.prec_at, seg->text);
             int32_t ls = slot_alloc(8, 8);
-            ins("movq %s, %%rax", fp(sslot[i] + 8));
+            movq(fp(sslot[i] + 8), R(RAX));
             if (sp.precision >= 0) {
-                ins("movq $%lld, %%rcx", (long long)sp.precision);
-                ins("cmpq %%rcx, %%rax");
-                ins("cmovg %%rcx, %%rax");
+                movq(IMM(sp.precision), R(RCX));
+                cmpq(R(RCX), R(RAX));
+                cmovq(CC_G, R(RCX), R(RAX));
             }
-            ins("movq %%rax, %s", fp(ls));
+            movq(R(RAX), fp(ls));
             args[na].type = type_int32(); args[na++].slot = ls;
             int32_t ps = slot_alloc(8, 8);
-            ins("movq %s, %%rax", fp(sslot[i]));
-            ins("movq %%rax, %s", fp(ps));
+            movq(fp(sslot[i]), R(RAX));
+            movq(R(RAX), fp(ps));
             args[na].type = type_any_ptr(); args[na++].slot = ps;
             continue;
         }
@@ -3330,33 +3361,33 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
         }
         int32_t as = slot_alloc(8, 8);
         if (val_kind(t) == VK_FLOAT) {
-            ins("movq %s, %%xmm0", fp(sslot[i]));
-            if (is_f32(t)) ins("cvtss2sd %%xmm0, %%xmm0");
-            ins("movq %%xmm0, %s", fp(as));
+            movq(fp(sslot[i]), X(0));
+            if (is_f32(t)) cvtss2sd(X(0), X(0));
+            movq(X(0), fp(as));
             args[na].type = type_float64(); args[na++].slot = as;
             continue;
         }
-        ins("movq %s, %%rax", fp(sslot[i]));
+        movq(fp(sslot[i]), R(RAX));
         if (type_is_integer(t) && interp_conv_is_unsigned(conv, t) && int_signed(t)) {
             int w = int_width(t);
-            if (w == 1) ins("movzbl %%al, %%eax");
-            else if (w == 2) ins("movzwl %%ax, %%eax");
-            else if (w == 4) ins("movl %%eax, %%eax");
+            if (w == 1) movzbl(R(RAX), R(RAX));
+            else if (w == 2) movzwl(R(RAX), R(RAX));
+            else if (w == 4) movl(R(RAX), R(RAX));
         }
-        ins("movq %%rax, %s", fp(as));
+        movq(R(RAX), fp(as));
         args[na].type = type_int64(); args[na++].slot = as;
     }
     int fl = str_label((const unsigned char *)(fmt.p ? fmt.p : ""), (int)fmt.len);
     buf_free(&fmt);
-    ins("leaq .Lq%d(%%rip), %%rax", fl);
-    ins("movq %%rax, %s", fp(fmt_slot));
+    leaq(RIPREL(fl, 0), R(RAX));
+    movq(R(RAX), fp(fmt_slot));
 
     int32_t fw = slot_alloc(8, 8);
     int lskip = new_label();
     if (heap) {
-        ins("movq $0, %s", fp(fw));
-        ins("cmpq $0, %s", fp(buf));
-        ins("je .Lq%d", lskip);
+        movq(IMM(0), fp(fw));
+        cmpq(IMM(0), fp(buf));
+        jcc(CC_E, lskip);
     }
     CallSpec cs = { 0 };
     cs.sym = "snprintf";
@@ -3364,36 +3395,36 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
     cs.variadic = true;
     cs.ret = type_int32();
     emit_call(&cs, args, na);
-    ins("movq %%rax, %s", fp(fw));
+    movq(R(RAX), fp(fw));
     label(lskip);
     free(args);
     free(sslot);
     free(stype);
 
-    if (is_cstr) { ins("movq %s, %%rax", fp(buf)); return; }
+    if (is_cstr) { movq(fp(buf), R(RAX)); return; }
     /* len = (fw >= 0 && fw <= flen) ? fw : flen */
-    ins("movq %s, %%rax", fp(fw));
-    ins("movq %s, %%rcx", fp(flen));
+    movq(fp(fw), R(RAX));
+    movq(fp(flen), R(RCX));
     int lk = new_label(), luse = new_label();
-    ins("testq %%rax, %%rax");
-    ins("js .Lq%d", luse);
-    ins("cmpq %%rcx, %%rax");
-    ins("jle .Lq%d", lk);
+    testq(R(RAX), R(RAX));
+    jcc(CC_S, luse);
+    cmpq(R(RCX), R(RAX));
+    jcc(CC_LE, lk);
     label(luse);
-    ins("movq %%rcx, %%rax");
+    movq(R(RCX), R(RAX));
     label(lk);
     if (heap) {
         int32_t ls = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(ls));
-        ins("movq %s, %%rax", fp(buf));
+        movq(R(RAX), fp(ls));
+        movq(fp(buf), R(RAX));
         some_slice_or_none(alloc_opt, ls);
         return;
     }
     int32_t t = slot_alloc(16, 8);
-    ins("movq %%rax, %s", fp(t + 8));
-    ins("movq %s, %%rax", fp(buf));
-    ins("movq %%rax, %s", fp(t));
-    ins("leaq %s, %%rax", fp(t));
+    movq(R(RAX), fp(t + 8));
+    movq(fp(buf), R(RAX));
+    movq(R(RAX), fp(t));
+    leaq(fp(t), R(RAX));
 }
 
 /* ================================================================
@@ -3408,29 +3439,29 @@ static void gen_assign(Expr *e) {
         int64_t cap = fixarr_size(fat), es = ty_size(fat->fixed_array.elem);
         gen_addr(target);
         int32_t dst = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(dst));
+        movq(R(RAX), fp(dst));
         gen_expr(e->assign.value);
         int32_t src = slot_alloc(16, 8);
-        copy_mem("%rbp", src, "%rax", 0, 16);
+        copy_mem(RBP, src, RAX, 0, 16);
         char *rest = str_sprintf("fixed-array field '%s' overflow: len=%%lld capacity=%lld\n",
                                  target->field.name, (long long)cap);
         int m = msg_label(e->loc, rest);
         free(rest);
         int l = fail_begin();
         fail_end(m);
-        ins("movq %s, %%rdx", fp(src + 8));
-        ins("cmpq $%lld, %%rdx", (long long)cap);
-        ins("jg .Lq%d", l);
+        movq(fp(src + 8), R(RDX));
+        cmpq(IMM(cap), R(RDX));
+        jcc(CC_G, l);
         /* zero the whole field, then copy the source over it */
-        ins("movq %s, %%rdi", fp(dst));
-        ins("movq $%lld, %%rcx", (long long)(cap * es));
-        ins("xorl %%eax, %%eax");
-        ins("rep stosb");
-        ins("movq %s, %%rdi", fp(dst));
-        ins("movq %s, %%rsi", fp(src));
-        ins("movq %s, %%rcx", fp(src + 8));
-        if (es != 1) ins("imulq $%lld, %%rcx, %%rcx", (long long)es);
-        ins("rep movsb");
+        movq(fp(dst), R(RDI));
+        movq(IMM((cap * es)), R(RCX));
+        xorl(R(RAX), R(RAX));
+        rep_stosb();
+        movq(fp(dst), R(RDI));
+        movq(fp(src), R(RSI));
+        movq(fp(src + 8), R(RCX));
+        if (es != 1) imulq3(es, R(RCX), R(RCX));
+        rep_movsb();
         return;
     }
     if ((target->kind == EXPR_FIELD && !target->field.codegen_name) || target->kind == EXPR_DEREF_FIELD) {
@@ -3440,21 +3471,21 @@ static void gen_assign(Expr *e) {
         if (field_info_x(st, target->field.name, &off, &ft, &x) && x) {
             gen_expr(target->field.object);
             int32_t s = spill_push();
-            ins("movq %%rax, %s", fp(s));
+            movq(R(RAX), fp(s));
             gen_expr(e->assign.value);
-            ins("movq %s, %%rdx", fp(s));
+            movq(fp(s), R(RDX));
             spill_pop();
-            store_ext_field(x, "%rdx", 0, off);
+            store_ext_field(x, RDX, 0, off);
             return;
         }
     }
     gen_addr(target);
     int32_t s = spill_push();
-    ins("movq %%rax, %s", fp(s));
+    movq(R(RAX), fp(s));
     gen_expr(e->assign.value);
-    ins("movq %s, %%rdx", fp(s));
+    movq(fp(s), R(RDX));
     spill_pop();
-    store_val(target->type, "%rdx", 0);
+    store_val(target->type, RDX, 0);
 }
 
 /* ================================================================
@@ -3483,8 +3514,8 @@ static bool pattern_has_predicate(Pattern *pat) {
 }
 
 static void cmp_rax_imm(int64_t v) {
-    if (v >= INT32_MIN && v <= INT32_MAX) ins("cmpq $%lld, %%rax", (long long)v);
-    else { mov_imm_reg(v, "%rcx"); ins("cmpq %%rcx, %%rax"); }
+    if (v >= INT32_MIN && v <= INT32_MAX) cmpq(IMM(v), R(RAX));
+    else { mov_imm_reg(v, R(RCX)); cmpq(R(RCX), R(RAX)); }
 }
 
 static Type *tuple_elem_type(Pattern *pat, Type *t, int i, int64_t *off) {
@@ -3501,70 +3532,70 @@ static void gen_pat_test(Pattern *pat, int32_t off, Type *t, int fail) {
     case PAT_INT_LIT:
         load_int(t, fp(off));
         cmp_rax_imm(canon_const(pat->int_lit.value, t));
-        ins("jne .Lq%d", fail);
+        jcc(CC_NE, fail);
         return;
     case PAT_CHAR_LIT:
         load_int(t, fp(off));
         cmp_rax_imm(pat->char_lit.value);
-        ins("jne .Lq%d", fail);
+        jcc(CC_NE, fail);
         return;
     case PAT_BOOL_LIT:
         load_int(t, fp(off));
         cmp_rax_imm(pat->bool_lit.value ? 1 : 0);
-        ins("jne .Lq%d", fail);
+        jcc(CC_NE, fail);
         return;
     case PAT_STRING_LIT: {
         int n;
         unsigned char *b = decode_lit(pat->string_lit.value, pat->string_lit.length, &n);
         int sl = str_label(b, n);
         free(b);
-        ins("cmpq $%d, %s", n, fp(off + 8));
-        ins("jne .Lq%d", fail);
+        cmpq(IMM(n), fp(off + 8));
+        jcc(CC_NE, fail);
         if (n > 0) {
-            ins("movq %s, %%rdi", fp(off));
-            ins("leaq .Lq%d(%%rip), %%rsi", sl);
-            ins("movl $%d, %%edx", n);
+            movq(fp(off), R(RDI));
+            leaq(RIPREL(sl, 0), R(RSI));
+            movl(IMM(n), R(RDX));
             call_c("memcmp");
-            ins("testl %%eax, %%eax");
-            ins("jne .Lq%d", fail);
+            testl(R(RAX), R(RAX));
+            jcc(CC_NE, fail);
         }
         return;
     }
     case PAT_SOME:
         if (is_null_sentinel(t)) {
-            ins("cmpq $0, %s", fp(off));
-            ins("je .Lq%d", fail);
+            cmpq(IMM(0), fp(off));
+            jcc(CC_E, fail);
         } else {
-            ins("cmpb $0, %s", fp(off + (int32_t)ty_size(t->option.inner)));
-            ins("je .Lq%d", fail);
+            cmpb(IMM(0), fp(off + (int32_t)ty_size(t->option.inner)));
+            jcc(CC_E, fail);
         }
         if (pat->some_pat.inner) gen_pat_test(pat->some_pat.inner, off, t->option.inner, fail);
         return;
     case PAT_NONE:
-        if (is_null_sentinel(t)) ins("cmpq $0, %s", fp(off));
-        else ins("cmpb $0, %s", fp(off + (int32_t)ty_size(t->option.inner)));
-        ins("jne .Lq%d", fail);
+        if (is_null_sentinel(t)) cmpq(IMM(0), fp(off));
+        else cmpb(IMM(0), fp(off + (int32_t)ty_size(t->option.inner)));
+        jcc(CC_NE, fail);
         return;
     case PAT_OK:
-        ins("cmpl $0, %s", fp(off));
-        ins("jne .Lq%d", fail);
+        cmpl(IMM(0), fp(off));
+        jcc(CC_NE, fail);
         if (pat->some_pat.inner)
             gen_pat_test(pat->some_pat.inner, off + (int32_t)result_value_off(t), t->result.inner, fail);
         return;
     case PAT_ERR:
-        ins("cmpl $0, %s", fp(off));
-        ins("je .Lq%d", fail);
+        cmpl(IMM(0), fp(off));
+        jcc(CC_E, fail);
         if (pat->some_pat.inner) gen_pat_test(pat->some_pat.inner, off, type_int32(), fail);
         return;
     case PAT_VARIANT:
         if (t->kind == TYPE_ENUM) {
             load_int(t, fp(off));
             cmp_rax_imm(enum_variant_value(t, pat->variant.variant));
-            ins("jne .Lq%d", fail);
+            jcc(CC_NE, fail);
             return;
         }
-        ins("cmpl $%d, %s", union_variant_index(t, pat->variant.variant), fp(off));
-        ins("jne .Lq%d", fail);
+        cmpl(IMM(union_variant_index(t, pat->variant.variant)), fp(off));
+        jcc(CC_NE, fail);
         if (pat->variant.payload) {
             Type *pt = union_variant_payload(t, pat->variant.variant);
             if (pt) gen_pat_test(pat->variant.payload, off + (int32_t)agg_layout(t)->payload_off, pt, fail);
@@ -3576,9 +3607,9 @@ static void gen_pat_test(Pattern *pat, int32_t off, Type *t, int fail) {
             if (!field_info_x(t, pat->struc.fields[i].name, &fo, &ft, &x)) continue;
             if (x) {
                 if (!pattern_has_predicate(pat->struc.fields[i].pattern)) continue;
-                load_ext_field(ft, x, "%rbp", off, off + fo);
+                load_ext_field(ft, x, RBP, off, off + fo);
                 int32_t v = slot_alloc(8, 8);
-                ins("movq %%rax, %s", fp(v));
+                movq(R(RAX), fp(v));
                 gen_pat_test(pat->struc.fields[i].pattern, v, ft, fail);
                 continue;
             }
@@ -3595,13 +3626,13 @@ static void gen_pat_test(Pattern *pat, int32_t off, Type *t, int fail) {
     case PAT_OR: {
         int ok = new_label();
         for (int i = 0; i < pat->or_pat.alt_count; i++) {
-            if (!pattern_has_predicate(pat->or_pat.alts[i])) { ins("jmp .Lq%d", ok); break; }
+            if (!pattern_has_predicate(pat->or_pat.alts[i])) { jmp(ok); break; }
             if (i == pat->or_pat.alt_count - 1) {
                 gen_pat_test(pat->or_pat.alts[i], off, t, fail);
             } else {
                 int nf = new_label();
                 gen_pat_test(pat->or_pat.alts[i], off, t, nf);
-                ins("jmp .Lq%d", ok);
+                jmp(ok);
                 label(nf);
             }
         }
@@ -3617,8 +3648,8 @@ static void gen_pat_bind(Pattern *pat, int32_t off, Type *t) {
     case PAT_BINDING: {
         const char *nm = pat->binding.codegen_name ? pat->binding.codegen_name : pat->binding.name;
         int32_t s = local_slot(nm, t);
-        if (val_kind(t) == VK_AGG) copy_mem("%rbp", s, "%rbp", off, ty_size(t));
-        else { load_val(t, fp(off)); store_val(t, "%rbp", s); }
+        if (val_kind(t) == VK_AGG) copy_mem(RBP, s, RBP, off, ty_size(t));
+        else { load_val(t, fp(off)); store_val(t, RBP, s); }
         return;
     }
     case PAT_SOME:
@@ -3642,9 +3673,9 @@ static void gen_pat_bind(Pattern *pat, int32_t off, Type *t) {
             int64_t fo; Type *ft; ExtField *x;
             if (!field_info_x(t, pat->struc.fields[i].name, &fo, &ft, &x)) continue;
             if (x) {
-                load_ext_field(ft, x, "%rbp", off, off + fo);
+                load_ext_field(ft, x, RBP, off, off + fo);
                 int32_t v = slot_alloc(8, 8);
-                ins("movq %%rax, %s", fp(v));
+                movq(R(RAX), fp(v));
                 gen_pat_bind(pat->struc.fields[i].pattern, v, ft);
                 continue;
             }
@@ -3670,11 +3701,11 @@ static int32_t value_to_slot(Type *t) {
     switch (val_kind(t)) {
     case VK_AGG: {
         int32_t s = temp_alloc(t);
-        copy_mem("%rbp", s, "%rax", 0, ty_size(t));
+        copy_mem(RBP, s, RAX, 0, ty_size(t));
         return s;
     }
-    case VK_FLOAT: { int32_t s = slot_alloc(8, 8); ins("movq %%xmm0, %s", fp(s)); return s; }
-    case VK_INT: { int32_t s = slot_alloc(8, 8); ins("movq %%rax, %s", fp(s)); return s; }
+    case VK_FLOAT: { int32_t s = slot_alloc(8, 8); movq(X(0), fp(s)); return s; }
+    case VK_INT: { int32_t s = slot_alloc(8, 8); movq(R(RAX), fp(s)); return s; }
     case VK_VOID: return slot_alloc(8, 8);
     }
     return 0;
@@ -3686,8 +3717,8 @@ static int32_t value_to_slot(Type *t) {
 
 static void cond_jump_false(Expr *cond, int target) {
     gen_expr(cond);
-    ins("testl %%eax, %%eax");
-    ins("jz .Lq%d", target);
+    testl(R(RAX), R(RAX));
+    jcc(CC_E, target);
 }
 
 /* A branch body (one expression or a block) in its own defer scope. With
@@ -3708,7 +3739,7 @@ static void gen_if(Expr *e) {
     cond_jump_false(e->if_expr.cond, lelse);
     gen_scoped_branch(e->if_expr.then_body,
                       valued && !type_is_never(e->if_expr.then_body->type) ? TAIL_VALUE : TAIL_DISCARD);
-    ins("jmp .Lq%d", lend);
+    jmp(lend);
     label(lelse);
     if (e->if_expr.else_body)
         gen_scoped_branch(e->if_expr.else_body,
@@ -3739,10 +3770,10 @@ static void gen_match(Expr *e, bool tail) {
         bool done = gen_stmts(arm->body, arm->body_count, mode);
         if (!done) {
             emit_scope_defers(g_defer);
-            if (tail) ins("jmp .Lq%d", g_ret_label);
+            if (tail) jmp(g_ret_label);
         }
         defer_pop();
-        ins("jmp .Lq%d", lend);
+        jmp(lend);
         label(next);
         if (!arm->guard && !pattern_has_predicate(arm->pattern)) { exhausted = true; break; }
         if (!any_guard && last) exhausted = true;
@@ -3764,13 +3795,13 @@ static void gen_loop(Expr *e) {
     bool done = gen_stmts(e->loop_expr.body, e->loop_expr.body_count, TAIL_DISCARD);
     if (!done) emit_scope_defers(g_defer);
     defer_pop();
-    ins("jmp .Lq%d", lc.cont);
+    jmp(lc.cont);
     label(lc.brk);
     g_loop = lc.parent;
     if (valued) {
-        if (val_kind(lc.res_type) == VK_AGG) ins("leaq %s, %%rax", fp(lc.res));
-        else if (val_kind(lc.res_type) == VK_FLOAT) ins("movq %s, %%xmm0", fp(lc.res));
-        else ins("movq %s, %%rax", fp(lc.res));
+        if (val_kind(lc.res_type) == VK_AGG) leaq(fp(lc.res), R(RAX));
+        else if (val_kind(lc.res_type) == VK_FLOAT) movq(fp(lc.res), X(0));
+        else movq(fp(lc.res), R(RAX));
     }
 }
 
@@ -3785,20 +3816,20 @@ static void gen_break(Expr *value) {
         }
         if (g_loop->res) {
             if (val_kind(g_loop->res_type) == VK_AGG)
-                copy_mem("%rbp", g_loop->res, "%rax", 0, ty_size(g_loop->res_type));
-            else if (val_kind(g_loop->res_type) == VK_FLOAT) ins("movq %%xmm0, %s", fp(g_loop->res));
-            else ins("movq %%rax, %s", fp(g_loop->res));
+                copy_mem(RBP, g_loop->res, RAX, 0, ty_size(g_loop->res_type));
+            else if (val_kind(g_loop->res_type) == VK_FLOAT) movq(X(0), fp(g_loop->res));
+            else movq(R(RAX), fp(g_loop->res));
         }
     } else {
         emit_defers_to_loop();
     }
-    ins("jmp .Lq%d", g_loop->brk);
+    jmp(g_loop->brk);
 }
 
 static void gen_continue(void) {
     if (!g_loop) return;
     emit_defers_to_loop();
-    ins("jmp .Lq%d", g_loop->cont);
+    jmp(g_loop->cont);
 }
 
 static void gen_for(Expr *e) {
@@ -3808,15 +3839,15 @@ static void gen_for(Expr *e) {
         Type *vt = conc(e->for_expr.iter->type);
         gen_expr(e->for_expr.range_end);
         int32_t end = slot_alloc(8, 8);
-        ins("movq %%rax, %s", fp(end));
+        movq(R(RAX), fp(end));
         const char *vn = e->for_expr.var_codegen_name ? e->for_expr.var_codegen_name : e->for_expr.var;
         int32_t iv = local_slot(vn, vt);
         gen_expr(e->for_expr.iter);
-        store_val(vt, "%rbp", iv);
+        store_val(vt, RBP, iv);
         label(ltop);
         load_int(vt, fp(iv));
-        ins("cmpq %s, %%rax", fp(end));
-        ins(int_signed(vt) ? "jge .Lq%d" : "jae .Lq%d", lc.brk);
+        cmpq(fp(end), R(RAX));
+        (int_signed(vt) ? jcc(CC_GE, lc.brk) : jcc(CC_AE, lc.brk));
         g_loop = &lc;
         defer_push(true);
         bool done = gen_stmts(e->for_expr.body, e->for_expr.body_count, TAIL_DISCARD);
@@ -3825,10 +3856,10 @@ static void gen_for(Expr *e) {
         g_loop = lc.parent;
         label(lc.cont);
         load_int(vt, fp(iv));
-        ins("addq $1, %%rax");
+        addq(IMM(1), R(RAX));
         normalize(vt);
-        store_val(vt, "%rbp", iv);
-        ins("jmp .Lq%d", ltop);
+        store_val(vt, RBP, iv);
+        jmp(ltop);
         label(lc.brk);
         return;
     }
@@ -3837,26 +3868,26 @@ static void gen_for(Expr *e) {
     int64_t es = ty_size(elem);
     gen_expr(e->for_expr.iter);
     int32_t sl = slot_alloc(16, 8);
-    copy_mem("%rbp", sl, "%rax", 0, 16);
+    copy_mem(RBP, sl, RAX, 0, 16);
     int32_t cnt = slot_alloc(8, 8);
-    ins("movq $0, %s", fp(cnt));
+    movq(IMM(0), fp(cnt));
     const char *en = e->for_expr.var_pattern ? e->for_expr.elem_tmp
         : (e->for_expr.var_codegen_name ? e->for_expr.var_codegen_name : e->for_expr.var);
     int32_t ev = local_slot(en, elem);
     label(ltop);
-    ins("movq %s, %%rax", fp(cnt));
-    ins("cmpq %s, %%rax", fp(sl + 8));
-    ins("jge .Lq%d", lc.brk);
-    if (es != 1) ins("imulq $%lld, %%rax, %%rax", (long long)es);
-    ins("addq %s, %%rax", fp(sl));
-    load_val(elem, "(%rax)");
-    store_val(elem, "%rbp", ev);
+    movq(fp(cnt), R(RAX));
+    cmpq(fp(sl + 8), R(RAX));
+    jcc(CC_GE, lc.brk);
+    if (es != 1) imulq3(es, R(RAX), R(RAX));
+    addq(fp(sl), R(RAX));
+    load_val(elem, M(RAX, 0));
+    store_val(elem, RBP, ev);
     if (e->for_expr.var_pattern) gen_pat_bind(e->for_expr.var_pattern, ev, elem);
     if (e->for_expr.index_var) {
         const char *in = e->for_expr.index_codegen_name ? e->for_expr.index_codegen_name : e->for_expr.index_var;
         int32_t ix = local_slot(in, type_int64());
-        ins("movq %s, %%rax", fp(cnt));
-        ins("movq %%rax, %s", fp(ix));
+        movq(fp(cnt), R(RAX));
+        movq(R(RAX), fp(ix));
     }
     g_loop = &lc;
     defer_push(true);
@@ -3865,8 +3896,8 @@ static void gen_for(Expr *e) {
     defer_pop();
     g_loop = lc.parent;
     label(lc.cont);
-    ins("incq %s", fp(cnt));
-    ins("jmp .Lq%d", ltop);
+    incq(fp(cnt));
+    jmp(ltop);
     label(lc.brk);
 }
 
@@ -3880,7 +3911,7 @@ static void gen_let(Expr *s) {
     if (type_valueless(conc(t))) { gen_expr(s->let_expr.let_init); return; }
     int32_t off = local_slot(name, conc(t));
     gen_expr(s->let_expr.let_init);
-    store_val(t, "%rbp", off);
+    store_val(t, RBP, off);
 }
 
 static void gen_let_destruct(Expr *s) {
@@ -3958,26 +3989,26 @@ static void gen_return(Expr *v) {
                 int lelse = new_label();
                 cond_jump_false(v->if_expr.cond, lelse);
                 gen_scoped_branch(v->if_expr.then_body, TAIL_RETURN);
-                ins("jmp .Lq%d", g_ret_label);
+                jmp(g_ret_label);
                 label(lelse);
                 if (v->if_expr.else_body) gen_scoped_branch(v->if_expr.else_body, TAIL_RETURN);
-                ins("jmp .Lq%d", g_ret_label);
+                jmp(g_ret_label);
                 return;
             }
             break;
         case EXPR_MATCH:
             gen_match(v, true);
-            ins("jmp .Lq%d", g_ret_label);
+            jmp(g_ret_label);
             return;
         case EXPR_BLOCK:
             gen_scoped_branch(v, TAIL_RETURN);
-            ins("jmp .Lq%d", g_ret_label);
+            jmp(g_ret_label);
             return;
         case EXPR_CALL:
             if (tail_compatible(v)) {
                 if (!gen_call(v, true)) {
                     if (!type_valueless(v->type)) move_to_return_regs();
-                    ins("jmp .Lq%d", g_ret_label);
+                    jmp(g_ret_label);
                 }
                 return;
             }
@@ -3998,7 +4029,7 @@ static void gen_return(Expr *v) {
         }
     }
     if (has_value) move_to_return_regs();
-    ins("jmp .Lq%d", g_ret_label);
+    jmp(g_ret_label);
 }
 
 /* ================================================================
@@ -4008,8 +4039,8 @@ static void gen_return(Expr *v) {
 static void gen_assert(Expr *e) {
     int lok = new_label();
     gen_expr(e->assert_expr.condition);
-    ins("testl %%eax, %%eax");
-    ins("jnz .Lq%d", lok);
+    testl(R(RAX), R(RAX));
+    jcc(CC_NE, lok);
     char *text = fmt_escape(e->assert_expr.expr_text ? e->assert_expr.expr_text : "",
                             e->assert_expr.expr_text ? e->assert_expr.expr_text_len : 0);
     if (e->assert_expr.message) {
@@ -4017,22 +4048,22 @@ static void gen_assert(Expr *e) {
         char *rest = str_sprintf("assertion failed: %s: %%.*s\n", text);
         int m = msg_label(e->loc, rest);
         free(rest);
-        ins("movq 8(%%rax), %%rdx");
-        ins("movq (%%rax), %%rcx");
-        ins("movq stderr@GOTPCREL(%%rip), %%rdi");
-        ins("movq (%%rdi), %%rdi");
-        ins("leaq .Lq%d(%%rip), %%rsi", m);
-        ins("xorl %%eax, %%eax");
+        movq(M(RAX, 8), R(RDX));
+        movq(M(RAX, 0), R(RCX));
+        movq(GOTREL(asm_sym("stderr")), R(RDI));
+        movq(M(RDI, 0), R(RDI));
+        leaq(RIPREL(m, 0), R(RSI));
+        xorl(R(RAX), R(RAX));
         call_c("fprintf");
         call_c("abort");
     } else {
         char *rest = str_sprintf("assertion failed: %s\n", text);
         int m = msg_label(e->loc, rest);
         free(rest);
-        ins("movq stderr@GOTPCREL(%%rip), %%rdi");
-        ins("movq (%%rdi), %%rdi");
-        ins("leaq .Lq%d(%%rip), %%rsi", m);
-        ins("xorl %%eax, %%eax");
+        movq(GOTREL(asm_sym("stderr")), R(RDI));
+        movq(M(RDI, 0), R(RDI));
+        leaq(RIPREL(m, 0), R(RSI));
+        xorl(R(RAX), R(RAX));
         call_c("fprintf");
         call_c("abort");
     }
@@ -4050,24 +4081,24 @@ static void gen_enum_of(Expr *e) {
     gen_expr(e->enum_of_expr.operand);
     int32_t t = temp_alloc(opt);
     int32_t vs = slot_alloc(8, 8);
-    ins("movq %%rax, %s", fp(vs));
-    zero_mem("%rbp", t, ty_size(opt));
-    ins("movq %s, %%rax", fp(vs));
+    movq(R(RAX), fp(vs));
+    zero_mem(RBP, t, ty_size(opt));
+    movq(fp(vs), R(RAX));
     int lnone = new_label(), lfound = new_label();
-    if (!u64_repr && op_uwide) { ins("testq %%rax, %%rax"); ins("js .Lq%d", lnone); }
-    if (u64_repr && !op_uwide) { ins("testq %%rax, %%rax"); ins("js .Lq%d", lnone); }
+    if (!u64_repr && op_uwide) { testq(R(RAX), R(RAX)); jcc(CC_S, lnone); }
+    if (u64_repr && !op_uwide) { testq(R(RAX), R(RAX)); jcc(CC_S, lnone); }
     for (int i = 0; i < et->enu.variant_count; i++) {
         uint64_t bits = et->enu.variants[i].value_bits;
         int64_t v = u64_repr ? (int64_t)bits : canon_const(bits, repr);
         cmp_rax_imm(v);
-        ins("je .Lq%d", lfound);
+        jcc(CC_E, lfound);
     }
-    ins("jmp .Lq%d", lnone);
+    jmp(lnone);
     label(lfound);
     store_int(et, fp(t));
-    ins("movb $1, %s", fp(t + (int32_t)ty_size(et)));
+    movb(IMM(1), fp(t + (int32_t)ty_size(et)));
     label(lnone);
-    ins("leaq %s, %%rax", fp(t));
+    leaq(fp(t), R(RAX));
 }
 
 static int g_errnames_label = 0;
@@ -4079,33 +4110,35 @@ static void gen_error_name(Expr *e) {
         g_errnames_label = new_label();
         int *labels = xcalloc((size_t)(n ? n : 1), sizeof(int));
         for (int i = 0; i < n; i++) labels[i] = cstr_label(error_code_info(i).qualified);
-        buf_printf(&g_relro, "\t.p2align 3\n.Lq%d:\n", g_errnames_label);
-        for (int i = 0; i < n; i++)
-            buf_printf(&g_relro, "\t.quad .Lq%d\n\t.quad %d\n", labels[i],
-                       (int)strlen(error_code_info(i).qualified));
-        if (n == 0) buf_puts(&g_relro, "\t.quad 0\n");
+        d_align(ASM_RELRO, 8);
+        d_def(ASM_RELRO, g_errnames_label);
+        for (int i = 0; i < n; i++) {
+            d_addr(ASM_RELRO, labels[i], 0);
+            d_int(ASM_RELRO, strlen(error_code_info(i).qualified), 8);
+        }
+        if (n == 0) d_zero(ASM_RELRO, 8);
         free(labels);
     }
     gen_expr(e->error_name_expr.code);
     int32_t t = temp_alloc(opt);
     int32_t cs = slot_alloc(8, 8);
-    ins("movq %%rax, %s", fp(cs));
-    zero_mem("%rbp", t, ty_size(opt));
+    movq(R(RAX), fp(cs));
+    zero_mem(RBP, t, ty_size(opt));
     int lnone = new_label();
-    ins("movq %s, %%rax", fp(cs));
-    ins("subq $%d, %%rax", FC_ERROR_CODE_BASE);
-    ins("cmpq $%d, %%rax", n);
-    ins("jae .Lq%d", lnone);
-    ins("shlq $4, %%rax");
-    ins("leaq .Lq%d(%%rip), %%rcx", g_errnames_label);
-    ins("addq %%rcx, %%rax");
-    ins("movq (%%rax), %%rcx");
-    ins("movq %%rcx, %s", fp(t));
-    ins("movq 8(%%rax), %%rcx");
-    ins("movq %%rcx, %s", fp(t + 8));
-    ins("movb $1, %s", fp(t + 16));
+    movq(fp(cs), R(RAX));
+    subq(IMM(FC_ERROR_CODE_BASE), R(RAX));
+    cmpq(IMM(n), R(RAX));
+    jcc(CC_AE, lnone);
+    shlq(IMM(4), R(RAX));
+    leaq(RIPREL(g_errnames_label, 0), R(RCX));
+    addq(R(RCX), R(RAX));
+    movq(M(RAX, 0), R(RCX));
+    movq(R(RCX), fp(t));
+    movq(M(RAX, 8), R(RCX));
+    movq(R(RCX), fp(t + 8));
+    movb(IMM(1), fp(t + 16));
     label(lnone);
-    ins("leaq %s, %%rax", fp(t));
+    leaq(fp(t), R(RAX));
 }
 
 static void gen_bitcast(Expr *e) {
@@ -4113,10 +4146,10 @@ static void gen_bitcast(Expr *e) {
     gen_expr(e->bitcast_expr.operand);
     ValKind fk = val_kind(from), tk = val_kind(to);
     if (fk == VK_FLOAT && tk == VK_INT) {
-        ins(is_f32(from) ? "movd %%xmm0, %%eax" : "movq %%xmm0, %%rax");
+        (is_f32(from) ? movd(X(0), R(RAX)) : movq(X(0), R(RAX)));
         normalize(to);
     } else if (fk == VK_INT && tk == VK_FLOAT) {
-        ins(is_f32(to) ? "movd %%eax, %%xmm0" : "movq %%rax, %%xmm0");
+        (is_f32(to) ? movd(R(RAX), X(0)) : movq(R(RAX), X(0)));
     } else if (fk == VK_INT && tk == VK_INT) {
         normalize(to);
     }
@@ -4149,14 +4182,14 @@ static void gen_expr(Expr *e) {
     case EXPR_STRING_LIT: {
         int n;
         unsigned char *b = decode_lit(e->string_lit.value, e->string_lit.length, &n);
-        ins("leaq .Lq%d(%%rip), %%rax", strhdr_label(b, n));
+        leaq(RIPREL(strhdr_label(b, n), 0), R(RAX));
         free(b);
         return;
     }
     case EXPR_CSTRING_LIT: {
         int n;
         unsigned char *b = decode_lit(e->cstring_lit.value, e->cstring_lit.length, &n);
-        ins("leaq .Lq%d(%%rip), %%rax", str_label(b, n));
+        leaq(RIPREL(str_label(b, n), 0), R(RAX));
         free(b);
         return;
     }
@@ -4190,7 +4223,7 @@ static void gen_expr(Expr *e) {
         Type *ot = conc(e->index.object->type);
         gen_addr(e);
         if (!(ot->kind == TYPE_STRUCT && ot->struc.is_tuple) || val_kind(e->type) != VK_AGG)
-            load_val(e->type, "(%rax)");
+            load_val(e->type, M(RAX, 0));
         return;
     }
     case EXPR_SLICE: {
@@ -4198,31 +4231,31 @@ static void gen_expr(Expr *e) {
         int64_t es = ty_size(ot->slice.elem);
         gen_expr(e->slice.object);
         int32_t sh = slot_alloc(16, 8);
-        copy_mem("%rbp", sh, "%rax", 0, 16);
+        copy_mem(RBP, sh, RAX, 0, 16);
         int32_t lo = slot_alloc(8, 8);
-        if (e->slice.lo) gen_expr(e->slice.lo); else ins("xorl %%eax, %%eax");
-        ins("movq %%rax, %s", fp(lo));
-        if (e->slice.hi) gen_expr(e->slice.hi); else ins("movq %s, %%rax", fp(sh + 8));
-        ins("movq %s, %%rcx", fp(lo));
+        if (e->slice.lo) gen_expr(e->slice.lo); else xorl(R(RAX), R(RAX));
+        movq(R(RAX), fp(lo));
+        if (e->slice.hi) gen_expr(e->slice.hi); else movq(fp(sh + 8), R(RAX));
+        movq(fp(lo), R(RCX));
         if (!(g_guards_suppressed && facts_guard_governs(e, subst_resolve))) {
             int m = msg_label(e->loc, "subslice out of range: lo=%lld hi=%lld len=%lld\n");
             int l = fail_begin();
-            ins("movq %%rcx, %%rdx");
-            ins("movq %%rax, %%rcx");
-            ins("movq %s, %%r8", fp(sh + 8));
+            movq(R(RCX), R(RDX));
+            movq(R(RAX), R(RCX));
+            movq(fp(sh + 8), R(R8));
             fail_end(m);
-            ins("cmpq %%rax, %%rcx");
-            ins("ja .Lq%d", l);
-            ins("cmpq %s, %%rax", fp(sh + 8));
-            ins("ja .Lq%d", l);
+            cmpq(R(RAX), R(RCX));
+            jcc(CC_A, l);
+            cmpq(fp(sh + 8), R(RAX));
+            jcc(CC_A, l);
         }
         int32_t t = slot_alloc(16, 8);
-        ins("subq %%rcx, %%rax");
-        ins("movq %%rax, %s", fp(t + 8));
-        if (es != 1) ins("imulq $%lld, %%rcx, %%rcx", (long long)es);
-        ins("addq %s, %%rcx", fp(sh));
-        ins("movq %%rcx, %s", fp(t));
-        ins("leaq %s, %%rax", fp(t));
+        subq(R(RCX), R(RAX));
+        movq(R(RAX), fp(t + 8));
+        if (es != 1) imulq3(es, R(RCX), R(RCX));
+        addq(fp(sh), R(RCX));
+        movq(R(RCX), fp(t));
+        leaq(fp(t), R(RAX));
         return;
     }
     case EXPR_SOME: gen_some(e); return;
@@ -4252,17 +4285,17 @@ static void gen_expr(Expr *e) {
     case EXPR_ASSERT: gen_assert(e); return;
     case EXPR_ATOMIC_LOAD:
         gen_expr(e->atomic_load.ptr);
-        load_val(e->type, "(%rax)");
+        load_val(e->type, M(RAX, 0));
         return;
     case EXPR_ATOMIC_STORE: {
         gen_expr(e->atomic_store.ptr);
         int32_t s = spill_push();
-        ins("movq %%rax, %s", fp(s));
+        movq(R(RAX), fp(s));
         gen_expr(e->atomic_store.value);
-        ins("movq %s, %%rdx", fp(s));
+        movq(fp(s), R(RDX));
         spill_pop();
-        store_val(e->atomic_store.value->type, "%rdx", 0);
-        ins("mfence");
+        store_val(e->atomic_store.value->type, RDX, 0);
+        mfence();
         return;
     }
     case EXPR_ALLOC: gen_alloc(e); return;
@@ -4370,25 +4403,35 @@ static void begin_function(void) {
     g_defer = NULL;
     g_loop = NULL;
     g_loc_file = g_loc_line = 0;
-    g_fnbody.len = 0;
-    g_cold.len = 0;
+    code_reset(&g_fnbody);
+    code_reset(&g_cold);
     g_cur = &g_fnbody;
 }
 
+/* The function into the text: prologue, body, epilogue, then the cold
+ * failure paths, under one unwind entry. */
 static void end_function(const char *sym, bool global) {
-    Buf *o = &g_text;
-    buf_puts(o, "\t.text\n\t.p2align 4\n");
-    if (global) buf_printf(o, "\t.globl %s\n", sym);
-    buf_printf(o, "\t.type %s, @function\n%s:\n", sym, sym);
-    buf_puts(o, "\t.cfi_startproc\n\tpushq %rbp\n\t.cfi_def_cfa_offset 16\n"
-                "\t.cfi_offset %rbp, -16\n\tmovq %rsp, %rbp\n\t.cfi_def_cfa_register %rbp\n");
+    Code *o = g_cur = &g_text;
+    int s = asm_sym(sym);
+    if (global) asm_sym_global(s);
+    x_align(o, 16);
+    x_func(o, s);
+    x_cfi(o, CFI_START);
+    x_op0(o, OP_PUSH_RBP);
+    x_cfi(o, CFI_PUSHED);
+    movq(R(RSP), R(RBP));
+    x_cfi(o, CFI_FRAME);
     int64_t frame = align_up(g_frame, 16);
-    if (frame) buf_printf(o, "\tsubq $%lld, %%rsp\n", (long long)frame);
-    buf_put(o, g_fnbody.p ? g_fnbody.p : "", g_fnbody.len);
-    buf_printf(o, ".Lq%d:\n\tleave\n\t.cfi_remember_state\n\t.cfi_def_cfa %%rsp, 8\n\tret\n"
-                  "\t.cfi_restore_state\n", g_ret_label);
-    buf_put(o, g_cold.p ? g_cold.p : "", g_cold.len);
-    buf_printf(o, "\t.cfi_endproc\n\t.size %s, .-%s\n", sym, sym);
+    if (frame) subq(IMM(frame), R(RSP));
+    code_append(o, &g_fnbody);
+    label(g_ret_label);
+    leave();
+    x_cfi(o, CFI_LEFT);
+    x_op0(o, OP_RET);
+    x_cfi(o, CFI_RESTORE);
+    code_append(o, &g_cold);
+    x_cfi(o, CFI_END);
+    x_func_end(o, s);
     g_cur = NULL;
 }
 
@@ -4408,7 +4451,7 @@ static void emit_function(FnSpec *f) {
     int64_t stack = 16;
     if (ra.n == -1) {
         g_hidden_ret = slot_alloc(8, 8);
-        ins("movq %%rdi, %s", fp(g_hidden_ret));
+        movq(R(RDI), fp(g_hidden_ret));
         ni = 1;
     }
     for (int i = 0; i < f->nparams; i++) {
@@ -4423,12 +4466,12 @@ static void emit_function(FnSpec *f) {
             if (ni + ci <= 6 && ns + cS <= 8) {
                 int32_t off = local_slot(name, pt);
                 ValKind vk = val_kind(pt);
-                if (vk == VK_INT) ins("movq %s, %s", IREG64[ni++], fp(off));
-                else if (vk == VK_FLOAT) ins("movq %%xmm%d, %s", ns++, fp(off));
+                if (vk == VK_INT) movq(R(IREG[ni++]), fp(off));
+                else if (vk == VK_FLOAT) movq(X(ns++), fp(off));
                 else
                     for (int k = 0; k < a.n; k++) {
-                        if (a.cls[k] == 'I') ins("movq %s, %s", IREG64[ni++], fp(off + 8 * k));
-                        else ins("movq %%xmm%d, %s", ns++, fp(off + 8 * k));
+                        if (a.cls[k] == 'I') movq(R(IREG[ni++]), fp(off + 8 * k));
+                        else movq(X(ns++), fp(off + 8 * k));
                     }
                 continue;
             }
@@ -4442,10 +4485,10 @@ static void emit_function(FnSpec *f) {
     int32_t ctx_slot = 0;
     if (f->has_ctx) {
         ctx_slot = slot_alloc(8, 8);
-        if (ni < 6) ins("movq %s, %s", IREG64[ni++], fp(ctx_slot));
+        if (ni < 6) movq(R(IREG[ni++]), fp(ctx_slot));
         else {
-            ins("movq %lld(%%rbp), %%rax", (long long)stack);
-            ins("movq %%rax, %s", fp(ctx_slot));
+            movq(M(RBP, stack), R(RAX));
+            movq(R(RAX), fp(ctx_slot));
         }
     }
     if (f->lambda && f->lambda->func.capture_count > 0) {
@@ -4457,13 +4500,11 @@ static void emit_function(FnSpec *f) {
             Capture *c = &lam->func.captures[i];
             Type *ct = conc(c->type);
             int32_t off = local_slot(c->codegen_name, ct);
-            ins("movq %s, %%rdx", fp(ctx_slot));
-            if (val_kind(ct) == VK_AGG) copy_mem("%rbp", off, "%rdx", offs[i], ty_size(ct));
+            movq(fp(ctx_slot), R(RDX));
+            if (val_kind(ct) == VK_AGG) copy_mem(RBP, off, RDX, offs[i], ty_size(ct));
             else {
-                char mem[48];
-                snprintf(mem, sizeof mem, "%lld(%%rdx)", (long long)offs[i]);
-                load_val(ct, mem);
-                store_val(ct, "%rbp", off);
+                load_val(ct, M(RDX, offs[i]));
+                store_val(ct, RBP, off);
             }
         }
         free(offs);
@@ -4471,13 +4512,13 @@ static void emit_function(FnSpec *f) {
     if (f->lambda && f->lambda->func.self_codegen_name && f->lambda->func.self_referenced) {
         int32_t s = slot_alloc(16, 8);
         local_bind(f->lambda->func.self_codegen_name, s);
-        ins("leaq %s(%%rip), %%rax", f->sym);
-        ins("movq %%rax, %s", fp(s));
+        leaq(RIPREL(asm_sym(f->sym), 0), R(RAX));
+        movq(R(RAX), fp(s));
         if (f->lambda->func.capture_count > 0) {
-            ins("movq %s, %%rax", fp(ctx_slot));
-            ins("movq %%rax, %s", fp(s + 8));
+            movq(fp(ctx_slot), R(RAX));
+            movq(R(RAX), fp(s + 8));
         } else {
-            ins("movq $0, %s", fp(s + 8));
+            movq(IMM(0), fp(s + 8));
         }
     }
 
@@ -4485,7 +4526,7 @@ static void emit_function(FnSpec *f) {
     bool done = gen_stmts(f->body, f->body_count, TAIL_RETURN);
     if (!done) emit_scope_defers(g_defer);
     defer_pop();
-    if (f->is_main && !done) ins("xorl %%eax, %%eax");
+    if (f->is_main && !done) xorl(R(RAX), R(RAX));
     end_function(f->sym, f->global);
 }
 
@@ -4543,14 +4584,19 @@ static void emit_trampoline(Tramp *t) {
         if (ni + ci <= 6 && ns + cS <= 8) { ni += ci; ns += cS; }
     }
     if (ni >= 6) ok = false;
-    const char *name = arena_sprintf(g_arena, "fc_ctramp_%s", t->sym);
-    buf_printf(&g_text, "\t.text\n\t.p2align 4\n\t.type %s, @function\n%s:\n", name, name);
-    if (ok) buf_printf(&g_text, "\txorl %s, %s\n\tjmp %s\n", IREG32[ni], IREG32[ni], t->sym);
-    else {
+    int name = asm_sym(arena_sprintf(g_arena, "fc_ctramp_%s", t->sym));
+    g_cur = &g_text;
+    x_align(g_cur, 16);
+    x_func(g_cur, name);
+    if (ok) {
+        xorl(R(IREG[ni]), R(IREG[ni]));
+        jmp_sym(t->sym);
+    } else {
         internal_error((SrcLoc){0}, "C callback '%s' has too many arguments for the native backend", t->sym);
-        buf_puts(&g_text, "\tud2\n");
+        x_op0(g_cur, OP_UD2);
     }
-    buf_printf(&g_text, "\t.size %s, .-%s\n", name, name);
+    x_func_end(g_cur, name);
+    g_cur = NULL;
 }
 
 /* Extern wrappers: an extern as an FC function value. */
@@ -4654,52 +4700,50 @@ static const char *eq_helper(Type *t) {
  * differ. */
 static void eq_cmp(Type *t, int64_t off, int lfalse) {
     t = conc(t);
-    char am[48], bm[48];
-    snprintf(am, sizeof am, "%lld(%%rax)", (long long)off);
-    snprintf(bm, sizeof bm, "%lld(%%rcx)", (long long)off);
+    Opnd am = M(RAX, off), bm = M(RCX, off);
     switch (val_kind(t)) {
     case VK_VOID: return;
     case VK_INT:
-        ins("movq -16(%%rbp), %%rcx");
-        ins("movq -8(%%rbp), %%rax");
+        movq(M(RBP, -16), R(RCX));
+        movq(M(RBP, -8), R(RAX));
         load_int(t, bm);
-        ins("movq %%rax, %%rdx");
-        ins("movq -8(%%rbp), %%rax");
+        movq(R(RAX), R(RDX));
+        movq(M(RBP, -8), R(RAX));
         load_int(t, am);
-        ins("cmpq %%rdx, %%rax");
-        ins("jne .Lq%d", lfalse);
+        cmpq(R(RDX), R(RAX));
+        jcc(CC_NE, lfalse);
         return;
     case VK_FLOAT: {
         bool f = is_f32(t);
-        ins("movq -8(%%rbp), %%rax");
-        ins("movq -16(%%rbp), %%rcx");
-        ins(f ? "movss %s, %%xmm0" : "movsd %s, %%xmm0", am);
-        ins(f ? "ucomiss %s, %%xmm0" : "ucomisd %s, %%xmm0", bm);
-        ins("jne .Lq%d", lfalse);
-        ins("jp .Lq%d", lfalse);
+        movq(M(RBP, -8), R(RAX));
+        movq(M(RBP, -16), R(RCX));
+        (f ? movss(am, X(0)) : movsd(am, X(0)));
+        (f ? ucomiss(bm, X(0)) : ucomisd(bm, X(0)));
+        jcc(CC_NE, lfalse);
+        jcc(CC_P, lfalse);
         return;
     }
     case VK_AGG:
         break;
     }
-    ins("movq -8(%%rbp), %%rdi");
-    ins("movq -16(%%rbp), %%rsi");
-    if (off) { ins("addq $%lld, %%rdi", (long long)off); ins("addq $%lld, %%rsi", (long long)off); }
-    ins("call %s", eq_helper(t));
-    ins("testb %%al, %%al");
-    ins("jz .Lq%d", lfalse);
+    movq(M(RBP, -8), R(RDI));
+    movq(M(RBP, -16), R(RSI));
+    if (off) { addq(IMM(off), R(RDI)); addq(IMM(off), R(RSI)); }
+    call_sym(eq_helper(t));
+    testb(R(RAX), R(RAX));
+    jcc(CC_E, lfalse);
 }
 
 /* memcmp of n bytes at off(A) and off(B); jumps to lfalse if they differ. */
 static void eq_memcmp_bytes(int64_t off, int64_t n, int lfalse) {
     if (n <= 0) return;
-    ins("movq -8(%%rbp), %%rdi");
-    ins("movq -16(%%rbp), %%rsi");
-    if (off) { ins("addq $%lld, %%rdi", (long long)off); ins("addq $%lld, %%rsi", (long long)off); }
-    ins("movq $%lld, %%rdx", (long long)n);
+    movq(M(RBP, -8), R(RDI));
+    movq(M(RBP, -16), R(RSI));
+    if (off) { addq(IMM(off), R(RDI)); addq(IMM(off), R(RSI)); }
+    movq(IMM(n), R(RDX));
     call_c("memcmp");
-    ins("testl %%eax, %%eax");
-    ins("jne .Lq%d", lfalse);
+    testl(R(RAX), R(RAX));
+    jcc(CC_NE, lfalse);
 }
 
 static bool plain_bytes_eq(Type *elem) {
@@ -4713,27 +4757,27 @@ static void eq_elements(Type *elem, int64_t off, int64_t count, bool count_in_sl
     int64_t es = ty_size(elem);
     int ltop = new_label(), ldone = new_label();
     /* save the bases, advance per element */
-    ins("movq -8(%%rbp), %%rax");
-    ins("movq %%rax, -40(%%rbp)");
-    ins("movq -16(%%rbp), %%rax");
-    ins("movq %%rax, -48(%%rbp)");
-    if (off) { ins("addq $%lld, -8(%%rbp)", (long long)off); ins("addq $%lld, -16(%%rbp)", (long long)off); }
-    ins("movq $0, -32(%%rbp)");
+    movq(M(RBP, -8), R(RAX));
+    movq(R(RAX), M(RBP, -40));
+    movq(M(RBP, -16), R(RAX));
+    movq(R(RAX), M(RBP, -48));
+    if (off) { addq(IMM(off), M(RBP, -8)); addq(IMM(off), M(RBP, -16)); }
+    movq(IMM(0), M(RBP, -32));
     label(ltop);
-    ins("movq -32(%%rbp), %%rax");
-    if (count_in_slot) ins("cmpq -24(%%rbp), %%rax");
-    else ins("cmpq $%lld, %%rax", (long long)count);
-    ins("jge .Lq%d", ldone);
+    movq(M(RBP, -32), R(RAX));
+    if (count_in_slot) cmpq(M(RBP, -24), R(RAX));
+    else cmpq(IMM(count), R(RAX));
+    jcc(CC_GE, ldone);
     eq_cmp(elem, 0, lfalse);
-    ins("addq $%lld, -8(%%rbp)", (long long)es);
-    ins("addq $%lld, -16(%%rbp)", (long long)es);
-    ins("incq -32(%%rbp)");
-    ins("jmp .Lq%d", ltop);
+    addq(IMM(es), M(RBP, -8));
+    addq(IMM(es), M(RBP, -16));
+    incq(M(RBP, -32));
+    jmp(ltop);
     label(ldone);
-    ins("movq -40(%%rbp), %%rax");
-    ins("movq %%rax, -8(%%rbp)");
-    ins("movq -48(%%rbp), %%rax");
-    ins("movq %%rax, -16(%%rbp)");
+    movq(M(RBP, -40), R(RAX));
+    movq(R(RAX), M(RBP, -8));
+    movq(M(RBP, -48), R(RAX));
+    movq(R(RAX), M(RBP, -16));
 }
 
 static void emit_eq_helper(EqHelper *h) {
@@ -4741,8 +4785,8 @@ static void emit_eq_helper(EqHelper *h) {
     begin_function();
     g_frame = 48;
     int ltrue = new_label(), lfalse = new_label();
-    ins("movq %%rdi, -8(%%rbp)");
-    ins("movq %%rsi, -16(%%rbp)");
+    movq(R(RDI), M(RBP, -8));
+    movq(R(RSI), M(RBP, -16));
     switch (t->kind) {
     case TYPE_STRUCT: {
         Layout *L = agg_layout(t);
@@ -4754,13 +4798,13 @@ static void emit_eq_helper(EqHelper *h) {
                 if (plain_bytes_eq(elem)) eq_memcmp_bytes(L->off[i], ty_size(ft), lfalse);
                 else eq_elements(elem, L->off[i], fixarr_size(ft), false, lfalse);
             } else if (L->ext && L->ext[i].special) {
-                ins("movq -16(%%rbp), %%rdx");
-                load_ext_field(ft, &L->ext[i], "%rdx", 0, L->off[i]);
-                ins("movq %%rax, %%rsi");
-                ins("movq -8(%%rbp), %%rdx");
-                load_ext_field(ft, &L->ext[i], "%rdx", 0, L->off[i]);
-                ins("cmpq %%rsi, %%rax");
-                ins("jne .Lq%d", lfalse);
+                movq(M(RBP, -16), R(RDX));
+                load_ext_field(ft, &L->ext[i], RDX, 0, L->off[i]);
+                movq(R(RAX), R(RSI));
+                movq(M(RBP, -8), R(RDX));
+                load_ext_field(ft, &L->ext[i], RDX, 0, L->off[i]);
+                cmpq(R(RSI), R(RAX));
+                jcc(CC_NE, lfalse);
             } else {
                 eq_cmp(ft, L->off[i], lfalse);
             }
@@ -4769,72 +4813,72 @@ static void emit_eq_helper(EqHelper *h) {
     }
     case TYPE_UNION: {
         Layout *L = agg_layout(t);
-        ins("movq -8(%%rbp), %%rax");
-        ins("movq -16(%%rbp), %%rcx");
-        ins("movl (%%rax), %%edx");
-        ins("cmpl (%%rcx), %%edx");
-        ins("jne .Lq%d", lfalse);
+        movq(M(RBP, -8), R(RAX));
+        movq(M(RBP, -16), R(RCX));
+        movl(M(RAX, 0), R(RDX));
+        cmpl(M(RCX, 0), R(RDX));
+        jcc(CC_NE, lfalse);
         for (int i = 0; i < L->n; i++) {
             if (!L->ftype[i]) continue;
             int lnext = new_label();
-            ins("movq -8(%%rbp), %%rax");
-            ins("cmpl $%d, (%%rax)", i);
-            ins("jne .Lq%d", lnext);
+            movq(M(RBP, -8), R(RAX));
+            cmpl(IMM(i), M(RAX, 0));
+            jcc(CC_NE, lnext);
             eq_cmp(L->ftype[i], L->payload_off, lfalse);
-            ins("jmp .Lq%d", ltrue);
+            jmp(ltrue);
             label(lnext);
         }
         break;
     }
     case TYPE_SLICE: {
         Type *elem = conc(t->slice.elem);
-        ins("movq -8(%%rbp), %%rax");
-        ins("movq -16(%%rbp), %%rcx");
-        ins("movq 8(%%rax), %%rdx");
-        ins("cmpq 8(%%rcx), %%rdx");
-        ins("jne .Lq%d", lfalse);
-        ins("testq %%rdx, %%rdx");
-        ins("jz .Lq%d", ltrue);
+        movq(M(RBP, -8), R(RAX));
+        movq(M(RBP, -16), R(RCX));
+        movq(M(RAX, 8), R(RDX));
+        cmpq(M(RCX, 8), R(RDX));
+        jcc(CC_NE, lfalse);
+        testq(R(RDX), R(RDX));
+        jcc(CC_E, ltrue);
         if (plain_bytes_eq(elem)) {
-            ins("movq (%%rax), %%rdi");
-            ins("movq (%%rcx), %%rsi");
+            movq(M(RAX, 0), R(RDI));
+            movq(M(RCX, 0), R(RSI));
             int64_t es = ty_size(elem);
-            if (es != 1) ins("imulq $%lld, %%rdx, %%rdx", (long long)es);
+            if (es != 1) imulq3(es, R(RDX), R(RDX));
             call_c("memcmp");
-            ins("testl %%eax, %%eax");
-            ins("jne .Lq%d", lfalse);
+            testl(R(RAX), R(RAX));
+            jcc(CC_NE, lfalse);
         } else {
-            ins("movq %%rdx, -24(%%rbp)");
-            ins("movq (%%rax), %%rax");
-            ins("movq %%rax, -8(%%rbp)");
-            ins("movq (%%rcx), %%rcx");
-            ins("movq %%rcx, -16(%%rbp)");
+            movq(R(RDX), M(RBP, -24));
+            movq(M(RAX, 0), R(RAX));
+            movq(R(RAX), M(RBP, -8));
+            movq(M(RCX, 0), R(RCX));
+            movq(R(RCX), M(RBP, -16));
             eq_elements(elem, 0, 0, true, lfalse);
         }
         break;
     }
     case TYPE_OPTION: {
         int64_t is = ty_size(t->option.inner);
-        ins("movq -8(%%rbp), %%rax");
-        ins("movq -16(%%rbp), %%rcx");
-        ins("movzbl %lld(%%rax), %%edx", (long long)is);
-        ins("cmpb %lld(%%rcx), %%dl", (long long)is);
-        ins("jne .Lq%d", lfalse);
-        ins("testb %%dl, %%dl");
-        ins("jz .Lq%d", ltrue);
+        movq(M(RBP, -8), R(RAX));
+        movq(M(RBP, -16), R(RCX));
+        movzbl(M(RAX, is), R(RDX));
+        cmpb(M(RCX, is), R(RDX));
+        jcc(CC_NE, lfalse);
+        testb(R(RDX), R(RDX));
+        jcc(CC_E, ltrue);
         eq_cmp(t->option.inner, 0, lfalse);
         break;
     }
     case TYPE_RESULT: {
-        ins("movq -8(%%rbp), %%rax");
-        ins("movq -16(%%rbp), %%rcx");
-        ins("movl (%%rax), %%edx");
-        ins("cmpl (%%rcx), %%edx");
-        ins("jne .Lq%d", lfalse);
+        movq(M(RBP, -8), R(RAX));
+        movq(M(RBP, -16), R(RCX));
+        movl(M(RAX, 0), R(RDX));
+        cmpl(M(RCX, 0), R(RDX));
+        jcc(CC_NE, lfalse);
         Type *in = conc(t->result.inner);
         if (in && in->kind != TYPE_VOID) {
-            ins("testl %%edx, %%edx");
-            ins("jnz .Lq%d", ltrue);
+            testl(R(RDX), R(RDX));
+            jcc(CC_NE, ltrue);
             eq_cmp(in, result_value_off(t), lfalse);
         }
         break;
@@ -4847,10 +4891,10 @@ static void emit_eq_helper(EqHelper *h) {
         break;
     }
     label(ltrue);
-    ins("movl $1, %%eax");
-    ins("jmp .Lq%d", g_ret_label);
+    movl(IMM(1), R(RAX));
+    jmp(g_ret_label);
     label(lfalse);
-    ins("xorl %%eax, %%eax");
+    xorl(R(RAX), R(RAX));
     end_function(h->name, false);
 }
 
@@ -4858,7 +4902,7 @@ static void emit_eq_helper(EqHelper *h) {
  * Global data
  * ================================================================ */
 
-typedef struct { int64_t off; const char *sym; int64_t addend; } Reloc;
+typedef struct { int64_t off; int sym; int64_t addend; } Reloc;
 typedef struct {
     unsigned char *data;
     int64_t size;
@@ -4870,37 +4914,25 @@ static void img_put(DataImg *img, int64_t off, uint64_t v, int w) {
     for (int i = 0; i < w && off + i < img->size; i++) img->data[off + i] = (unsigned char)(v >> (8 * i));
 }
 
-static void img_reloc(DataImg *img, int64_t off, const char *sym, int64_t addend) {
+static void img_reloc(DataImg *img, int64_t off, int sym, int64_t addend) {
     Reloc r = { off, sym, addend };
     DA_APPEND(img->rel, img->nrel, img->caprel, r);
 }
 
-static void emit_img(Buf *b, const char *name, DataImg *img, int64_t align) {
-    buf_printf(b, "\t.p2align %d\n%s:\n", align >= 16 ? 4 : align >= 8 ? 3 : align >= 4 ? 2 : align >= 2 ? 1 : 0, name);
-    int64_t i = 0;
-    while (i < img->size) {
-        int r = -1;
-        for (int k = 0; k < img->nrel; k++) if (img->rel[k].off == i) { r = k; break; }
-        if (r >= 0) {
-            if (img->rel[r].addend) buf_printf(b, "\t.quad %s+%lld\n", img->rel[r].sym, (long long)img->rel[r].addend);
-            else buf_printf(b, "\t.quad %s\n", img->rel[r].sym);
-            i += 8;
-            continue;
-        }
-        /* a run without relocations */
-        int64_t j = i;
-        int64_t next_rel = img->size;
-        for (int k = 0; k < img->nrel; k++) if (img->rel[k].off > i && img->rel[k].off < next_rel) next_rel = img->rel[k].off;
-        bool allzero = true;
-        for (j = i; j < next_rel; j++) if (img->data[j]) { allzero = false; break; }
-        if (allzero) { buf_printf(b, "\t.zero %lld\n", (long long)(next_rel - i)); i = next_rel; continue; }
-        while (i < next_rel) {
-            buf_puts(b, "\t.byte ");
-            for (int c = 0; c < 16 && i < next_rel; c++, i++) buf_printf(b, c ? ",%u" : "%u", img->data[i]);
-            buf_puts(b, "\n");
-        }
-    }
+/* The data object `img` at label or symbol `sym` in a section. */
+static void emit_img(int sec, int sym, DataImg *img, int64_t align) {
+    d_align(sec, align >= 16 ? 16 : align >= 8 ? 8 : align >= 4 ? 4 : align >= 2 ? 2 : 1);
+    d_def(sec, sym);
+    int64_t base = d_size(sec);
+    d_bytes(sec, img->data, img->size);
+    for (int k = 0; k < img->nrel; k++)
+        d_addr_at(sec, base + img->rel[k].off, img->rel[k].sym, img->rel[k].addend);
 }
+
+/* Slice literal backings a global's image refers to, emitted ahead of it in
+ * its section. */
+typedef struct { int label; DataImg img; int64_t align; } Backing;
+typedef struct { Backing *items; int count, cap; } Backings;
 
 static bool g_img_has_reloc;
 
@@ -5040,10 +5072,10 @@ static bool const_num(Expr *e, bool *isf, int64_t *iv, double *fv) {
     }
 }
 
-static bool ser(Expr *e, Type *t, DataImg *img, int64_t off, Buf *sec);
+static bool ser(Expr *e, Type *t, DataImg *img, int64_t off, Backings *sec);
 
 /* A slice literal's elements as their own data object; returns its label. */
-static int ser_backing(Expr *al, Buf *sec) {
+static int ser_backing(Expr *al, Backings *sec) {
     Type *elem = conc(al->array_lit.elem_type);
     int64_t es = ty_size(elem);
     int64_t N = al->array_lit.size_expr->int_lit.value;
@@ -5053,19 +5085,17 @@ static int ser_backing(Expr *al, Buf *sec) {
     bool ok = true;
     for (int i = 0; i < al->array_lit.elem_count && ok; i++)
         ok = ser(al->array_lit.elems[i], elem, &img, i * es, sec);
-    int l = 0;
-    if (ok) {
-        l = new_label();
-        char nm[24];
-        snprintf(nm, sizeof nm, ".Lq%d", l);
-        emit_img(sec, nm, &img, ty_align(elem));
+    if (!ok) {
+        free(img.data);
+        free(img.rel);
+        return -1;
     }
-    free(img.data);
-    free(img.rel);
-    return ok ? l : -1;
+    Backing b = { new_label(), img, ty_align(elem) };
+    DA_APPEND(sec->items, sec->count, sec->cap, b);
+    return b.label;
 }
 
-static bool ser(Expr *e, Type *t, DataImg *img, int64_t off, Buf *sec) {
+static bool ser(Expr *e, Type *t, DataImg *img, int64_t off, Backings *sec) {
     t = conc(t);
     ValKind k = val_kind(t);
     if (e->kind == EXPR_GUARD) return ser(e->guard.body, t, img, off, sec);
@@ -5079,7 +5109,7 @@ static bool ser(Expr *e, Type *t, DataImg *img, int64_t off, Buf *sec) {
             unsigned char *b = decode_lit(e->cstring_lit.value, e->cstring_lit.length, &n);
             int l = str_label(b, n);
             free(b);
-            img_reloc(img, off, arena_sprintf(g_arena, ".Lq%d", l), 0);
+            img_reloc(img, off, l, 0);
             g_img_has_reloc = true;
             return true;
         }
@@ -5090,7 +5120,7 @@ static bool ser(Expr *e, Type *t, DataImg *img, int64_t off, Buf *sec) {
             bool is_extern;
             const char *sym = static_fn_sym(e->unary_prefix.operand, &is_extern);
             if (is_extern) return false;
-            img_reloc(img, off, ctramp_sym(sym, conc(e->unary_prefix.operand->type)), 0);
+            img_reloc(img, off, asm_sym(ctramp_sym(sym, conc(e->unary_prefix.operand->type))), 0);
             g_img_has_reloc = true;
             return true;
         }
@@ -5113,7 +5143,7 @@ static bool ser(Expr *e, Type *t, DataImg *img, int64_t off, Buf *sec) {
         unsigned char *b = decode_lit(e->string_lit.value, e->string_lit.length, &n);
         int l = str_label(b, n);
         free(b);
-        img_reloc(img, off, arena_sprintf(g_arena, ".Lq%d", l), 0);
+        img_reloc(img, off, l, 0);
         img_put(img, off + 8, (uint64_t)n, 8);
         g_img_has_reloc = true;
         return true;
@@ -5125,7 +5155,7 @@ static bool ser(Expr *e, Type *t, DataImg *img, int64_t off, Buf *sec) {
         if (e->array_lit.elem_count > 0 || N > 0) {
             int l = ser_backing(e, sec);
             if (l < 0) return false;
-            img_reloc(img, off, arena_sprintf(g_arena, ".Lq%d", l), 0);
+            img_reloc(img, off, l, 0);
             g_img_has_reloc = true;
         }
         img_put(img, off + 8, (uint64_t)N, 8);
@@ -5209,7 +5239,7 @@ static bool ser(Expr *e, Type *t, DataImg *img, int64_t off, Buf *sec) {
             const Symbol *s = tg->kind == EXPR_IDENT ? tg->ident.resolved_sym : tg->field.resolved_member;
             sym = cwrap_sym(s->decl);
         }
-        img_reloc(img, off, sym, 0);
+        img_reloc(img, off, asm_sym(sym), 0);
         g_img_has_reloc = true;
         return true;
     }
@@ -5229,21 +5259,23 @@ static void emit_global(Decl *d) {
         img.size = size;
         img.data = xcalloc((size_t)size, 1);
         g_img_has_reloc = false;
-        Buf tmp = { 0 };
-        bool ok = ser(d->let.init, t, &img, 0, &tmp);
+        Backings bk = { 0 };
+        bool ok = ser(d->let.init, t, &img, 0, &bk);
         if (ok) {
-            Buf *sec = d->let.is_mut ? &g_data : (g_img_has_reloc ? &g_relro : &g_rodata);
-            if (tmp.len) buf_put(sec, tmp.p, tmp.len);
-            emit_img(sec, name, &img, align);
+            int sec = d->let.is_mut ? ASM_DATA : (g_img_has_reloc ? ASM_RELRO : ASM_RODATA);
+            for (int i = 0; i < bk.count; i++)
+                emit_img(sec, bk.items[i].label, &bk.items[i].img, bk.items[i].align);
+            emit_img(sec, asm_sym(name), &img, align);
         }
-        buf_free(&tmp);
+        for (int i = 0; i < bk.count; i++) { free(bk.items[i].img.data); free(bk.items[i].img.rel); }
+        free(bk.items);
         free(img.data);
         free(img.rel);
         if (ok) return;
     }
-    buf_printf(&g_bss, "\t.p2align %d\n%s:\n\t.zero %lld\n",
-               align >= 16 ? 4 : align >= 8 ? 3 : align >= 4 ? 2 : align >= 2 ? 1 : 0,
-               name, (long long)size);
+    d_align(ASM_BSS, align >= 16 ? 16 : align >= 8 ? 8 : align >= 4 ? 4 : align >= 2 ? 2 : 1);
+    d_def(ASM_BSS, asm_sym(name));
+    d_zero(ASM_BSS, size);
     DA_APPEND(g_runtime_globals, g_rg_n, g_rg_cap, d);
 }
 
@@ -5257,9 +5289,9 @@ static void emit_c_main(void) {
     g_fn_ret = type_int32();
     g_tco_ok = false;
     int32_t argc = slot_alloc(8, 8), argv = slot_alloc(8, 8);
-    ins("movslq %%edi, %%rdi");
-    ins("movq %%rdi, %s", fp(argc));
-    ins("movq %%rsi, %s", fp(argv));
+    movslq(R(RDI), R(RDI));
+    movq(R(RDI), fp(argc));
+    movq(R(RSI), fp(argv));
     for (int pass = 0; pass < 2; pass++) {
         for (int i = 0; i < g_rg_n; i++) {
             Decl *d = g_runtime_globals[i];
@@ -5269,38 +5301,38 @@ static void emit_c_main(void) {
             const char *name = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             defer_push(false);
             gen_expr(d->let.init);
-            ins("leaq %s(%%rip), %%rdx", name);
-            store_val(d->let.resolved_type, "%rdx", 0);
+            leaq(RIPREL(asm_sym(name), 0), R(RDX));
+            store_val(d->let.resolved_type, RDX, 0);
             defer_pop();
         }
     }
     int32_t arr = slot_alloc(8, 8), idx = slot_alloc(8, 8);
     int ltop = new_label(), lgo = new_label();
-    ins("movq %s, %%rax", fp(argc));
-    ins("shlq $4, %%rax");
+    movq(fp(argc), R(RAX));
+    shlq(IMM(4), R(RAX));
     dyn_alloca_rax();
-    ins("movq %%rax, %s", fp(arr));
-    ins("movq $0, %s", fp(idx));
+    movq(R(RAX), fp(arr));
+    movq(IMM(0), fp(idx));
     label(ltop);
-    ins("movq %s, %%rax", fp(idx));
-    ins("cmpq %s, %%rax", fp(argc));
-    ins("jge .Lq%d", lgo);
-    ins("movq %s, %%rcx", fp(argv));
-    ins("movq (%%rcx,%%rax,8), %%rdi");
-    ins("shlq $4, %%rax");
-    ins("addq %s, %%rax", fp(arr));
-    ins("movq %%rdi, (%%rax)");
+    movq(fp(idx), R(RAX));
+    cmpq(fp(argc), R(RAX));
+    jcc(CC_GE, lgo);
+    movq(fp(argv), R(RCX));
+    movq(MI(RCX, RAX, 8, 0), R(RDI));
+    shlq(IMM(4), R(RAX));
+    addq(fp(arr), R(RAX));
+    movq(R(RDI), M(RAX, 0));
     call_c("strlen");
-    ins("movq %s, %%rcx", fp(idx));
-    ins("shlq $4, %%rcx");
-    ins("addq %s, %%rcx", fp(arr));
-    ins("movq %%rax, 8(%%rcx)");
-    ins("incq %s", fp(idx));
-    ins("jmp .Lq%d", ltop);
+    movq(fp(idx), R(RCX));
+    shlq(IMM(4), R(RCX));
+    addq(fp(arr), R(RCX));
+    movq(R(RAX), M(RCX, 8));
+    incq(fp(idx));
+    jmp(ltop);
     label(lgo);
-    ins("movq %s, %%rdi", fp(arr));
-    ins("movq %s, %%rsi", fp(argc));
-    ins("call fc_main");
+    movq(fp(arr), R(RDI));
+    movq(fp(argc), R(RSI));
+    call_sym("fc_main");
     end_function("main", true);
 }
 
@@ -5440,11 +5472,20 @@ static const char *shim_ref(const char *cname) {
     return cname;
 }
 
+/* The shim's pointer to a C function from a local header. */
+static int xp_sym(const char *cname) {
+    char *name = str_sprintf("fc_xp_%s", cname);
+    int s = asm_sym(name);
+    free(name);
+    return s;
+}
+
 /* Compile C source `src` with the program's include path and return the
- * output: the program's stdout ("probe") or the assembly ("shim"). Cached by
- * the source, so the C compiler runs only when it changes. NULL on failure
- * (reported). */
-static char *cc_cached(const char *kind, Buf *src) {
+ * output: the program's stdout ("probe") or the relocatable object ("shim"),
+ * with its length in *len. Cached by the source, so the C compiler runs only
+ * when it changes. NULL on failure (reported). */
+static char *cc_cached(const char *kind, Buf *src, int *len) {
+    bool object = strcmp(kind, "shim") == 0;
     uint64_t h = hash_bytes(src->p, src->len);
     h ^= hash_bytes(g_ciflags.p ? g_ciflags.p : "", g_ciflags.len) * 31;
     h ^= hash_bytes(kind, strlen(kind)) * 131;
@@ -5452,8 +5493,9 @@ static char *cc_cached(const char *kind, Buf *src) {
     const char *home = getenv("HOME");
     char *cache_dir = xdg && *xdg ? str_sprintf("%s/fcc", xdg)
                     : str_sprintf("%s/.cache/fcc", home ? home : "/tmp");
-    char *cache = str_sprintf("%s/%s-%016llx.txt", cache_dir, kind, (unsigned long long)h);
-    char *text = read_file(cache, NULL);
+    char *cache = str_sprintf("%s/%s-%016llx.%s", cache_dir, kind, (unsigned long long)h,
+                              object ? "o" : "txt");
+    char *text = read_file(cache, len);
     if (text) { free(cache); free(cache_dir); return text; }
     const char *tmp = getenv("TMPDIR");
     char *work = str_sprintf("%s/fcc-%s-XXXXXX", tmp && *tmp ? tmp : "/tmp", kind);
@@ -5471,7 +5513,7 @@ static char *cc_cached(const char *kind, Buf *src) {
     char *cmd = strcmp(kind, "probe") == 0
         ? str_sprintf("%s -w -o '%s/x' '%s'%s 2>'%s/err' && '%s/x' >'%s/out'",
                       cc, work, cpath, ifl, work, work, work)
-        : str_sprintf("%s -w -S -O1 -fPIC -fno-asynchronous-unwind-tables -o '%s/out' '%s'%s 2>'%s/err'",
+        : str_sprintf("%s -w -c -O1 -fPIC -fno-asynchronous-unwind-tables -o '%s/out' '%s'%s 2>'%s/err'",
                       cc, work, cpath, ifl, work);
     int rc = system(cmd);
     if (rc != 0) {
@@ -5482,13 +5524,13 @@ static char *cc_cached(const char *kind, Buf *src) {
         free(errp);
     } else {
         char *outp = str_sprintf("%s/out", work);
-        text = read_file(outp, NULL);
+        text = read_file(outp, len);
         free(outp);
         if (text) {
             char *mk = str_sprintf("mkdir -p '%s'", cache_dir);
             if (system(mk) == 0) {
-                FILE *cf = fopen(cache, "w");
-                if (cf) { fputs(text, cf); fclose(cf); }
+                FILE *cf = fopen(cache, "wb");
+                if (cf) { fwrite(text, 1, (size_t)*len, cf); fclose(cf); }
             }
             free(mk);
         }
@@ -5500,10 +5542,10 @@ static char *cc_cached(const char *kind, Buf *src) {
     return text;
 }
 
-/* The shim: a pointer to each extern from a local header, compiled to
- * assembly and appended to the output (header functions are often static or
+/* The shim: a pointer to each extern from a local header, compiled to an
+ * object and merged into the output (header functions are often static or
  * inline, so taking their address makes the C compiler emit them). */
-static char *build_shim(void) {
+static char *build_shim(int *len) {
     if (g_shim_used.n == 0) return NULL;
     Buf src = { 0 };
     buf_puts(&src, "/* fcc native-backend shim */\n");
@@ -5519,9 +5561,9 @@ static char *build_shim(void) {
         }
     for (size_t i = 0; i < k; i++) buf_printf(&src, "void *fc_xp_%s = (void *)&%s;\n", names[i], names[i]);
     free(names);
-    char *text = cc_cached("shim", &src);
+    char *obj = cc_cached("shim", &src, len);
     buf_free(&src);
-    return text;
+    return obj;
 }
 
 static void probe_parse(const char *text) {
@@ -5778,7 +5820,8 @@ static void run_probe(Program *prog, Decl **all, int all_count, MonoTable *mono)
         }
     }
     buf_puts(&src, "    return 0;\n}\n");
-    char *text = cc_cached("probe", &src);
+    int tlen = 0;
+    char *text = cc_cached("probe", &src, &tlen);
     if (text) probe_parse(text);
     free(text);
     buf_free(&src);
@@ -5823,9 +5866,12 @@ void x86gen_emit(Program *prog, FILE *out, MonoTable *mono,
     int n = 0, cap = 0;
     flatten(prog->decls, prog->decl_count, &all, &n, &cap);
 
+    Obj obj;
+    obj_init(&obj);
+    asm_init(&obj);
     build_cenv(prog, all, n);
     run_probe(prog, all, n, mono);
-    if (diag_error_count() > 0) { free_cenv(); free(all); return; }
+    if (diag_error_count() > 0) goto done;
 
     /* Globals */
     for (int i = 0; i < n; i++) {
@@ -5900,21 +5946,26 @@ void x86gen_emit(Program *prog, FILE *out, MonoTable *mono,
         while (done_eq < g_eq_n) emit_eq_helper(&g_eqs[done_eq++]);
     }
 
-    char *shim = build_shim();
+    int shim_len = 0;
+    char *shim = build_shim(&shim_len);
 
-    /* Assemble the file. */
-    fputs("# generated by fcc (native x86-64 backend)\n", out);
-    if (g_file_dirs.len) fwrite(g_file_dirs.p, 1, g_file_dirs.len, out);
-    if (g_rodata.len) { fputs("\t.section .rodata\n", out); fwrite(g_rodata.p, 1, g_rodata.len, out); }
-    if (g_relro.len) { fputs("\t.section .data.rel.ro,\"aw\"\n", out); fwrite(g_relro.p, 1, g_relro.len, out); }
-    if (g_data.len) { fputs("\t.data\n", out); fwrite(g_data.p, 1, g_data.len, out); }
-    if (g_bss.len) { fputs("\t.bss\n", out); fwrite(g_bss.p, 1, g_bss.len, out); }
-    if (g_text.len) fwrite(g_text.p, 1, g_text.len, out);
-    if (shim) { fputs("# ---- C shim (compiled by cc) ----\n", out); fputs(shim, out); free(shim); }
-    fputs("\t.section .note.GNU-stack,\"\",@progbits\n", out);
+    /* The object file. */
+    char cwd[4096];
+    asm_finish(&g_text, getcwd(cwd, sizeof cwd) ? cwd : NULL, "fcc");
+    if (shim) {
+        char *err = NULL;
+        if (!obj_merge(&obj, (const unsigned char *)shim, (size_t)shim_len, &err))
+            diag_error((SrcLoc){0}, "native backend: cannot merge the C shim: %s", err);
+        free(err);
+        free(shim);
+    }
+    if (diag_error_count() == 0 && !obj_write(&obj, out))
+        diag_error((SrcLoc){0}, "native backend: cannot write the object file");
 
-    buf_free(&g_fnbody); buf_free(&g_cold); buf_free(&g_text); buf_free(&g_rodata);
-    buf_free(&g_relro); buf_free(&g_data); buf_free(&g_bss); buf_free(&g_file_dirs);
+done:
+    asm_free();
+    obj_free(&obj);
+    code_free(&g_fnbody); code_free(&g_cold); code_free(&g_text);
     hmap_free(&g_locals); hmap_free(&g_strings); hmap_free(&g_strhdrs); hmap_free(&g_fnvals);
     hmap_free(&g_layouts); hmap_free(&g_files); hmap_free(&g_probe); hmap_free(&g_probed_layouts);
     free(g_spills); g_spills = NULL; g_spill_cap = 0;

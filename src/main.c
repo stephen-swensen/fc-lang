@@ -38,8 +38,8 @@ static void print_usage(FILE *f) {
           "  --no-auto-detect       don't set the host's os/arch/env flags\n"
           "  --backtraces           print an FC backtrace when the program aborts\n"
           "  --len-repr <16|32|64>  stored width of slice lengths (default 64)\n"
-          "  --native               write x86-64 assembly (.s) instead of C, for a\n"
-          "                         fast build: cc out.s -o prog (experimental)\n"
+          "  --native               write an x86-64 object file (.o) instead of C,\n"
+          "                         for a fast build: cc out.o -o prog (experimental)\n"
           "  --lsp                  run as a language server on stdin/stdout\n"
           "  -V, --version          print version and build information\n"
           "  -h, --help             print this help\n", f);
@@ -186,12 +186,12 @@ int main(int argc, char **argv) {
 
     /* Code generation */
     if (!output_path) {
-        output_path = change_extension(input_paths[0], ca.native ? ".s" : ".c");
+        output_path = change_extension(input_paths[0], ca.native ? ".o" : ".c");
     }
 
     /* Opened for update: codegen writes the body, reads it back to choose the
      * preamble, then rewrites the file from its start. */
-    FILE *out = fopen(output_path, "w+");
+    FILE *out = fopen(output_path, ca.native ? "wb+" : "w+");
     if (!out) {
         diag_fatal_simple("cannot open output '%s'", output_path);
     }

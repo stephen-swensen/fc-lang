@@ -84,10 +84,10 @@ run_one_test() {
     src_dir="$(dirname "$(echo $fc_args | awk '{print $1}')")"
     local fcc_cmd="$FCC $fc_args${FCC_EXTRA_ARGS:+ $FCC_EXTRA_ARGS} -o $c_file"
     local cc_cmd="$CC -std=c11 -Wall -Werror${CC_OPT:+ $CC_OPT} -I $src_dir -o $bin_file $c_file -lm${EXTRA_LIBS:+ $EXTRA_LIBS}"
-    # NATIVE=1: the native backend writes assembly, which cc assembles and
-    # links (no C compilation).
+    # NATIVE=1: the native backend writes an object file, which cc links (no
+    # C compilation, no assembler).
     if [ -n "${NATIVE:-}" ]; then
-        c_file="$TMPDIR/${slug}.s"
+        c_file="$TMPDIR/${slug}.o"
         fcc_cmd="$FCC --native $fc_args${FCC_EXTRA_ARGS:+ $FCC_EXTRA_ARGS} -o $c_file"
         cc_cmd="$CC -o $bin_file $c_file -lm${EXTRA_LIBS:+ $EXTRA_LIBS}"
     fi

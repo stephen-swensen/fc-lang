@@ -200,7 +200,7 @@ test-gcc: $(BIN)
 	@echo "=== Testing with gcc ==="
 	@CC=gcc $(RUN_TESTS)
 
-# The native x86-64 backend (--native): assembly linked with cc. Experimental.
+# The native x86-64 backend (--native): an object file linked with cc. Experimental.
 test-native: $(BIN)
 	@echo "=== Testing the native backend ==="
 	@NATIVE=1 CC=gcc $(RUN_TESTS)
