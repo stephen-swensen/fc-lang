@@ -343,6 +343,31 @@ static void globfree(glob_t *pg) {
 
 /* ---- parsing ---- */
 
+/* An object file, archive or shared library: x.o, x.a, x.so, x.so.1.2. */
+static bool is_link_input(const char *path) {
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    const char *dot = strrchr(base, '.');
+    if (!dot) return false;
+    if (strcmp(dot, ".o") == 0 || strcmp(dot, ".a") == 0 || strcmp(dot, ".so") == 0) return true;
+    /* A version suffix: back over ".N" parts to a ".so". */
+    for (const char *p = base + strlen(base); p > base; ) {
+        const char *q = p;
+        while (q > base && q[-1] >= '0' && q[-1] <= '9') q--;
+        if (q == p || q == base || q[-1] != '.') return false;
+        p = q - 1;
+        if (p - base >= 3 && memcmp(p - 3, ".so", 3) == 0) return true;
+    }
+    return false;
+}
+
+static void add_input(CompileArgs *out, const char *path) {
+    if (is_link_input(path))
+        DA_APPEND(out->link_inputs, out->link_count, out->link_cap, str_dup(path));
+    else
+        DA_APPEND(out->inputs, out->input_count, out->input_cap, str_dup(path));
+}
+
 /* Append the inputs named by `tok`. Directly-typed tokens (dir == NULL) were
  * already shell-globbed, so they pass through verbatim. Response-file tokens
  * are rebased relative to their file's dir and glob-expanded; GLOB_NOCHECK
@@ -350,7 +375,7 @@ static void globfree(glob_t *pg) {
  * surfaces later as a clear "cannot open" rather than vanishing. */
 static bool add_inputs(CompileArgs *out, const char *tok, const char *dir) {
     if (!dir) {
-        DA_APPEND(out->inputs, out->input_count, out->input_cap, str_dup(tok));
+        add_input(out, tok);
         return true;
     }
     char *pat = path_is_abs(tok) ? str_dup(tok) : path_join(dir, tok);
@@ -361,10 +386,7 @@ static bool add_inputs(CompileArgs *out, const char *tok, const char *dir) {
         free(pat);
         return false;
     }
-    for (size_t k = 0; k < g.gl_pathc; k++) {
-        const char *m = g.gl_pathv[k];
-        DA_APPEND(out->inputs, out->input_count, out->input_cap, str_dup(m));
-    }
+    for (size_t k = 0; k < g.gl_pathc; k++) add_input(out, g.gl_pathv[k]);
     globfree(&g);
     free(pat);
     return true;
@@ -389,6 +411,21 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
             out->error = str_sprintf(strcmp(a, "-o") == 0 ? "-o requires an output file name"
                                                           : "--flag requires a name");
             return false;
+        } else if ((strcmp(a, "-l") == 0 || strcmp(a, "-L") == 0) && i + 1 >= e->count) {
+            out->error = str_sprintf(a[1] == 'l' ? "-l requires a library name"
+                                                 : "-L requires a directory");
+            return false;
+        } else if (strncmp(a, "-l", 2) == 0) {
+            const char *name = a[2] ? a + 2 : e->tokens[++i];
+            DA_APPEND(out->link_inputs, out->link_count, out->link_cap, str_sprintf("-l%s", name));
+        } else if (strncmp(a, "-L", 2) == 0) {
+            int vi = a[2] ? i : ++i;
+            const char *val = a[2] ? a + 2 : e->tokens[vi];
+            const char *vdir = e->dirs[vi];
+            char *dir = (vdir && !path_is_abs(val)) ? path_join(vdir, val) : str_dup(val);
+            DA_APPEND(out->lib_dirs, out->lib_dir_count, out->lib_dir_cap, dir);
+        } else if (strcmp(a, "-c") == 0) {
+            out->compile_only = true;
         } else if (strcmp(a, "-o") == 0) {
             i++;
             const char *val = e->tokens[i];
@@ -453,12 +490,26 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
         out->error = str_sprintf("no input file");
         return false;
     }
+    if (out->compile_only && !out->native) {
+        out->error = str_sprintf("-c applies only to --native (without it, fcc writes C)");
+        return false;
+    }
+    if ((out->link_count || out->lib_dir_count) && (!out->native || out->compile_only)) {
+        const char *what = out->lib_dir_count ? "-L" : out->link_inputs[0];
+        out->error = str_sprintf("%s: libraries and object files are linked only when "
+                                 "--native writes an executable (not with -c)", what);
+        return false;
+    }
     return true;
 }
 
 void args_compile_free(CompileArgs *c) {
     for (int i = 0; i < c->input_count; i++) free((void *)c->inputs[i]);
     free(c->inputs);
+    for (int i = 0; i < c->link_count; i++) free(c->link_inputs[i]);
+    free(c->link_inputs);
+    for (int i = 0; i < c->lib_dir_count; i++) free(c->lib_dirs[i]);
+    free(c->lib_dirs);
     free(c->flags);
     free(c->output);
     free(c->error);

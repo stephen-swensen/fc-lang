@@ -26,8 +26,11 @@ void diag_error(SrcLoc loc, const char *fmt, ...);
 /* Report error and abort compilation. */
 _Noreturn void diag_fatal(SrcLoc loc, const char *fmt, ...);
 
-/* Report error with no location. */
+/* Report error with no location ("fcc: error: msg"). */
 _Noreturn void diag_fatal_simple(const char *fmt, ...);
+
+/* The same, without aborting: the error is counted, as diag_error's are. */
+void diag_error_simple(const char *fmt, ...);
 
 int diag_error_count(void);
 

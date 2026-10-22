@@ -3,9 +3,10 @@
  * An alternative to the C emitter for fast development builds. It walks the
  * same typed, monomorphized AST that codegen.c walks and emits x86-64 machine
  * code for System V, position-independent, as an ELF relocatable object
- * (through x86asm.c), so the result links against the C library with a plain
- * `cc out.o`. No assembly text is written and no assembler runs. It does not
- * optimize; its job is to mean exactly what the emitted C means, quickly.
+ * (through x86asm.c), which elflink.c links into an executable, or the C
+ * compiler links (`fcc --native -c`, then `cc out.o`). No assembly text is
+ * written and no assembler runs. It does not optimize; its job is to mean
+ * exactly what the emitted C means, quickly.
  *
  * Value model. Every expression leaves its value in a fixed place:
  *   - an integer, bool, enum, pointer or null-sentinel option: %rax, sign- or
@@ -39,10 +40,10 @@
 /* The objects are ELF, the calls name the Linux C library's symbols, and the
  * C header shim runs through /bin/sh, so the backend is built only on Linux
  * x86-64. Elsewhere the rest of fcc is unaffected and --native is an error. */
-void x86gen_emit(Program *prog, FILE *out, MonoTable *mono,
+void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
                  Arena *arena, InternTable *intern, SymbolTable *symtab) {
-    (void)prog; (void)out; (void)mono; (void)arena; (void)intern; (void)symtab;
-    diag_error((SrcLoc){0}, "--native is supported only on Linux x86-64");
+    (void)prog; (void)obj; (void)mono; (void)arena; (void)intern; (void)symtab;
+    diag_error_simple("--native is supported only on Linux x86-64");
 }
 
 #else /* Linux x86-64: the backend */
@@ -186,56 +187,6 @@ static void label(int l) { x_label(g_cur, l); }
 
 /* `off(%rbp)`: a frame slot. */
 static Opnd fp(int32_t off) { return M(RBP, off); }
-
-/* ================================================================
- * String-keyed hash map
- * ================================================================ */
-
-typedef struct { const char *key; size_t klen; int64_t val; void *ptr; bool used; } HEnt;
-typedef struct { HEnt *e; size_t cap, n; } HMap;
-
-static uint64_t hash_bytes(const char *s, size_t n) {
-    uint64_t h = 1469598103934665603ULL;
-    for (size_t i = 0; i < n; i++) { h ^= (unsigned char)s[i]; h *= 1099511628211ULL; }
-    return h;
-}
-
-static HEnt *hmap_slot(HMap *m, const char *k, size_t n) {
-    uint64_t h = hash_bytes(k, n);
-    size_t i = (size_t)h & (m->cap - 1);
-    for (;;) {
-        HEnt *e = &m->e[i];
-        if (!e->used) return e;
-        if (e->klen == n && memcmp(e->key, k, n) == 0) return e;
-        i = (i + 1) & (m->cap - 1);
-    }
-}
-
-static HEnt *hmap_get(HMap *m, const char *k, size_t n) {
-    if (!m->cap) return NULL;
-    HEnt *e = hmap_slot(m, k, n);
-    return e->used ? e : NULL;
-}
-
-static HEnt *hmap_put(HMap *m, const char *k, size_t n) {
-    if (m->n * 2 + 2 > m->cap) {
-        HMap nm = { xcalloc(m->cap ? m->cap * 2 : 64, sizeof(HEnt)), m->cap ? m->cap * 2 : 64, 0 };
-        for (size_t i = 0; i < m->cap; i++)
-            if (m->e[i].used) { *hmap_slot(&nm, m->e[i].key, m->e[i].klen) = m->e[i]; nm.n++; }
-        free(m->e);
-        *m = nm;
-    }
-    HEnt *e = hmap_slot(m, k, n);
-    if (!e->used) { e->used = true; e->key = k; e->klen = n; m->n++; }
-    return e;
-}
-
-static void hmap_clear(HMap *m) {
-    if (m->cap) memset(m->e, 0, m->cap * sizeof(HEnt));
-    m->n = 0;
-}
-
-static void hmap_free(HMap *m) { free(m->e); m->e = NULL; m->cap = m->n = 0; }
 
 /* ================================================================
  * Context and the type helpers shared in spirit with codegen.c
@@ -5981,7 +5932,7 @@ static bool is_generic(Decl *d) {
     }
 }
 
-void x86gen_emit(Program *prog, FILE *out, MonoTable *mono,
+void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
                  Arena *arena, InternTable *intern, SymbolTable *symtab) {
     g_mono = mono;
     g_arena = arena;
@@ -5996,9 +5947,7 @@ void x86gen_emit(Program *prog, FILE *out, MonoTable *mono,
     int n = 0, cap = 0;
     flatten(prog->decls, prog->decl_count, &all, &n, &cap);
 
-    Obj obj;
-    obj_init(&obj);
-    asm_init(&obj);
+    asm_init(obj);
     build_cenv(prog, all, n);
     run_probe(prog, all, n, mono);
     if (diag_error_count() > 0) goto done;
@@ -6084,17 +6033,14 @@ void x86gen_emit(Program *prog, FILE *out, MonoTable *mono,
     asm_finish(&g_text, getcwd(cwd, sizeof cwd) ? cwd : NULL, "fcc");
     if (shim) {
         char *err = NULL;
-        if (!obj_merge(&obj, (const unsigned char *)shim, (size_t)shim_len, &err))
+        if (!obj_merge(obj, (const unsigned char *)shim, (size_t)shim_len, &err))
             diag_error((SrcLoc){0}, "native backend: cannot merge the C shim: %s", err);
         free(err);
         free(shim);
     }
-    if (diag_error_count() == 0 && !obj_write(&obj, out))
-        diag_error((SrcLoc){0}, "native backend: cannot write the object file");
 
 done:
     asm_free();
-    obj_free(&obj);
     code_free(&g_fnbody); code_free(&g_cold); code_free(&g_text);
     hmap_free(&g_locals); hmap_free(&g_strings); hmap_free(&g_strhdrs); hmap_free(&g_fnvals);
     hmap_free(&g_layouts); hmap_free(&g_files); hmap_free(&g_probe); hmap_free(&g_probed_layouts);

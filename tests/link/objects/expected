@@ -1,0 +1,4 @@
+add 42 order 123 weak 2
+common 5
+stdout from C
+destructor

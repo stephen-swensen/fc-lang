@@ -26,6 +26,7 @@ void obj_free(Obj *o) {
     for (int i = 1; i < o->nsym; i++) free(o->syms[i].name);
     free(o->secs);
     free(o->syms);
+    hmap_free(&o->globals);
     memset(o, 0, sizeof *o);
 }
 
@@ -75,7 +76,16 @@ int obj_symbol(Obj *o, const char *name, int sec, uint64_t value, uint64_t size,
     s.type = type;
     s.bind = bind;
     DA_APPEND(o->syms, o->nsym, o->capsym, s);
+    if (bind != STB_LOCAL && s.name) {
+        HEnt *e = hmap_put(&o->globals, s.name, strlen(s.name));
+        if (!e->val) e->val = o->nsym - 1;
+    }
     return o->nsym - 1;
+}
+
+int obj_find(Obj *o, const char *name) {
+    HEnt *e = hmap_get(&o->globals, name, strlen(name));
+    return e ? (int)e->val : 0;
 }
 
 int obj_section_symbol(Obj *o, int sec) {
@@ -369,25 +379,35 @@ bool obj_merge(Obj *o, const unsigned char *elf, size_t n, char **err) {
                 o->syms[symmap[i]].other = p[5];
                 continue;
             }
-            int found = 0;
-            for (int k = 1; k < o->nsym && !found; k++)
-                if (o->syms[k].bind != STB_LOCAL && o->syms[k].name && strcmp(o->syms[k].name, name) == 0)
-                    found = k;
+            int found = obj_find(o, name);
             if (!found) {
                 symmap[i] = obj_symbol(o, name, sec, value, size, type, bind);
                 o->syms[symmap[i]].other = p[5];
             } else {
                 ObjSymbol *e = &o->syms[found];
-                if (sec != SHN_UNDEF) {
-                    if (e->sec != SHN_UNDEF) {
-                        *err = str_sprintf("symbol '%s' is defined twice", name);
-                        ok = false;
-                        break;
-                    }
+                symmap[i] = found;
+                if (sec == SHN_UNDEF) {
+                    /* A strong reference makes the symbol required. */
+                    if (e->sec == SHN_UNDEF && bind == STB_GLOBAL) e->bind = STB_GLOBAL;
+                    continue;
+                }
+                if (sec == SHN_COMMON && e->sec == SHN_COMMON) {
+                    if (size > e->size) e->size = size;
+                    if (value > e->value) e->value = value;         /* the alignment */
+                    continue;
+                }
+                bool replace = e->sec == SHN_UNDEF ||
+                               (e->sec == SHN_COMMON && bind == STB_GLOBAL) ||
+                               (e->bind == STB_WEAK && bind == STB_GLOBAL);
+                bool keep = sec == SHN_COMMON || bind == STB_WEAK || e->bind == STB_WEAK;
+                if (replace) {
                     e->sec = sec; e->value = value; e->size = size; e->type = type; e->bind = bind;
                     e->other = p[5];
+                } else if (!keep) {
+                    *err = str_sprintf("symbol '%s' is defined twice", name);
+                    ok = false;
+                    break;
                 }
-                symmap[i] = found;
             }
         }
         for (int i = 1; i < shnum && ok; i++) {

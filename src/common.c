@@ -454,3 +454,48 @@ const char *mangled_source_name(const char *cname) {
     }
     return tail;
 }
+
+/* ---- String-keyed hash map ---- */
+
+uint64_t hash_bytes(const char *s, size_t n) {
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < n; i++) { h ^= (unsigned char)s[i]; h *= 1099511628211ULL; }
+    return h;
+}
+
+static HEnt *hmap_slot(HMap *m, const char *k, size_t n) {
+    uint64_t h = hash_bytes(k, n);
+    size_t i = (size_t)h & (m->cap - 1);
+    for (;;) {
+        HEnt *e = &m->e[i];
+        if (!e->used) return e;
+        if (e->klen == n && memcmp(e->key, k, n) == 0) return e;
+        i = (i + 1) & (m->cap - 1);
+    }
+}
+
+HEnt *hmap_get(HMap *m, const char *k, size_t n) {
+    if (!m->cap) return NULL;
+    HEnt *e = hmap_slot(m, k, n);
+    return e->used ? e : NULL;
+}
+
+HEnt *hmap_put(HMap *m, const char *k, size_t n) {
+    if (m->n * 2 + 2 > m->cap) {
+        HMap nm = { xcalloc(m->cap ? m->cap * 2 : 64, sizeof(HEnt)), m->cap ? m->cap * 2 : 64, 0 };
+        for (size_t i = 0; i < m->cap; i++)
+            if (m->e[i].used) { *hmap_slot(&nm, m->e[i].key, m->e[i].klen) = m->e[i]; nm.n++; }
+        free(m->e);
+        *m = nm;
+    }
+    HEnt *e = hmap_slot(m, k, n);
+    if (!e->used) { e->used = true; e->key = k; e->klen = n; m->n++; }
+    return e;
+}
+
+void hmap_clear(HMap *m) {
+    if (m->cap) memset(m->e, 0, m->cap * sizeof(HEnt));
+    m->n = 0;
+}
+
+void hmap_free(HMap *m) { free(m->e); m->e = NULL; m->cap = m->n = 0; }

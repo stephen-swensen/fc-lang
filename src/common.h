@@ -227,3 +227,20 @@ const char *mangled_source_name(const char *cname);
 } while (0)
 
 #define DA_FREE(arr) do { free(arr); (arr) = NULL; } while (0)
+
+/* ---- String-keyed hash map ----
+ *
+ * Open addressing over byte-string keys, which the map borrows: a key must
+ * outlive its entry. A zero-initialized HMap is empty. */
+
+typedef struct { const char *key; size_t klen; int64_t val; void *ptr; bool used; } HEnt;
+typedef struct { HEnt *e; size_t cap, n; } HMap;
+
+/* FNV-1a. */
+uint64_t hash_bytes(const char *s, size_t n);
+/* The entry for the key, or NULL. */
+HEnt *hmap_get(HMap *m, const char *k, size_t n);
+/* The entry for the key, added (val 0, ptr NULL) if absent. */
+HEnt *hmap_put(HMap *m, const char *k, size_t n);
+void hmap_clear(HMap *m);
+void hmap_free(HMap *m);

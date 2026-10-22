@@ -51,14 +51,22 @@ typedef struct {
     Flag        *flags;      /* owned array; name/value borrow ExpandedArgs   */
     int          flag_count, flag_cap;
     bool         backtraces;
-    bool         native;     /* --native: an x86-64 object file instead of C */
+    bool         native;     /* --native: an x86-64 executable instead of C */
+    bool         compile_only; /* -c: with --native, an object file instead */
+    char       **link_inputs; /* owned: object, archive and library files
+                                 (rebased) and -lNAME, in command-line order */
+    int          link_count, link_cap;
+    char       **lib_dirs;   /* owned: -L directories (rebased), in order    */
+    int          lib_dir_count, lib_dir_cap;
     int          len_repr;   /* stored slice-len width: 16, 32 or 64 */
     char        *error;      /* owned message if parsing failed, else NULL   */
 } CompileArgs;
 
 /* Interpret an expanded token stream: applies host platform auto-detect
  * (unless --no-auto-detect), --flag overrides (replace by name), -o, and turns
- * positionals into inputs with response-file glob/rebase. Flag name/value
+ * positionals into inputs with response-file glob/rebase. A positional ending
+ * in .o, .a or .so (or .so.N) is a link input, as are -l libraries; both, and
+ * -L, are for a --native executable only. Flag name/value
  * strings borrow from `e`, so `e` must outlive the returned flags. Returns true on
  * success; on failure returns false with out->error set (and out otherwise
  * safe to pass to args_compile_free). */

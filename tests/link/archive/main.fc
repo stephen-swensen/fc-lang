@@ -1,0 +1,8 @@
+import io from std::
+
+module c from "chain.h" =
+    extern chain_first: (i32) -> i32
+
+let main = (args: str[]) ->
+    io.write("chain %d{c.chain_first(4)}\n", stdout)
+    0

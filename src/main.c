@@ -5,6 +5,7 @@
 #include "pass2.h"
 #include "codegen.h"
 #include "x86gen.h"
+#include "elflink.h"
 #include "monomorph.h"
 #include "diag.h"
 #include "platform.h"
@@ -28,6 +29,8 @@ static bool output_is_null_device(const char *path) {
 
 static void print_usage(FILE *f) {
     fputs("usage: fcc [options] <input.fc>... [-o <output.c>]\n"
+          "       fcc --native [options] <input.fc>... [<lib.a>|<lib.so>|<file.o>]...\n"
+          "           [-L <dir>]... [-l <name>]... [-o <program>]\n"
           "       fcc --lsp\n"
           "\n"
           "options:\n"
@@ -38,9 +41,15 @@ static void print_usage(FILE *f) {
           "  --no-auto-detect       don't set the host's os/arch/env flags\n"
           "  --backtraces           print an FC backtrace when the program aborts\n"
           "  --len-repr <16|32|64>  stored width of slice lengths (default 64)\n"
-          "  --native               write an x86-64 object file (.o) instead of C,\n"
-          "                         for a fast build: cc out.o -o prog (experimental;\n"
+          "  --native               compile to x86-64 machine code and link an\n"
+          "                         executable (default: the first input without its\n"
+          "                         extension), for a fast build (experimental;\n"
           "                         Linux x86-64 only)\n"
+          "  -c                     with --native, write an object file (.o) to link\n"
+          "                         with cc instead\n"
+          "  -l <name>              with --native, link libname.so (or libname.a);\n"
+          "                         libm and libc are always linked\n"
+          "  -L <dir>               with --native, search <dir> for -l libraries\n"
           "  --lsp                  run as a language server on stdin/stdout\n"
           "  -V, --version          print version and build information\n"
           "  -h, --help             print this help\n", f);
@@ -187,26 +196,47 @@ int main(int argc, char **argv) {
 
     /* Code generation */
     if (!output_path) {
-        output_path = change_extension(input_paths[0], ca.native ? ".o" : ".c");
-    }
-
-    /* Opened for update: codegen writes the body, reads it back to choose the
-     * preamble, then rewrites the file from its start. */
-    FILE *out = fopen(output_path, ca.native ? "wb+" : "w+");
-    if (!out) {
-        diag_fatal_simple("cannot open output '%s'", output_path);
+        if (!ca.native || ca.compile_only) {
+            output_path = change_extension(input_paths[0], ca.native ? ".o" : ".c");
+        } else {
+            output_path = change_extension(input_paths[0], "");
+            if (strcmp(output_path, input_paths[0]) == 0)
+                diag_fatal_simple("'%s' has no extension to drop for the executable's "
+                                  "name; name it with -o", input_paths[0]);
+        }
     }
 
     if (ca.native) {
-        if (backtraces)
+        if (backtraces) {
             diag_error((SrcLoc){0}, "--backtraces is not supported by the native backend");
-        else
-            x86gen_emit(prog, out, &mono, &arena, &intern_table, &symtab);
+        } else {
+            Obj obj;
+            obj_init(&obj);
+            x86gen_emit(prog, &obj, &mono, &arena, &intern_table, &symtab);
+            if (diag_error_count() == 0 && ca.compile_only) {
+                FILE *out = fopen(output_path, "wb");
+                if (!out) diag_fatal_simple("cannot open output '%s'", output_path);
+                bool ok = obj_write(&obj, out);
+                if (fclose(out) != 0 || !ok)
+                    diag_error_simple("cannot write the object file '%s'", output_path);
+            } else if (diag_error_count() == 0) {
+                LinkArgs link = { (const char *const *)ca.link_inputs, ca.link_count,
+                                  (const char *const *)ca.lib_dirs, ca.lib_dir_count };
+                elf_link(&obj, &link, output_path);
+            }
+            obj_free(&obj);
+        }
     } else {
+        /* Opened for update: codegen writes the body, reads it back to choose
+         * the preamble, then rewrites the file from its start. */
+        FILE *out = fopen(output_path, "w+");
+        if (!out) {
+            diag_fatal_simple("cannot open output '%s'", output_path);
+        }
         CodegenOptions cg_opts = { .backtraces = backtraces };
         codegen_emit(prog, out, &mono, &arena, &intern_table, &symtab, &cg_opts);
+        fclose(out);
     }
-    fclose(out);
 
     if (diag_error_count() > 0) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());

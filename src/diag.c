@@ -108,14 +108,11 @@ _Noreturn void diag_fatal(SrcLoc loc, const char *fmt, ...) {
     exit(1);
 }
 
-_Noreturn void diag_fatal_simple(const char *fmt, ...) {
-    flush_held();
-    va_list ap;
-    va_start(ap, fmt);
+/* An error with no location, counted. */
+static void report_simple(const char *fmt, va_list ap) {
     char *buf = str_vsprintf(fmt, ap);   /* messages embed unbounded paths */
-    va_end(ap);
     if (g_sink) {
-        /* No location for a simple fatal; report at the start of the file. */
+        /* No location; report at the start of the file. */
         SrcLoc resolved = { .filename = g_filename, .line = 0, .col = 0 };
         g_sink(resolved, buf, g_sink_ud);
     } else {
@@ -123,8 +120,23 @@ _Noreturn void diag_fatal_simple(const char *fmt, ...) {
     }
     free(buf);          /* the sink copies; the longjmp path must not leak */
     g_error_count++;
+}
+
+_Noreturn void diag_fatal_simple(const char *fmt, ...) {
+    flush_held();
+    va_list ap;
+    va_start(ap, fmt);
+    report_simple(fmt, ap);
+    va_end(ap);
     if (g_abort_env) longjmp(*g_abort_env, 1);
     exit(1);
+}
+
+void diag_error_simple(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    report_simple(fmt, ap);
+    va_end(ap);
 }
 
 int diag_error_count(void) {

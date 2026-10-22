@@ -32,7 +32,9 @@ The command-line driver is `main()` in `src/main.c`:
 
 1. **Arguments.** `args_expand` splices `@response` files into a flat token
    stream; `args_parse` interprets it (inputs, `-o`, `--flag`, `--len-repr`,
-   `--backtraces`, host auto-detection of `os`/`arch`/`env` flags).
+   `--backtraces`, host auto-detection of `os`/`arch`/`env` flags, and for
+   `--native` `-c`, `-l`, `-L` and the object, archive and library files to
+   link).
 2. **Lex** every input file. Conditional compilation (`#if`) is evaluated here,
    against the flag set.
 3. **Parse** (`parse_files`, which also does steps 4 and 5). First it
@@ -53,10 +55,12 @@ The command-line driver is `main()` in `src/main.c`:
    resolves every instance's type names to their C names.
    Instance-level errors (a failed `static_assert`, a const-eval error, an
    infinite instance family) stop the driver.
-9. **codegen** (`codegen_emit`) writes the C file.
+9. **codegen** (`codegen_emit`) writes the C file. With `--native`,
+   `x86gen_emit` builds an object in memory instead, and `elf_link` links it
+   into an executable (with `-c`, the object is written as it is).
 10. If the program declares `error` groups, the driver writes the error-code
-    map beside the C file: the output path with `.errcodes` in place of its
-    extension.
+    map beside the C file (or the executable): the output path with
+    `.errcodes` in place of its extension.
 
 The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 [Language server](#language-server).
@@ -79,9 +83,10 @@ The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 | `codegen.c/h` | The C emitter. |
 | `x86gen.c/h` | The native x86-64 emitter (`--native`, experimental): machine code for Linux, linked against the C library. See [Native backend](#native-backend). |
 | `x86asm.c/h` | The native backend's assembler without text: the instruction encoder, code buffers with labels and relaxed branches, the layout of `.text`, and the object's `.eh_frame` and DWARF line table. |
-| `elfobj.c/h` | ELF64 relocatable objects in memory: sections, symbols and relocations, the writer, and the reader that merges an object the C compiler made (the header shim). |
+| `elfobj.c/h` | ELF64 relocatable objects in memory: sections, symbols and relocations, the writer, and the reader that merges an object the C compiler made (the header shim, and the linker's objects and archive members), resolving symbols as a linker does. |
+| `elflink.c/h` | The native backend's linker: the object, the command line's objects, archives and shared libraries, then libm and libc, become a position-independent executable for glibc. See [Native backend](#native-backend). |
 | `diag.c/h` | Error reporting. In server mode it reports to a sink and turns a fatal error into a `longjmp`. |
-| `common.c/h` | The arena allocator; the `xmalloc`/`xcalloc`/`xrealloc` wrappers, which exit on out-of-memory; growable arrays (`DA_APPEND`); exact-size string builders; the intern table (the parser interns every name, so names compare by pointer); file reading; name helpers shared by several passes (`c_safe_ident`, `is_mangled_root_name`, `mangled_source_name`, `ns_display`); string-literal decoding and the one escape table (`simple_escape_byte`); the one format-spec reader and conversion table (`interp_spec_scan`, `interp_conv_class`), shared by the lexer, facts and codegen; and `g_len_repr`, the `--len-repr` setting. |
+| `common.c/h` | The arena allocator; the `xmalloc`/`xcalloc`/`xrealloc` wrappers, which exit on out-of-memory; growable arrays (`DA_APPEND`); a string-keyed hash map (`HMap`); exact-size string builders; the intern table (the parser interns every name, so names compare by pointer); file reading; name helpers shared by several passes (`c_safe_ident`, `is_mangled_root_name`, `mangled_source_name`, `ns_display`); string-literal decoding and the one escape table (`simple_escape_byte`); the one format-spec reader and conversion table (`interp_spec_scan`, `interp_conv_class`), shared by the lexer, facts and codegen; and `g_len_repr`, the `--len-repr` setting. |
 | `analyze.c/h` | The non-fatal front end used by the language server. |
 | `lsp.c/h`, `json.c/h` | The language server and its JSON-RPC value model. |
 | `builtin_docs.inc` | Hover documentation for built-in intrinsics (user-facing markdown). |
@@ -198,10 +203,11 @@ support, body. No emitter reports what it needs.
 
 ### Native backend
 
-`fcc --native` replaces `codegen_emit` with `x86gen_emit`, which writes an
+`fcc --native` replaces `codegen_emit` with `x86gen_emit`, which builds an
 ELF relocatable object of x86-64 machine code (System V ABI,
-position-independent) for a fast development build: `cc out.o -o prog`
-links it, with no C compilation and no assembler. It walks the same typed,
+position-independent) for a fast development build, and `elf_link` links it
+into an executable: no C compilation, no assembler and no linker. With `-c`
+the object is written instead, for `cc out.o -o prog`. It walks the same typed,
 monomorphized AST as the C emitter and must mean exactly what the emitted C
 means; `make test-native` runs the suite through it. It does not optimize, so its code runs at roughly `gcc -O0`
 speed, except that a call in tail position is a jump whenever the callee
@@ -211,9 +217,9 @@ function, all arguments in registers).
 
 The backend is built only on Linux x86-64, since its objects are ELF, its
 calls name the Linux C library's symbols (`stderr`, `__errno_location`) and it
-runs the C compiler through `/bin/sh`. On any other host `x86gen.c` compiles
-to a stub whose `x86gen_emit` reports `--native` as unsupported, and the rest
-of fcc builds and works as usual.
+runs the C compiler through `/bin/sh`. On any other host `x86gen.c` and
+`elflink.c` compile to stubs that report `--native` as unsupported, and the
+rest of fcc builds and works as usual.
 
 The emitter calls the encoder in `x86asm.c` once per instruction, through
 macros named after the AT&T mnemonics with the operands in AT&T order
@@ -250,6 +256,36 @@ two before the compile, since the compiler may have seen it mid-edit.
 Entries are written to a temporary file and renamed into place, so parallel
 builds never read a partial one. `--backtraces` and a `--len-repr` other than
 64 are not supported yet.
+
+The linker (`elflink.c`) makes what `cc -pie -z now -z relro` makes of the
+same object, for glibc, with an entry point of its own (`_start`, which calls
+`__libc_start_main`) in place of the C compiler's startup files. Objects named
+on the command line merge into the backend's object through `obj_merge`, as
+the shim does. Archive members merge in while one defines a symbol still
+undefined, whatever the archives' order. What remains comes from the shared
+libraries (`-l` and named files, then libm and libc), the first in
+command-line order that defines it at its default version; a library becomes
+a `DT_NEEDED` entry only if a symbol came from it. Libraries are looked up in
+the `-L` directories, `LIBRARY_PATH`, then GNU ld's system directories, and a
+`.so` that is a GNU ld script (libc.so is one) is read for its `GROUP`,
+`INPUT` and `AS_NEEDED` lists. Everything binds at startup: an imported
+function's PLT stub jumps through its GOT slot, which a `GLOB_DAT` relocation
+fills. A GOT load of a symbol defined in the executable becomes a `lea`, as
+GNU ld relaxes it, and an imported variable addressed directly (as gcc's
+`-fPIE` code does) is copied into `.bss` with an `R_X86_64_COPY` relocation and
+exported under every name the library has for it. The layout is GNU ld's four
+segments with file offsets equal to addresses, each segment on its own page:
+headers and the dynamic linking tables; `.plt` and `.text`; `.rodata`,
+`.eh_frame_hdr` and `.eh_frame`; then `.data.rel.ro`, `.dynamic` and `.got`
+(read-only after relocation) and `.data` and `.bss`. The executable keeps the
+object's symbols and DWARF, so debuggers and profilers see what they see in
+the `cc`-linked one. What the linker does not support (thread-local storage,
+IFUNC symbols, LTO objects, the large code model, code compiled without
+`-fPIC` or `-fPIE`, thin archives, other linker script commands) is an error
+naming the input, and such a program is built with `-c` and linked by `cc`.
+`make test-native` also runs `tests/run_link_tests.sh`, which links C objects
+and archives both ways and checks the errors; `make test-native-cc` runs the
+suite with `cc` linking the backend's objects, the check on the linker.
 
 ## Invariants
 

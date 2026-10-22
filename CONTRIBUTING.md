@@ -34,7 +34,8 @@ exit code.
 | `make check-ascii`, `check-warnings`, `check-keywords`, `check-examples` | The source checks: `src/` is ASCII; the compiler builds warning-free under gcc and clang; every hand-kept keyword list (token names, the spec, both editor grammars) matches the lexer's table, and every built-in operator has hover text (`tools/check-keywords.py`); `spec/examples.fc` compiles and runs. |
 | `make test-all` | The suite under gcc and clang, in parallel. |
 | `make test-gcc` / `make test-clang` | One compiler. |
-| `make test-native` | The suite through the native x86-64 backend (`--native`, experimental; Linux x86-64). Not part of `make check`. |
+| `make test-native` | The suite through the native x86-64 backend (`--native`, experimental; Linux x86-64), which links each test itself, then `tests/run_link_tests.sh`: its linker on C objects, archives and the inputs it refuses. Not part of `make check`. |
+| `make test-native-cc` | The same suite with `cc` linking the backend's objects (`--native -c`), the check on fcc's linker. |
 | `make test-all-O2` (and `test-gcc-O2`, `test-clang-O2`) | Compile the generated C at `-O2`, which surfaces undefined behavior the optimizer exploits. |
 | `make test-all-len16` (and `test-gcc-len16`, `test-clang-len16`) | The whole suite with 16-bit stored slice lengths (`--len-repr 16`). Keep these green when touching slice code. |
 | `make test-lsp` | Language server tests (needs `python3`). |

@@ -1,4 +1,5 @@
 #pragma once
+#include "common.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -53,6 +54,7 @@ typedef struct {
     int nsec, capsec;
     ObjSymbol *syms;
     int nsym, capsym;
+    HMap globals;           /* name -> index of each symbol made non-local */
 } Obj;
 
 void obj_init(Obj *o);
@@ -64,15 +66,21 @@ int obj_section(Obj *o, const char *name, uint32_t type, uint64_t flags, uint64_
 uint64_t obj_put(Obj *o, int sec, const void *p, uint64_t n);
 /* Pad to a multiple of `align` (raising the section's alignment). */
 void obj_align(Obj *o, int sec, uint64_t align);
+/* A symbol's binding stays local or non-local from here on: the index of
+ * non-local names is kept as symbols are added. */
 int obj_symbol(Obj *o, const char *name, int sec, uint64_t value, uint64_t size,
                uint8_t type, uint8_t bind);
+/* The non-local symbol of that name, or 0. */
+int obj_find(Obj *o, const char *name);
 int obj_section_symbol(Obj *o, int sec);
 void obj_reloc(Obj *o, int sec, uint64_t off, uint32_t type, int sym, int64_t addend);
 
 /* Add the sections, symbols and relocations of a relocatable object (one
  * compiled by the C compiler), resolving its global symbols against those
- * already present by name. False with a message in *err on a malformed
- * object. */
+ * already present by name as a linker does: a strong definition replaces a
+ * weak or common one, a common symbol takes the larger size and alignment,
+ * and two strong definitions are an error. False with a message in *err on a
+ * malformed object or a duplicate definition. */
 bool obj_merge(Obj *o, const unsigned char *elf, size_t n, char **err);
 
 /* Write the object file: the sections in order, a .rela section for each

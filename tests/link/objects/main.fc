@@ -1,0 +1,14 @@
+import io from std::
+
+module c from "clib.h" =
+    extern c_add: (i32, i32) -> i32
+    extern c_order: () -> i32
+    extern c_weak: () -> i32
+    extern c_common: () -> i32
+    extern c_stdout: () -> i32
+
+let main = (args: str[]) ->
+    io.write("add %d{c.c_add(40, 2)} order %d{c.c_order()} weak %d{c.c_weak()}\n", stdout)
+    io.write("common %d{c.c_common()}\n", stdout)
+    let _ = c.c_stdout()
+    0

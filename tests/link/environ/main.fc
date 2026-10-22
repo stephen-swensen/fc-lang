@@ -1,0 +1,10 @@
+import io from std::
+
+module c from "envc.h" =
+    extern env_check: () -> i32
+    extern fnptr_check: () -> i32
+
+let main = (args: str[]) ->
+    let f = c.fnptr_check()
+    io.write("environ %d{c.env_check()} fnptr %d{f}\n", stdout)
+    0
