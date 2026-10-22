@@ -1,0 +1,8 @@
+import io from std::
+
+module cfg from "cfg.h" =
+    extern CFG_VALUE: i32
+
+let main = (args: str[]) ->
+    io.write("%d{cfg.CFG_VALUE}\n", stdout)
+    0

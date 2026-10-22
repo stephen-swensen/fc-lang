@@ -4,7 +4,10 @@
 # inputs it refuses. Each program in tests/link/<name>/ is linked by fcc and,
 # from `fcc --native -c`, by cc; both executables must print the case's
 # `expected` file. The C files are compiled with $CC -fPIE, as a C compiler
-# compiles them by default for a position-independent executable.
+# compiles them by default for a position-independent executable. Then the
+# backend's C header search (tests/link/headers): -I, CPATH and
+# C_INCLUDE_PATH, through one header cache, which a header created where the
+# search finds it first must get past.
 #
 # Environment: CC (default cc), FCC (default the one `make` builds). Run it
 # from the repository root; `make test-native` runs it after the suite.
@@ -96,6 +99,63 @@ if "$CC" -flto -O1 -c $LINK/archive/chain_second.c -o "$W/lto.o" 2>/dev/null &&
    [ "$(head -c 4 "$W/lto.o" | od -An -c | tr -d ' ')" = '177ELF' ] &&
    grep -q gnu.lto_ "$W/lto.o"; then
     refuses lto "lto.o: an LTO object" $LINK/archive/main.fc $IO "$W/chain_first.o" "$W/lto.o"
+fi
+
+# reads NAME WANT [VAR=VALUE] FCC_ARGS...: the program fcc builds, with the
+# environment variable set (and the user's CPATH and C_INCLUDE_PATH unset),
+# must print WANT. Every case shares one header cache, so a case that reads a
+# different header than the one before it shows the cache keyed on what
+# chose the header.
+reads() {
+    local name=$1 want=$2 how=$3
+    local log="$W/$name.log"
+    shift 3
+    if ! env -u CPATH -u C_INCLUDE_PATH XDG_CACHE_HOME="$W/cache" $how \
+            $FCC --native "$@" -o "$W/$name" 2>"$log"; then
+        fail "$name" "fcc did not build it" "$log"; return
+    fi
+    local got
+    got=$("$W/$name")
+    [ "$got" = "$want" ] || { fail "$name" "it printed '$got', not '$want'"; return; }
+    pass "$name"
+}
+
+H=$LINK/headers
+reads cpath_a 1 CPATH=$H/a $H/main.fc $IO
+ls "$W/cache/fcc/probe-"* >/dev/null 2>&1 ||
+    fail header_cache "fcc cached no probe, so the cases below test no cache"
+reads cpath_b 2 CPATH=$H/b $H/main.fc $IO
+reads c_include_path_a 1 C_INCLUDE_PATH=$H/a $H/main.fc $IO
+reads c_include_path_b 2 C_INCLUDE_PATH=$H/b $H/main.fc $IO
+reads include_a 1 "" -I $H/a $H/main.fc $IO
+reads include_b 2 "" -I$H/b $H/main.fc $IO
+reads include_order 2 CPATH=$H/a -I $H/b $H/main.fc $IO
+reads include_rsp 1 "" @$H/main.rsp $IO
+
+# shadowed NAME DIR: a probe cached while DIR, searched before $H/b, held no
+# cfg.h (or did not exist) must not outlive a cfg.h created there.
+shadowed() {
+    local name=$1 dir=$2
+    local n
+    n=$(ls "$W/cache/fcc" | wc -l)
+    reads "${name}_before" 2 "" -I "$dir" -I $H/b $H/main.fc $IO
+    if [ "$(ls "$W/cache/fcc" | wc -l)" -le "$n" ]; then
+        fail "$name" "fcc cached no probe, so the case tests no cache"; return
+    fi
+    mkdir -p "$dir"
+    cp $H/a/cfg.h "$dir/cfg.h"
+    reads "${name}_after" 1 "" -I "$dir" -I $H/b $H/main.fc $IO
+}
+mkdir "$W/early"
+shadowed shadow_in_dir "$W/early"
+shadowed shadow_new_dir "$W/later"
+# The C backend leaves the header search to the C compiler.
+if $FCC -I $H/a $H/main.fc $IO -o "$W/include_c.c" 2>"$W/include_c.log"; then
+    fail include_c "fcc took -I without --native"
+elif ! grep -qF -- "-I applies only to --native" "$W/include_c.log"; then
+    fail include_c "wrong error" "$W/include_c.log"
+else
+    pass include_c
 fi
 
 echo "$passed passed, $failed failed"

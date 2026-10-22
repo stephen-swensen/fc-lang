@@ -58,6 +58,8 @@ typedef struct {
     int          link_count, link_cap;
     char       **lib_dirs;   /* owned: -L directories (rebased), in order    */
     int          lib_dir_count, lib_dir_cap;
+    char       **include_dirs; /* owned: -I directories (rebased), in order  */
+    int          include_dir_count, include_dir_cap;
     int          len_repr;   /* stored slice-len width: 16, 32 or 64 */
     char        *error;      /* owned message if parsing failed, else NULL   */
 } CompileArgs;
@@ -66,7 +68,8 @@ typedef struct {
  * (unless --no-auto-detect), --flag overrides (replace by name), -o, and turns
  * positionals into inputs with response-file glob/rebase. A positional ending
  * in .o, .a or .so (or .so.N) is a link input, as are -l libraries; both, and
- * -L, are for a --native executable only. Flag name/value
+ * -L, are for a --native executable only. -I directories are for --native,
+ * with or without -c. Flag name/value
  * strings borrow from `e`, so `e` must outlive the returned flags. Returns true on
  * success; on failure returns false with out->error set (and out otherwise
  * safe to pass to args_compile_free). */

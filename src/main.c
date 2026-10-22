@@ -30,7 +30,7 @@ static bool output_is_null_device(const char *path) {
 static void print_usage(FILE *f) {
     fputs("usage: fcc [options] <input.fc>... [-o <output.c>]\n"
           "       fcc --native [options] <input.fc>... [<lib.a>|<lib.so>|<file.o>]...\n"
-          "           [-L <dir>]... [-l <name>]... [-o <program>]\n"
+          "           [-I <dir>]... [-L <dir>]... [-l <name>]... [-o <program>]\n"
           "       fcc --lsp\n"
           "\n"
           "options:\n"
@@ -47,6 +47,9 @@ static void print_usage(FILE *f) {
           "                         Linux x86-64 only)\n"
           "  -c                     with --native, write an object file (.o) to link\n"
           "                         with cc instead\n"
+          "  -I <dir>               with --native, search <dir> for the headers that\n"
+          "                         extern declarations name, after the sources'\n"
+          "                         directories\n"
           "  -l <name>              with --native, link libname.so (or libname.a);\n"
           "                         libm and libc are always linked\n"
           "  -L <dir>               with --native, search <dir> for -l libraries\n"
@@ -208,11 +211,12 @@ int main(int argc, char **argv) {
 
     if (ca.native) {
         if (backtraces) {
-            diag_error((SrcLoc){0}, "--backtraces is not supported by the native backend");
+            diag_error_simple("--backtraces is not supported by the native backend");
         } else {
             Obj obj;
             obj_init(&obj);
-            x86gen_emit(prog, &obj, &mono, &arena, &intern_table, &symtab);
+            x86gen_emit(prog, &obj, &mono, &arena, &intern_table, &symtab,
+                        (const char *const *)ca.include_dirs, ca.include_dir_count);
             if (diag_error_count() == 0 && ca.compile_only) {
                 FILE *out = fopen(output_path, "wb");
                 if (!out) diag_fatal_simple("cannot open output '%s'", output_path);

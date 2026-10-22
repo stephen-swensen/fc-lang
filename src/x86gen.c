@@ -41,8 +41,10 @@
  * C header shim runs through /bin/sh, so the backend is built only on Linux
  * x86-64. Elsewhere the rest of fcc is unaffected and --native is an error. */
 void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
-                 Arena *arena, InternTable *intern, SymbolTable *symtab) {
+                 Arena *arena, InternTable *intern, SymbolTable *symtab,
+                 const char *const *include_dirs, int ninclude_dirs) {
     (void)prog; (void)obj; (void)mono; (void)arena; (void)intern; (void)symtab;
+    (void)include_dirs; (void)ninclude_dirs;
     diag_error_simple("--native is supported only on Linux x86-64");
 }
 
@@ -5352,9 +5354,10 @@ static void collect_const_refs(Expr *e, void *ctx) {
     expr_for_each_child(e, collect_const_refs, ctx);
 }
 
-/* ---- The program's C environment: its defines, includes, include path,
- * and which headers sit beside its sources (whose functions the C library
- * cannot supply). ---- */
+/* ---- The program's C environment: its defines, includes, include path
+ * (the sources' directories, then -I), and which headers sit beside its
+ * sources (whose functions the C library cannot supply; a header found
+ * through -I is a library's, like a system header). ---- */
 static Buf g_cdefs, g_cincs, g_ciflags;
 static HMap g_cseen;            /* "D:macro" -> value, "I:header" */
 static HMap g_local_headers;    /* headers found beside a source file */
@@ -5401,7 +5404,18 @@ static void cenv_module(Decl *d, const char *lib) {
     for (int i = 0; i < d->module.decl_count; i++) cenv_module(d->module.decls[i], lib);
 }
 
-static void build_cenv(Program *prog, Decl **all, int all_count) {
+/* Append " -I<dir>" to the include path, `dir` quoted as one shell word. */
+static void add_include_dir(const char *dir) {
+    buf_puts(&g_ciflags, " -I'");
+    for (const char *p = dir; *p; p++) {
+        if (*p == '\'') buf_puts(&g_ciflags, "'\\''");
+        else buf_put(&g_ciflags, p, 1);
+    }
+    buf_puts(&g_ciflags, "'");
+}
+
+static void build_cenv(Program *prog, Decl **all, int all_count,
+                       const char *const *include_dirs, int ninclude_dirs) {
     for (int i = 0; i < all_count; i++) {
         const char *fn = all[i]->loc.filename;
         if (!fn) continue;
@@ -5409,9 +5423,10 @@ static void build_cenv(Program *prog, Decl **all, int all_count) {
         char *dir = slash ? str_ndup(fn, (size_t)(slash - fn)) : str_dup(".");
         if (!hmap_get(&g_src_dirs, dir, strlen(dir))) {
             hmap_put(&g_src_dirs, dir, strlen(dir));
-            buf_printf(&g_ciflags, " -I'%s'", dir);
+            add_include_dir(dir);
         } else free(dir);
     }
+    for (int i = 0; i < ninclude_dirs; i++) add_include_dir(include_dirs[i]);
     for (int i = 0; i < prog->decl_count; i++) cenv_module(prog->decls[i], NULL);
 }
 
@@ -5449,16 +5464,20 @@ static int xp_sym(const char *cname) {
 
 /* ---- The C compiler's cache ----
  * The probe's output and the shim's object are kept in $XDG_CACHE_HOME/fcc
- * (else ~/.cache/fcc), keyed by the C compiler, the include path and the C
- * source. An entry also lists every file the compiler read, system headers
- * included, with its size and times, and is used only while each one is
- * unchanged: editing a header compiles again. An entry is
- *     fcc-cache 1
+ * (else ~/.cache/fcc), keyed by the C compiler, the include path (the -I
+ * options, and CPATH and C_INCLUDE_PATH, which the compiler reads too) and
+ * the C source. An entry also lists every file the compiler read, system
+ * headers included, with its size and times, and every place in the header
+ * search where a new file would have been read instead of one of them. It is
+ * used only while each file is unchanged and each place still empty: editing
+ * a header, or adding one that shadows it, compiles again. An entry is
+ *     fcc-cache 2
  *     <size> <mtime s> <mtime ns> <ctime s> <ctime ns> <path>     (per file)
+ *     ! <path>                                    (per place that must not exist)
  *     -
  *     <the output> */
 
-#define CACHE_MAGIC "fcc-cache 1\n"
+#define CACHE_MAGIC "fcc-cache 2\n"
 
 static void put_dep(Buf *b, const char *path, const struct stat *st) {
     buf_printf(b, "%lld %lld %ld %lld %ld %s\n", (long long)st->st_size,
@@ -5480,6 +5499,14 @@ static char *cache_read(const char *path, int *len) {
         char *eol = memchr(p, '\n', (size_t)(end - p));
         if (!eol) { ok = false; break; }
         if (eol - p == 1 && *p == '-') { p = eol + 1; break; }
+        if (eol - p > 2 && p[0] == '!' && p[1] == ' ') {
+            char *place = str_ndup(p + 2, (size_t)(eol - p - 2));
+            struct stat st;
+            ok = stat(place, &st) != 0;
+            free(place);
+            p = eol + 1;
+            continue;
+        }
         /* the path follows five numbers; the line must read the same now */
         char *q = p;
         for (int i = 0; i < 5 && q; i++) {
@@ -5505,14 +5532,113 @@ static char *cache_read(const char *path, int *len) {
     return e;
 }
 
+/* Whether a file was last changed before `start`, when the compiler began,
+ * by a margin: one changed later may have changed while the compiler read it. */
+static bool settled(const struct stat *st, time_t start) {
+    return st->st_mtim.tv_sec < start - 1 && st->st_ctim.tv_sec < start - 1;
+}
+
+/* The compiler's header search, in its order, from the list that -Wp,-v
+ * has gcc and clang print to stderr (`err`): the directories it searched,
+ * without trailing slashes, and those it skipped for not existing. False
+ * when `err` holds no list. */
+typedef struct { char **dirs; int n, cap; char **missing; int nmissing, capmissing; } Search;
+
+static bool search_read(const char *err, Search *s) {
+    static const char skipped[] = "ignoring nonexistent directory \"";
+    bool in_list = false;
+    for (const char *p = err; *p; ) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        if (len >= sizeof skipped && memcmp(p, skipped, sizeof skipped - 1) == 0 &&
+            p[len - 1] == '"') {
+            char *dir = str_ndup(p + sizeof skipped - 1, len - sizeof skipped);
+            DA_APPEND(s->missing, s->nmissing, s->capmissing, dir);
+        } else if (strncmp(p, "#include ", 9) == 0 && len > 29 &&
+                   memcmp(p + len - 20, " search starts here:", 20) == 0) {
+            in_list = true;
+        } else if (len == 19 && memcmp(p, "End of search list.", 19) == 0) {
+            return in_list;
+        } else if (in_list && len > 1 && p[0] == ' ') {
+            while (len > 2 && p[len - 1] == '/') len--;
+            DA_APPEND(s->dirs, s->n, s->cap, str_ndup(p + 1, len - 1));
+        }
+        p += len + (eol != NULL);
+    }
+    return false;
+}
+
+static void search_free(Search *s) {
+    for (int i = 0; i < s->n; i++) free(s->dirs[i]);
+    for (int i = 0; i < s->nmissing; i++) free(s->missing[i]);
+    free(s->dirs);
+    free(s->missing);
+}
+
+/* The name `path` has relative to directory `dir` (as the compiler spells a
+ * header it found there: "inc/x.h" in "inc", "x.h" in "."), or NULL when the
+ * path is not inside it. */
+static const char *name_in(const char *dir, const char *path) {
+    if (strcmp(dir, ".") == 0) {
+        if (path[0] == '/') return NULL;
+        while (path[0] == '.' && path[1] == '/') path += 2;
+        return path;
+    }
+    size_t n = strlen(dir);
+    if (strncmp(path, dir, n) != 0 || (path[n] != '/' && dir[n - 1] != '/')) return NULL;
+    path += n;
+    while (*path == '/') path++;
+    return *path ? path : NULL;
+}
+
+/* Append to *b the places where a file would shadow the header the compiler
+ * read at `path`: its name in each directory searched before the one it was
+ * found in. A place that is empty must stay so ("! <place>"), and a missing
+ * directory on its way stands for every place inside it ("! /usr/local/
+ * include/SDL2" for all of SDL's headers); one that holds a file (which
+ * #include_next reads past) must stay as it is. A path inside
+ * two directories of the search (/usr/include/x86_64-linux-gnu/bits/types.h)
+ * is covered under each name it may have been included by. `seen` keeps the
+ * places recorded, with keys the caller frees. False when a file in one of
+ * them changed too close to `start`. */
+static bool cache_shadows(const char *path, const Search *s, time_t start, HMap *seen, Buf *b) {
+    for (int k = 0; k < s->n; k++) {
+        const char *name = name_in(s->dirs[k], path);
+        if (!name) continue;
+        for (int j = 0; j < k; j++) {
+            char *place = NULL;
+            struct stat st;
+            bool exists = true;
+            for (const char *c = name; exists; c++) {
+                if (*c && *c != '/') continue;
+                free(place);
+                place = str_sprintf("%s/%.*s", s->dirs[j], (int)(c - name), name);
+                exists = stat(place, &st) == 0;
+                if (!*c) break;
+            }
+            if (hmap_get(seen, place, strlen(place))) { free(place); continue; }
+            hmap_put(seen, place, strlen(place));
+            if (!exists) buf_printf(b, "! %s\n", place);
+            else if (settled(&st, start)) put_dep(b, place, &st);
+            else return false;
+        }
+    }
+    return true;
+}
+
 /* Append an entry line to *b for each file the dependency file `depfile`
  * (written by -MD -MT x) lists, except those under `skip`, the work
- * directory. False if one cannot be read, or was changed too close to `start`,
- * when the compiler began: it may have changed while the compiler read it. */
-static bool cache_deps(const char *depfile, const char *skip, time_t start, Buf *b) {
+ * directory, and for each place that would shadow one in the header search
+ * `s`. A directory the compiler skipped for not existing must still not
+ * exist: created, it may shadow anything. False if a file cannot be read, or
+ * was changed too close to `start`, when the compiler began: it may have
+ * changed while the compiler read it. */
+static bool cache_deps(const char *depfile, const char *skip, time_t start,
+                       const Search *s, Buf *b) {
     char *d = read_file(depfile, NULL);
     bool ok = d && strncmp(d, "x:", 2) == 0;
     Buf name = { 0 };
+    HMap seen = { 0 };
     for (const char *p = ok ? d + 2 : ""; ok; ) {
         while (*p == ' ' || *p == '\t' || *p == '\n' || (*p == '\\' && p[1] == '\n'))
             p += *p == '\\' ? 2 : 1;
@@ -5525,9 +5651,17 @@ static bool cache_deps(const char *depfile, const char *skip, time_t start, Buf 
         }
         if (strncmp(name.p, skip, strlen(skip)) == 0) continue;
         struct stat st;
-        ok = stat(name.p, &st) == 0 && st.st_mtim.tv_sec < start - 1 && st.st_ctim.tv_sec < start - 1;
+        ok = stat(name.p, &st) == 0 && settled(&st, start);
         if (ok) put_dep(b, name.p, &st);
+        if (ok) ok = cache_shadows(name.p, s, start, &seen, b);
     }
+    for (int i = 0; ok && i < s->nmissing; i++) {
+        struct stat st;
+        ok = stat(s->missing[i], &st) != 0;
+        buf_printf(b, "! %s\n", s->missing[i]);
+    }
+    for (size_t i = 0; i < seen.cap; i++) if (seen.e[i].used) free((char *)seen.e[i].key);
+    hmap_free(&seen);
     buf_free(&name);
     free(d);
     return ok;
@@ -5560,10 +5694,15 @@ static char *cc_cached(const char *kind, Buf *src, int *len) {
     const char *cc = getenv("CC");
     if (!cc || !*cc) cc = "cc";
     const char *ifl = g_ciflags.p ? g_ciflags.p : "";
+    const char *env_paths[] = { "CPATH", "C_INCLUDE_PATH" };
     Buf key = { 0 };
     buf_puts(&key, kind); buf_put(&key, "", 1);
     buf_puts(&key, cc); buf_put(&key, "", 1);
     buf_puts(&key, ifl); buf_put(&key, "", 1);
+    for (int i = 0; i < 2; i++) {
+        const char *v = getenv(env_paths[i]);
+        buf_puts(&key, v ? v : ""); buf_put(&key, "", 1);
+    }
     buf_put(&key, src->p, src->len);
     uint64_t h = hash_bytes(key.p, key.len);
     buf_free(&key);
@@ -5577,27 +5716,32 @@ static char *cc_cached(const char *kind, Buf *src, int *len) {
     const char *tmp = getenv("TMPDIR");
     char *work = str_sprintf("%s/fcc-%s-XXXXXX", tmp && *tmp ? tmp : "/tmp", kind);
     if (!mkdtemp(work)) {
-        diag_error((SrcLoc){0}, "native backend: cannot create a work directory for the C %s", kind);
+        diag_error_simple("native backend: cannot create a work directory for the C %s", kind);
         free(work); free(cache); free(cache_dir);
         return NULL;
     }
     char *cpath = str_sprintf("%s/x.c", work);
     FILE *f = fopen(cpath, "w");
     if (f) { fwrite(src->p, 1, src->len, f); fclose(f); }
+    /* -Wp,-v: the header search, for the cache entry, printed before
+     * anything else the compiler says */
     char *cmd = strcmp(kind, "probe") == 0
-        ? str_sprintf("%s -w -MD -MF '%s/deps' -MT x -o '%s/x' '%s'%s 2>'%s/err' && '%s/x' >'%s/out'",
+        ? str_sprintf("%s -w -Wp,-v -MD -MF '%s/deps' -MT x -o '%s/x' '%s'%s 2>'%s/err' && "
+                      "'%s/x' >'%s/out'",
                       cc, work, work, cpath, ifl, work, work, work)
-        : str_sprintf("%s -w -c -O1 -fPIC -fno-asynchronous-unwind-tables -MD -MF '%s/deps' -MT x "
-                      "-o '%s/out' '%s'%s 2>'%s/err'",
+        : str_sprintf("%s -w -Wp,-v -c -O1 -fPIC -fno-asynchronous-unwind-tables -MD -MF '%s/deps' "
+                      "-MT x -o '%s/out' '%s'%s 2>'%s/err'",
                       cc, work, work, cpath, ifl, work);
     time_t start = time(NULL);
     int rc = system(cmd);
+    char *errp = str_sprintf("%s/err", work);
+    char *err = read_file(errp, NULL);
+    free(errp);
     if (rc != 0) {
-        char *errp = str_sprintf("%s/err", work);
-        char *err = read_file(errp, NULL);
-        diag_error((SrcLoc){0}, "native backend: the C %s failed:\n%s", kind, err ? err : "");
-        free(err);
-        free(errp);
+        const char *msg = err ? err : "";
+        const char *list_end = strstr(msg, "End of search list.\n");
+        if (list_end) msg = list_end + 20;
+        diag_error_simple("native backend: the C %s failed:\n%s", kind, msg);
     } else {
         char *outp = str_sprintf("%s/out", work);
         text = read_file(outp, len);
@@ -5607,15 +5751,18 @@ static char *cc_cached(const char *kind, Buf *src, int *len) {
             buf_puts(&entry, CACHE_MAGIC);
             char *depf = str_sprintf("%s/deps", work);
             char *skip = str_sprintf("%s/", work);
-            if (cache_deps(depf, skip, start, &entry)) {
+            Search search = { 0 };
+            if (err && search_read(err, &search) && cache_deps(depf, skip, start, &search, &entry)) {
                 buf_puts(&entry, "-\n");
                 buf_put(&entry, text, (size_t)*len);
                 cache_write(cache_dir, cache, &entry);
             }
+            search_free(&search);
             free(skip); free(depf);
             buf_free(&entry);
         }
     }
+    free(err);
     char *rm = str_sprintf("rm -f '%s/x' '%s/x.c' '%s/err' '%s/out' '%s/deps'; rmdir '%s'",
                            work, work, work, work, work, work);
     if (system(rm) != 0) { /* leftovers in TMPDIR are harmless */ }
@@ -5933,13 +6080,14 @@ static bool is_generic(Decl *d) {
 }
 
 void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
-                 Arena *arena, InternTable *intern, SymbolTable *symtab) {
+                 Arena *arena, InternTable *intern, SymbolTable *symtab,
+                 const char *const *include_dirs, int ninclude_dirs) {
     g_mono = mono;
     g_arena = arena;
     g_intern = intern;
     g_symtab = symtab;
     if (g_len_repr != 64) {
-        diag_error((SrcLoc){0}, "the native backend supports only --len-repr 64");
+        diag_error_simple("the native backend supports only --len-repr 64");
         return;
     }
 
@@ -5948,7 +6096,7 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
     flatten(prog->decls, prog->decl_count, &all, &n, &cap);
 
     asm_init(obj);
-    build_cenv(prog, all, n);
+    build_cenv(prog, all, n, include_dirs, ninclude_dirs);
     run_probe(prog, all, n, mono);
     if (diag_error_count() > 0) goto done;
 
@@ -6034,7 +6182,7 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
     if (shim) {
         char *err = NULL;
         if (!obj_merge(obj, (const unsigned char *)shim, (size_t)shim_len, &err))
-            diag_error((SrcLoc){0}, "native backend: cannot merge the C shim: %s", err);
+            diag_error_simple("native backend: cannot merge the C shim: %s", err);
         free(err);
         free(shim);
     }

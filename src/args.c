@@ -411,19 +411,25 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
             out->error = str_sprintf(strcmp(a, "-o") == 0 ? "-o requires an output file name"
                                                           : "--flag requires a name");
             return false;
-        } else if ((strcmp(a, "-l") == 0 || strcmp(a, "-L") == 0) && i + 1 >= e->count) {
-            out->error = str_sprintf(a[1] == 'l' ? "-l requires a library name"
-                                                 : "-L requires a directory");
+        } else if ((strcmp(a, "-l") == 0 || strcmp(a, "-L") == 0 || strcmp(a, "-I") == 0) &&
+                   i + 1 >= e->count) {
+            out->error = a[1] == 'l' ? str_sprintf("-l requires a library name")
+                                     : str_sprintf("%s requires a directory", a);
             return false;
         } else if (strncmp(a, "-l", 2) == 0) {
             const char *name = a[2] ? a + 2 : e->tokens[++i];
             DA_APPEND(out->link_inputs, out->link_count, out->link_cap, str_sprintf("-l%s", name));
-        } else if (strncmp(a, "-L", 2) == 0) {
+        } else if (strncmp(a, "-L", 2) == 0 || strncmp(a, "-I", 2) == 0) {
             int vi = a[2] ? i : ++i;
             const char *val = a[2] ? a + 2 : e->tokens[vi];
             const char *vdir = e->dirs[vi];
+            if (!*val) {
+                out->error = str_sprintf("-%c requires a directory", a[1]);
+                return false;
+            }
             char *dir = (vdir && !path_is_abs(val)) ? path_join(vdir, val) : str_dup(val);
-            DA_APPEND(out->lib_dirs, out->lib_dir_count, out->lib_dir_cap, dir);
+            if (a[1] == 'L') DA_APPEND(out->lib_dirs, out->lib_dir_count, out->lib_dir_cap, dir);
+            else DA_APPEND(out->include_dirs, out->include_dir_count, out->include_dir_cap, dir);
         } else if (strcmp(a, "-c") == 0) {
             out->compile_only = true;
         } else if (strcmp(a, "-o") == 0) {
@@ -494,6 +500,11 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
         out->error = str_sprintf("-c applies only to --native (without it, fcc writes C)");
         return false;
     }
+    if (out->include_dir_count && !out->native) {
+        out->error = str_sprintf("-I applies only to --native (without it, fcc writes C: "
+                                 "pass -I to the C compiler)");
+        return false;
+    }
     if ((out->link_count || out->lib_dir_count) && (!out->native || out->compile_only)) {
         const char *what = out->lib_dir_count ? "-L" : out->link_inputs[0];
         out->error = str_sprintf("%s: libraries and object files are linked only when "
@@ -510,6 +521,8 @@ void args_compile_free(CompileArgs *c) {
     free(c->link_inputs);
     for (int i = 0; i < c->lib_dir_count; i++) free(c->lib_dirs[i]);
     free(c->lib_dirs);
+    for (int i = 0; i < c->include_dir_count; i++) free(c->include_dirs[i]);
+    free(c->include_dirs);
     free(c->flags);
     free(c->output);
     free(c->error);

@@ -33,8 +33,8 @@ The command-line driver is `main()` in `src/main.c`:
 1. **Arguments.** `args_expand` splices `@response` files into a flat token
    stream; `args_parse` interprets it (inputs, `-o`, `--flag`, `--len-repr`,
    `--backtraces`, host auto-detection of `os`/`arch`/`env` flags, and for
-   `--native` `-c`, `-l`, `-L` and the object, archive and library files to
-   link).
+   `--native` `-c`, `-I`, `-l`, `-L` and the object, archive and library
+   files to link).
 2. **Lex** every input file. Conditional compilation (`#if`) is evaluated here,
    against the flag set.
 3. **Parse** (`parse_files`, which also does steps 4 and 5). First it
@@ -244,18 +244,26 @@ calling convention, with the context pointer as a trailing argument.
 What only a C header knows comes from a probe: a small C program, compiled
 and run once, prints each extern constant the program uses and the layout of
 each extern struct field it uses (a bit field, or a member wider or narrower
-than its FC type, is read and written with conversion). Functions defined in
-a header beside the sources are compiled by the C compiler into a shim
-object of function pointers, which is merged into the output. Both are cached
-in `$XDG_CACHE_HOME/fcc` (`~/.cache/fcc`), keyed by the C compiler, the
-include path and the C source. Each entry lists every file the compiler read
-(from `-MD`), with its size and times, and is used only while all of them are
-unchanged, so the C compiler runs again when the declarations or a header
-change. A result is not cached when a file it read changed in the second or
-two before the compile, since the compiler may have seen it mid-edit.
-Entries are written to a temporary file and renamed into place, so parallel
-builds never read a partial one. `--backtraces` and a `--len-repr` other than
-64 are not supported yet.
+than its FC type, is read and written with conversion). The C compiler
+searches the sources' directories for the headers, then the `-I`
+directories, then its own (`CPATH`, `C_INCLUDE_PATH`, the system's).
+Functions defined in a header beside the sources are compiled by the C
+compiler into a shim object of function pointers, which is merged into the
+output; a header found any other way is a library's, whose functions the
+link supplies. Both are cached in `$XDG_CACHE_HOME/fcc` (`~/.cache/fcc`),
+keyed by the C compiler, the include path (`-I`, `CPATH` and
+`C_INCLUDE_PATH` included) and the C source. Each entry lists every file the
+compiler read (from `-MD`), with its size and times, and every place where a
+new file would shadow one of them: its name in each directory the compiler
+searched before the one it came from, and each directory it skipped for not
+existing (the search order from `-Wp,-v`). An entry is used only while every
+file is unchanged and every place still empty, so the C compiler runs again
+when the declarations change, a header changes, or a header appears that the
+search would find first. A result is not cached when a file it read changed
+in the second or two before the compile, since the compiler may have seen it
+mid-edit. Entries are written to a temporary file and renamed into place, so
+parallel builds never read a partial one. `--backtraces` and a `--len-repr`
+other than 64 are not supported yet.
 
 The linker (`elflink.c`) makes what `cc -pie -z now -z relro` makes of the
 same object, for glibc, with an entry point of its own (`_start`, which calls

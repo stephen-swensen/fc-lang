@@ -1018,12 +1018,14 @@ static bool kept(int sec) {
 
 static void scan_relocs(void) {
     Obj *o = L.o;
-    /* Copies first: they make imported variables local for the rest. */
+    /* Copies first: they make imported variables local for the rest. The
+     * first copy adds a section, which moves o->secs, so `s` is fetched for
+     * each relocation. */
     for (int si = 1; si < o->nsec; si++) {
-        ObjSection *s = &o->secs[si];
-        if (!(s->flags & SHF_ALLOC)) continue;
-        for (int ri = 0; ri < s->nrel; ri++) {
-            ObjReloc *r = &s->rel[ri];
+        if (!(o->secs[si].flags & SHF_ALLOC)) continue;
+        for (int ri = 0; ri < o->secs[si].nrel; ri++) {
+            const ObjSection *s = &o->secs[si];
+            const ObjReloc *r = &s->rel[ri];
             if ((r->type != R_X86_64_PC32 && r->type != R_X86_64_PC64) || kind(r->sym) != K_IMPORT)
                 continue;
             const Dso *d = &L.dsos[L.sl[r->sym].dso - 1];
