@@ -1,0 +1,8 @@
+// A checked conversion of a constant checks at run time when it is a
+// divisor, which the native backend divides by without a division
+// instruction when it is a power of two: 258 does not fit u8 (and would
+// wrap to 2).
+let main = (args: str[]) ->
+    let x = 1024i64
+    let _ = x / checked (i64) (u8) 258
+    1   // not reached: the line above aborts

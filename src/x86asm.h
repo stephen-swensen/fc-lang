@@ -108,6 +108,9 @@ void x_jcc(Code *c, Cond cc, int label);
 /* jmp to a label, or to a function defined in this object (relaxed); to any
  * other symbol, through the PLT. */
 void x_jmp(Code *c, int target);
+/* Remove a jmp to `label` that ends c, where control would fall through to
+ * the label anyway; whether there was one. */
+bool x_drop_final_jmp(Code *c, int label);
 void x_jmp_plt(Code *c, int sym);
 void x_call(Code *c, int sym, bool plt);
 void x_call_ind(Code *c, Opnd target);

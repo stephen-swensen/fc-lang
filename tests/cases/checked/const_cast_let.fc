@@ -1,0 +1,6 @@
+// A checked conversion of a constant checks at run time when it initializes
+// a binding, which the native backend stores as an immediate: -1 does not fit
+// u32.
+let main = (args: str[]) ->
+    let y = checked (u32) -1
+    if y == 0u32 then 2 else 1   // not reached: the line above aborts

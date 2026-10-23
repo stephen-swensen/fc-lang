@@ -5,8 +5,10 @@
  * code for System V, position-independent, as an ELF relocatable object
  * (through x86asm.c), which elflink.c links into an executable, or the C
  * compiler links (`fcc --native -c`, then `cc out.o`). No assembly text is
- * written and no assembler runs. It does not optimize; its job is to mean
- * exactly what the emitted C means, quickly.
+ * written and no assembler runs. It does not optimize across expressions;
+ * its job is to mean exactly what the emitted C means, quickly. Within an
+ * expression it takes the short forms: see "Leaves" (operands that take no
+ * code), cond_jump (branching on the flags) and gen_divmod_const.
  *
  * Value model. Every expression leaves its value in a fixed place:
  *   - an integer, bool, enum, pointer or null-sentinel option: %rax, sign- or
@@ -21,9 +23,10 @@
  * Frame. %rbp-based. Every local binding, parameter and temporary has a slot
  * at a fixed negative offset. Temporaries are never reused within a function
  * (monotonic allocation), except the 8-byte spill slots that hold a scalar
- * operand while its sibling is evaluated, which nest strictly and so are
- * reused by depth. Nothing is pushed: %rsp stays 16-byte aligned throughout a
- * body, which keeps calls and `alloca` simple.
+ * operand while its sibling is evaluated (unless the sibling is a leaf),
+ * which nest strictly and so are reused by depth. Nothing is pushed: %rsp
+ * stays 16-byte aligned throughout a body, which keeps calls and `alloca`
+ * simple.
  *
  * Calls use the System V ABI everywhere, FC to FC included, so FC functions
  * are callable from C and the debugger. A call in tail position is a jump
@@ -175,17 +178,32 @@ static Code g_text;         /* finished functions */
 #define mfence()        x_op0(g_cur, OP_MFENCE)
 #define rep_movsb()     x_op0(g_cur, OP_REP_MOVSB)
 #define rep_stosb()     x_op0(g_cur, OP_REP_STOSB)
-#define jmp(l)          x_jmp(g_cur, l)
 #define jcc(cc, l)      x_jcc(g_cur, cc, l)
-#define jmp_sym(name)   x_jmp(g_cur, asm_sym(name))
-#define jmp_plt(name)   x_jmp_plt(g_cur, asm_sym(name))
-#define jmp_ind(t)      x_jmp_ind(g_cur, t)
+#define jmp_sym(name)   (x_jmp(g_cur, asm_sym(name)), g_unreached = g_cur)
+#define jmp_plt(name)   (x_jmp_plt(g_cur, asm_sym(name)), g_unreached = g_cur)
+#define jmp_ind(t)      (x_jmp_ind(g_cur, t), g_unreached = g_cur)
 #define call_sym(name)  x_call(g_cur, asm_sym(name), false)
 #define call_plt(name)  x_call(g_cur, asm_sym(name), true)
 #define call_ind(t)     x_call_ind(g_cur, t)
 
+/* The buffer whose end control cannot reach: after an unconditional jump,
+ * until the next label. A jump there would never run, so none is emitted
+ * (a branch whose body ends in break or return, say, needs no jump past
+ * the else). */
+static Code *g_unreached;
+
 static int new_label(void) { return asm_label(); }
-static void label(int l) { x_label(g_cur, l); }
+
+static void label(int l) {
+    x_label(g_cur, l);
+    if (g_unreached == g_cur) g_unreached = NULL;
+}
+
+static void jmp(int l) {
+    if (g_unreached == g_cur) return;
+    x_jmp(g_cur, l);
+    g_unreached = g_cur;
+}
 
 /* `off(%rbp)`: a frame slot. */
 static Opnd fp(int32_t off) { return M(RBP, off); }
@@ -871,16 +889,19 @@ static void normalize(Type *t) {
     }
 }
 
-static void load_int(Type *t, Opnd mem) {
+/* Load the integer of type t at mem into r, extended to canonical form. */
+static void load_int_to(Type *t, Opnd mem, Reg r) {
     int w = int_width(t);
     bool s = int_signed(t);
     switch (w) {
-    case 1: (s ? movsbq(mem, R(RAX)) : movzbl(mem, R(RAX))); break;
-    case 2: (s ? movswq(mem, R(RAX)) : movzwl(mem, R(RAX))); break;
-    case 4: (s ? movslq(mem, R(RAX)) : movl(mem, R(RAX))); break;
-    default: movq(mem, R(RAX)); break;
+    case 1: (s ? movsbq(mem, R(r)) : movzbl(mem, R(r))); break;
+    case 2: (s ? movswq(mem, R(r)) : movzwl(mem, R(r))); break;
+    case 4: (s ? movslq(mem, R(r)) : movl(mem, R(r))); break;
+    default: movq(mem, R(r)); break;
     }
 }
+
+static void load_int(Type *t, Opnd mem) { load_int_to(t, mem, RAX); }
 
 static void store_int(Type *t, Opnd mem) {
     x_mov(g_cur, int_width(t), R(RAX), mem);
@@ -947,17 +968,20 @@ static void zero_mem(Reg base, int64_t off, int64_t size) {
     if (i < size) movb(IMM(0), M(base, (off + i)));
 }
 
-/* Store the current value (registers, or the aggregate at (%rax)) into
- * off(%base). The base must not be %rax for an aggregate, nor %r11. */
-static void store_val(Type *t, Reg base, int64_t off) {
-    Opnd mem = M(base, off);
+/* Store the current value (registers, or the aggregate at (%rax)) at mem.
+ * For an aggregate, mem must not be RIP-relative, nor based on %rax or %r11. */
+static void store_at(Type *t, Opnd mem) {
     switch (val_kind(t)) {
     case VK_INT: store_int(t, mem); break;
     case VK_FLOAT: (is_f32(t) ? movss(X(0), mem) : movsd(X(0), mem)); break;
-    case VK_AGG: copy_mem(base, off, RAX, 0, ty_size(t)); break;
+    case VK_AGG: copy_mem((Reg)mem.base, mem.disp, RAX, 0, ty_size(t)); break;
     case VK_VOID: break;
     }
 }
+
+/* Store the current value into off(%base). The base must not be %rax for an
+ * aggregate, nor %r11. */
+static void store_val(Type *t, Reg base, int64_t off) { store_at(t, M(base, off)); }
 
 /* ---- Extern struct fields that need conversion ---- */
 
@@ -1034,33 +1058,41 @@ static void store_ext_field(ExtField *x, Reg base, int64_t struct_off, int64_t f
     }
 }
 
-/* Load an immediate into %rax. */
-static void mov_imm(int64_t v) {
-    if (v == 0) xorl(R(RAX), R(RAX));
-    else if (v >= INT32_MIN && v <= INT32_MAX) movq(IMM(v), R(RAX));
-    else if (v > 0 && v <= (int64_t)UINT32_MAX) movl(IMM(v), R(RAX));
-    else movabsq(v, R(RAX));
+static bool fits_imm32(int64_t v) { return v >= INT32_MIN && v <= INT32_MAX; }
+
+/* Load an immediate into r. */
+static void mov_imm_to(int64_t v, Reg r) {
+    if (v == 0) xorl(R(r), R(r));
+    else if (fits_imm32(v)) movq(IMM(v), R(r));
+    else if (v > 0 && v <= (int64_t)UINT32_MAX) movl(IMM(v), R(r));
+    else movabsq(v, R(r));
 }
+
+/* Load an immediate into %rax. */
+static void mov_imm(int64_t v) { mov_imm_to(v, RAX); }
 
 static void mov_imm_reg(int64_t v, Opnd reg64) {
     if (v >= INT32_MIN && v <= INT32_MAX) movq(IMM(v), reg64);
     else movabsq(v, reg64);
 }
 
-static void float_const(double v, bool f32) {
+/* Load a float constant into %xmm<n> through the integer register via. */
+static void float_const_to(double v, bool f32, int n, Reg via) {
     if (f32) {
         float f = (float)v;
         uint32_t bits;
         memcpy(&bits, &f, 4);
-        movl(IMM(bits), R(RAX));
-        movd(R(RAX), X(0));
+        movl(IMM(bits), R(via));
+        movd(R(via), X(n));
     } else {
         uint64_t bits;
         memcpy(&bits, &v, 8);
-        movabsq(bits, R(RAX));
-        movq(R(RAX), X(0));
+        movabsq(bits, R(via));
+        movq(R(via), X(n));
     }
 }
+
+static void float_const(double v, bool f32) { float_const_to(v, f32, 0, RAX); }
 
 /* ---- Snapshots: hold the current value while other code runs ---- */
 
@@ -1377,6 +1409,190 @@ static void gen_const_of(Type *t, int64_t iv, double fv, bool is_float) {
     else mov_imm(canon_const((uint64_t)iv, t));
 }
 
+/* ---- Leaves: operands that take no code to evaluate ----
+ * A binary operator evaluates its left operand, then its right. When the
+ * right one is a constant or a read of storage at a fixed place, it can be
+ * read after the left operand's code has run, in that order, without a spill
+ * to keep the left value meanwhile, and often by the instruction itself. */
+
+static bool const_num(Expr *e, bool *isf, int64_t *iv, double *fv);
+
+/* normalize(t) applied to v. */
+static int64_t normalized(int64_t v, Type *t) {
+    if (conc(t)->kind == TYPE_BOOL) return v & 0xff;
+    bool s = int_signed(t);
+    switch (int_width(t)) {
+    case 1: return s ? (int64_t)(int8_t)v : (int64_t)(uint8_t)v;
+    case 2: return s ? (int64_t)(int16_t)v : (int64_t)(uint16_t)v;
+    case 4: return s ? (int64_t)(int32_t)v : (int64_t)(uint32_t)v;
+    default: return v;
+    }
+}
+
+/* An integer constant that takes no code but its load (a literal, a sizeof,
+ * an enum variant, a type property, a C constant, a const type parameter,
+ * or an unchecked integer conversion of one, such as the widening a literal
+ * gets from its context): the value gen_expr loads into %rax. Arithmetic on
+ * constants is left to the run time, which checks it. */
+static bool int_leaf(Expr *e, int64_t *v) {
+    switch (e->kind) {
+    case EXPR_GUARD: {      /* it governs a conversion inside */
+        bool sg = g_guards_suppressed, so = g_overflow_checked;
+        if (e->guard.is_overflow_axis) g_overflow_checked = e->guard.enable;
+        else g_guards_suppressed = !e->guard.enable;
+        bool ok = int_leaf(e->guard.body, v);
+        g_guards_suppressed = sg;
+        g_overflow_checked = so;
+        return ok;
+    }
+    case EXPR_CAST: {
+        Type *from = conc(e->cast.operand->type), *to = conc(e->cast.target);
+        if (val_kind(from) != VK_INT || val_kind(to) != VK_INT) return false;
+        if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) return false;
+        if (!int_leaf(e->cast.operand, v)) return false;
+        *v = normalized(*v, to);
+        return true;
+    }
+    case EXPR_TYPE_VAR_REF: {
+        if (!e->type_var_ref.is_const_param) return false;
+        Type tv = { 0 };
+        tv.kind = TYPE_TYPE_VAR;
+        tv.type_var.name = e->type_var_ref.name;
+        Type *b = subst_resolve(&tv);
+        if (!b || b->kind != TYPE_CONST_INT) return false;
+        *v = b->const_int.value;
+        return true;
+    }
+    case EXPR_IDENT:
+        if (e->ident.is_std_stream) return false;
+        /* fall through */
+    case EXPR_INT_LIT: case EXPR_BOOL_LIT: case EXPR_CHAR_LIT:
+    case EXPR_SIZEOF: case EXPR_ALIGNOF: case EXPR_FIELD: {
+        bool isf;
+        double fv;
+        if (val_kind(e->type) != VK_INT || !const_num(e, &isf, v, &fv) || isf) return false;
+        if (e->kind == EXPR_FIELD) *v = canon_const((uint64_t)*v, e->type);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+/* Storage at a fixed place: a local or a global, a field or tuple element of
+ * one, or the ptr or len of a slice there. *m addresses it and *t is the type
+ * gen_expr loads from it, so reading it is that one load. */
+static bool fixed_place(Expr *e, Opnd *m, Type **t) {
+    while (e->kind == EXPR_GUARD) e = e->guard.body;
+    switch (e->kind) {
+    case EXPR_IDENT: {
+        if (e->ident.is_std_stream || fn_static_target(e)) return false;
+        const char *name = e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
+        if (e->ident.is_local) {
+            int32_t off;
+            if (!local_find(name, &off)) return false;
+            *m = fp(off);
+        } else {
+            Symbol *s = e->ident.resolved_sym;
+            if (s && s->decl && s->decl->kind == DECL_EXTERN) return false;
+            *m = RIPREL(asm_sym(name), 0);
+        }
+        *t = e->type;
+        return true;
+    }
+    case EXPR_FIELD: {
+        if (e->field.is_type_property || e->field.is_variant_constructor || e->field.fixed_array_type)
+            return false;
+        if (e->field.codegen_name) {
+            if (fn_static_target(e) || e->field.is_extern_const) return false;
+            *m = RIPREL(asm_sym(e->field.codegen_name), 0);
+            *t = e->type;
+            return true;
+        }
+        Type *ot = conc(e->field.object->type), *objt;
+        if (!fixed_place(e->field.object, m, &objt)) return false;
+        if (ot->kind == TYPE_SLICE) {
+            if (val_kind(e->type) != VK_INT || int_width(e->type) != 8) return false;
+            if (strcmp(e->field.name, "len") == 0) m->disp += 8;
+            *t = e->type;
+            return true;
+        }
+        int64_t off;
+        ExtField *x;
+        if (!field_info_x(ot, e->field.name, &off, t, &x) || x) return false;
+        m->disp += off;
+        return true;
+    }
+    case EXPR_INDEX: {
+        Type *ot = conc(e->index.object->type), *objt, *ft;
+        if (ot->kind != TYPE_STRUCT || !ot->struc.is_tuple) return false;
+        char nm[24];
+        snprintf(nm, sizeof nm, "e%llu", (unsigned long long)e->index.index->int_lit.value);
+        int64_t off;
+        if (!field_info(ot, intern_cstr(g_intern, nm), &off, &ft)) return false;
+        if (!fixed_place(e->index.object, m, &objt)) return false;
+        m->disp += off;
+        *t = e->type;
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+/* Whether e is an integer leaf: a constant, or a fixed place. */
+static bool is_int_leaf(Expr *e) {
+    int64_t v;
+    Opnd m;
+    Type *t;
+    return int_leaf(e, &v) || (fixed_place(e, &m, &t) && val_kind(t) == VK_INT);
+}
+
+/* Load an integer leaf into r; false, with nothing emitted, if e is not
+ * one. */
+static bool leaf_to(Expr *e, Reg r) {
+    int64_t v;
+    Opnd m;
+    Type *t;
+    if (int_leaf(e, &v)) { mov_imm_to(v, r); return true; }
+    if (fixed_place(e, &m, &t) && val_kind(t) == VK_INT) { load_int_to(t, m, r); return true; }
+    return false;
+}
+
+/* An integer leaf as an instruction's source operand: an immediate that
+ * sign-extends from 32 bits, or an 8-byte fixed place. */
+static bool leaf_src(Expr *e, Opnd *o) {
+    int64_t v;
+    Type *t;
+    if (int_leaf(e, &v)) {
+        if (!fits_imm32(v)) return false;
+        *o = IMM(v);
+        return true;
+    }
+    return fixed_place(e, o, &t) && val_kind(t) == VK_INT && int_width(t) == 8;
+}
+
+/* Load a float leaf (a literal, or a fixed place) into %xmm<n>. Scratch:
+ * %r11. */
+static bool float_leaf_to(Expr *e, int n) {
+    Opnd m;
+    Type *t;
+    while (e->kind == EXPR_GUARD) e = e->guard.body;
+    if (e->kind == EXPR_FLOAT_LIT) {
+        float_const_to(e->float_lit.value, e->float_lit.lit_type->kind == TYPE_FLOAT32, n, R11);
+        return true;
+    }
+    if (!fixed_place(e, &m, &t) || val_kind(t) != VK_FLOAT) return false;
+    (is_f32(t) ? movss(m, X(n)) : movsd(m, X(n)));
+    return true;
+}
+
+/* Put a source operand into %rcx, where an instruction needs it there. */
+static void src_to_rcx(Opnd o) {
+    if (o.kind == OPND_IMM) mov_imm_to(o.disp, RCX);
+    else if (!(o.kind == OPND_REG && o.base == RCX)) movq(o, R(RCX));
+}
+
 /* ---- Identifiers and globals ---- */
 
 /* A static function used as an FC value: the address of a { code, NULL }
@@ -1498,6 +1714,11 @@ static void gen_addr(Expr *e) {
         /* Pointer indexing: unchecked. */
         int64_t es = ty_size(ot->pointer.pointee);
         gen_expr(e->index.object);
+        if (leaf_to(e->index.index, RCX)) {
+            if (es != 1) imulq3(es, R(RCX), R(RCX));
+            addq(R(RCX), R(RAX));
+            return;
+        }
         int32_t s = spill_push();
         movq(R(RAX), fp(s));
         gen_expr(e->index.index);
@@ -1527,17 +1748,30 @@ static void gen_addr(Expr *e) {
 
 /* &s[i] with the bounds check. */
 static void gen_slice_elem_addr(Expr *e) {
-    Type *ot = conc(e->index.object->type);
+    Type *ot = conc(e->index.object->type), *ht;
     int64_t es = ty_size(ot->slice.elem);
-    gen_expr(e->index.object);
-    int32_t s = spill_push();
-    movq(R(RAX), fp(s));
-    gen_expr(e->index.index);
-    movq(fp(s), R(RDX));
-    spill_pop();
+    Opnd hdr;       /* the slice: its ptr, then its len */
+    if (fixed_place(e->index.object, &hdr, &ht)) {
+        gen_expr(e->index.index);
+    } else {
+        gen_expr(e->index.object);
+        if (is_int_leaf(e->index.index)) {
+            movq(R(RAX), R(RDX));
+            leaf_to(e->index.index, RAX);
+        } else {
+            int32_t s = spill_push();
+            movq(R(RAX), fp(s));
+            gen_expr(e->index.index);
+            movq(fp(s), R(RDX));
+            spill_pop();
+        }
+        hdr = M(RDX, 0);
+    }
+    Opnd len = hdr;
+    len.disp += 8;
     if (!(g_guards_suppressed && facts_guard_governs(e, subst_resolve))) {
         bool uns = !int_signed(e->index.index->type);
-        movq(M(RDX, 8), R(RCX));
+        movq(len, R(RCX));
         cmpq(R(RCX), R(RAX));
         int m = msg_label(e->loc, uns ? "slice index out of range: index=%llu len=%llu\n"
                                       : "slice index out of range: index=%lld len=%llu\n");
@@ -1547,12 +1781,15 @@ static void gen_slice_elem_addr(Expr *e) {
         jcc(CC_AE, l);
     }
     if (es != 1) imulq3(es, R(RAX), R(RAX));
-    addq(M(RDX, 0), R(RAX));
+    addq(hdr, R(RAX));
 }
 
 /* ---- Fields ---- */
 
 static void gen_field(Expr *e) {
+    Opnd m;
+    Type *mt;
+    if (fixed_place(e, &m, &mt)) { load_val(mt, m); return; }
     if (e->field.is_type_property) {
         const char *cg = e->field.codegen_name;
         char *endp;
@@ -1691,6 +1928,7 @@ static void overflow_fail_jump(SrcLoc loc, const char *what, Cond cc) {
 static void gen_operands(Expr *l, Expr *r) {
     if (val_kind(l->type) == VK_FLOAT) {
         gen_expr(l);
+        if (float_leaf_to(r, 1)) return;
         int32_t s = spill_push();
         movq(X(0), fp(s));
         gen_expr(r);
@@ -1699,7 +1937,15 @@ static void gen_operands(Expr *l, Expr *r) {
         spill_pop();
         return;
     }
+    int64_t v;
+    if (int_leaf(l, &v)) {      /* a constant: nothing can change it meanwhile */
+        gen_expr(r);
+        movq(R(RAX), R(RCX));
+        mov_imm(v);
+        return;
+    }
     gen_expr(l);
+    if (leaf_to(r, RCX)) return;
     int32_t s = spill_push();
     movq(R(RAX), fp(s));
     gen_expr(r);
@@ -1708,9 +1954,56 @@ static void gen_operands(Expr *l, Expr *r) {
     spill_pop();
 }
 
+/* x / c and x % c for a constant c that is neither 0 nor, signed, -1: no
+ * check can fail, and a power of two takes shifts instead of a division.
+ * The 64-bit arithmetic on the canonical form gives the narrow type's
+ * result in canonical form. */
+static void gen_divmod_const(int op, bool sgn, Type *rt, uint64_t c) {
+    int k = 0;
+    while (k < 64 && c != (uint64_t)1 << k) k++;
+    bool div = op == TOK_SLASH;
+    if (k == 0) {                               /* c == 1 */
+        if (!div) xorl(R(RAX), R(RAX));
+        return;
+    }
+    if (k < 64 && !sgn) {
+        if (div) shrq(IMM(k), R(RAX));
+        else if (k < 32) andq(IMM((int64_t)(c - 1)), R(RAX));
+        else { mov_imm_to((int64_t)(c - 1), RCX); andq(R(RCX), R(RAX)); }
+        return;
+    }
+    if (k < 63) {
+        /* Signed: rounding toward zero adds c - 1 to a negative x first.
+         * %rdx = x < 0 ? c - 1 : 0. */
+        movq(R(RAX), R(RDX));
+        sarq(IMM(63), R(RDX));
+        shrq(IMM(64 - k), R(RDX));
+        addq(R(RDX), R(RAX));
+        if (div) {
+            sarq(IMM(k), R(RAX));
+        } else {
+            if (k < 32) andq(IMM((int64_t)(c - 1)), R(RAX));
+            else { mov_imm_to((int64_t)(c - 1), RCX); andq(R(RCX), R(RAX)); }
+            subq(R(RDX), R(RAX));
+        }
+        return;
+    }
+    mov_imm_to((int64_t)c, RCX);
+    if (sgn) { cqo(); idivq(R(RCX)); }
+    else { xorl(R(RDX), R(RDX)); divq(R(RCX)); }
+    if (!div) movq(R(RDX), R(RAX));
+    normalize(rt);
+}
+
 static void gen_divmod(Expr *e, Type *rt) {
     int op = e->binary.op;
     bool sgn = int_signed(rt);
+    int64_t c;
+    if (int_leaf(e->binary.right, &c) && c != 0 && !(sgn && c == -1)) {
+        gen_expr(e->binary.left);
+        gen_divmod_const(op, sgn, rt, (uint64_t)c);
+        return;
+    }
     gen_operands(e->binary.left, e->binary.right);
     bool need_zero = !(g_guards_suppressed && facts_guard_governs(e, subst_resolve));
     if (need_zero) {
@@ -1780,11 +2073,32 @@ static void gen_float_binary(Expr *e) {
     movzbl(R(RAX), R(RAX));
 }
 
-/* %rax op= %rcx for +, - and *. */
-static void gen_arith_rcx(int op) {
-    if (op == TOK_PLUS) addq(R(RCX), R(RAX));
-    else if (op == TOK_MINUS) subq(R(RCX), R(RAX));
-    else imulq(R(RCX), R(RAX));
+/* %rax op= src for +, - and *. */
+static void gen_arith(int op, Opnd src) {
+    if (op == TOK_PLUS) addq(src, R(RAX));
+    else if (op == TOK_MINUS) subq(src, R(RAX));
+    else if (src.kind == OPND_IMM) imulq3(src.disp, R(RAX), R(RAX));
+    else imulq(src, R(RAX));
+}
+
+/* Evaluate an integer operator's operands: the left into %rax, and the right
+ * as the instruction's source, an immediate or a fixed place when it is a
+ * leaf, else %rcx. */
+static Opnd gen_int_operands(Expr *l, Expr *r) {
+    Opnd o;
+    if (leaf_src(r, &o)) {
+        gen_expr(l);
+        return o;
+    }
+    gen_operands(l, r);
+    return R(RCX);
+}
+
+/* Compare two integer operands: the flags for cond_for's condition. */
+static void gen_int_compare(Expr *l, Expr *r) {
+    Opnd o = gen_int_operands(l, r);
+    if (o.kind == OPND_IMM && o.disp == 0) testq(R(RAX), R(RAX));
+    else cmpq(o, R(RAX));
 }
 
 static void gen_binary_op(Expr *e) {
@@ -1840,8 +2154,7 @@ static void gen_binary_op(Expr *e) {
 
     int cc = cond_for(op, int_signed(lt));
     if (cc >= 0) {
-        gen_operands(e->binary.left, e->binary.right);
-        cmpq(R(RCX), R(RAX));
+        gen_int_compare(e->binary.left, e->binary.right);
         setcc((Cond)cc, R(RAX));
         movzbl(R(RAX), R(RAX));
         return;
@@ -1849,23 +2162,24 @@ static void gen_binary_op(Expr *e) {
 
     switch (op) {
     case TOK_PLUS: case TOK_MINUS: case TOK_STAR: {
-        gen_operands(e->binary.left, e->binary.right);
+        Opnd src = gen_int_operands(e->binary.left, e->binary.right);
         const char *what = op == TOK_PLUS ? "+" : op == TOK_MINUS ? "-" : "*";
         bool checked = g_overflow_checked && facts_overflow_governs(e, subst_resolve);
         if (checked && int_width(rt) == 8) {
             if (int_signed(rt)) {
-                gen_arith_rcx(op);
+                gen_arith(op, src);
                 overflow_fail_jump(e->loc, what, CC_O);
             } else if (op == TOK_STAR) {
+                src_to_rcx(src);
                 mulq(R(RCX));
                 overflow_fail_jump(e->loc, what, CC_O);
             } else {
-                gen_arith_rcx(op);
+                gen_arith(op, src);
                 overflow_fail_jump(e->loc, what, CC_B);
             }
             return;
         }
-        gen_arith_rcx(op);
+        gen_arith(op, src);
         if (checked) {
             movq(R(RAX), R(RDX));
             normalize(rt);
@@ -1879,19 +2193,27 @@ static void gen_binary_op(Expr *e) {
     case TOK_SLASH: case TOK_PERCENT:
         gen_divmod(e, rt);
         return;
-    case TOK_AMP: case TOK_PIPE: case TOK_CARET:
-        gen_operands(e->binary.left, e->binary.right);
-        (op == TOK_AMP ? andq(R(RCX), R(RAX)) : (op == TOK_PIPE ? orq(R(RCX), R(RAX)) : xorq(R(RCX), R(RAX))));
+    case TOK_AMP: case TOK_PIPE: case TOK_CARET: {
+        Opnd src = gen_int_operands(e->binary.left, e->binary.right);
+        (op == TOK_AMP ? andq(src, R(RAX)) : (op == TOK_PIPE ? orq(src, R(RAX)) : xorq(src, R(RAX))));
         return;
+    }
     case TOK_LTLT: case TOK_GTGT: {
-        gen_operands(e->binary.left, e->binary.right);
         int bits = int_width(rt) * 8;
-        andl(IMM(bits - 1), R(RCX));
+        int64_t n;
+        Opnd count = R(RCX);
+        if (int_leaf(e->binary.right, &n)) {
+            gen_expr(e->binary.left);
+            count = IMM(n & (bits - 1));
+        } else {
+            gen_operands(e->binary.left, e->binary.right);
+            andl(IMM(bits - 1), R(RCX));
+        }
         if (op == TOK_LTLT) {
-            shlq(R(RCX), R(RAX));
+            shlq(count, R(RAX));
             normalize(rt);
         } else {
-            (int_signed(rt) ? sarq(R(RCX), R(RAX)) : shrq(R(RCX), R(RAX)));
+            (int_signed(rt) ? sarq(count, R(RAX)) : shrq(count, R(RAX)));
         }
         return;
     }
@@ -1900,17 +2222,28 @@ static void gen_binary_op(Expr *e) {
     }
 }
 
-static void gen_binary(Expr *e) {
-    Expr *unw[2] = { NULL, NULL };
+/* In a generic instance, widen the operands of e to their common type for
+ * the operation; binary_unwiden puts the originals back. */
+static void binary_widen(Expr *e, Expr *unw[2]) {
+    unw[0] = unw[1] = NULL;
     if (g_subst && e->binary.op != TOK_LTLT && e->binary.op != TOK_GTGT) {
         Type *common = type_common_numeric(subst_resolve(e->binary.left->type),
                                            subst_resolve(e->binary.right->type));
         unw[0] = widen_for_instance(&e->binary.left, common);
         unw[1] = widen_for_instance(&e->binary.right, common);
     }
-    gen_binary_op(e);
+}
+
+static void binary_unwiden(Expr *e, Expr *unw[2]) {
     if (unw[0]) e->binary.left = unw[0];
     if (unw[1]) e->binary.right = unw[1];
+}
+
+static void gen_binary(Expr *e) {
+    Expr *unw[2];
+    binary_widen(e, unw);
+    gen_binary_op(e);
+    binary_unwiden(e, unw);
 }
 
 /* ---- Unary operators ---- */
@@ -3400,6 +3733,29 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
  * Assignment
  * ================================================================ */
 
+/* Store a leaf value of type t at (%rax): false, with nothing emitted, if
+ * value is not one. */
+static bool store_leaf(Type *t, Expr *value) {
+    int64_t v;
+    int w = int_width(t);
+    switch (val_kind(t)) {
+    case VK_INT:
+        if (int_leaf(value, &v) && (w < 8 || fits_imm32(v))) {
+            x_mov(g_cur, w, IMM(v), M(RAX, 0));
+            return true;
+        }
+        if (!leaf_to(value, RCX)) return false;
+        x_mov(g_cur, w, R(RCX), M(RAX, 0));
+        return true;
+    case VK_FLOAT:
+        if (!float_leaf_to(value, 0)) return false;
+        store_at(t, M(RAX, 0));
+        return true;
+    default:
+        return false;
+    }
+}
+
 static void gen_assign(Expr *e) {
     Expr *target = e->assign.target;
     if ((target->kind == EXPR_FIELD || target->kind == EXPR_DEREF_FIELD) &&
@@ -3448,7 +3804,15 @@ static void gen_assign(Expr *e) {
             return;
         }
     }
+    Opnd m;
+    Type *mt;
+    if (fixed_place(target, &m, &mt) && (val_kind(target->type) != VK_AGG || m.base == RBP)) {
+        gen_expr(e->assign.value);
+        store_at(target->type, m);
+        return;
+    }
     gen_addr(target);
+    if (store_leaf(target->type, e->assign.value)) return;
     int32_t s = spill_push();
     movq(R(RAX), fp(s));
     gen_expr(e->assign.value);
@@ -3684,10 +4048,83 @@ static int32_t value_to_slot(Type *t) {
  * Control flow
  * ================================================================ */
 
-static void cond_jump_false(Expr *cond, int target) {
+/* Jump to target when the comparison e is `when`, from the flags it sets,
+ * with no bool made of it: false, with nothing emitted, if e is not a
+ * comparison of numbers. */
+static bool cond_compare(Expr *e, bool when, int target) {
+    int op = e->binary.op;
+    if (cond_for(op, false) < 0) return false;
+    Expr *unw[2];
+    binary_widen(e, unw);
+    Type *lt = conc(e->binary.left->type);
+    bool done = true;
+    if (needs_eq_func(lt)) {
+        done = false;
+    } else if (val_kind(lt) == VK_INT) {
+        gen_int_compare(e->binary.left, e->binary.right);
+        Cond cc = (Cond)cond_for(op, int_signed(lt));
+        jcc(when ? cc : (Cond)(cc ^ 1), target);    /* cc ^ 1 is cc's opposite */
+    } else if (val_kind(lt) == VK_FLOAT) {
+        SseOp uc = is_f32(lt) ? SSE_UCOMISS : SSE_UCOMISD;
+        gen_operands(e->binary.left, e->binary.right);
+        /* Unordered (a NaN) sets ZF, PF and CF: every comparison is false
+         * but !=, and only parity tells unordered from equal. */
+        if (op == TOK_EQEQ || op == TOK_BANGEQ) {
+            sse(uc, X(1), X(0));
+            if ((op == TOK_EQEQ) == when) {
+                int skip = new_label();
+                jcc(CC_P, skip);
+                jcc(CC_E, target);
+                label(skip);
+            } else {
+                jcc(CC_P, target);
+                jcc(CC_NE, target);
+            }
+        } else {
+            bool gt = op == TOK_GT || op == TOK_GTEQ;
+            (gt ? sse(uc, X(1), X(0)) : sse(uc, X(0), X(1)));
+            Cond cc = op == TOK_GT || op == TOK_LT ? CC_A : CC_AE;
+            jcc(when ? cc : (Cond)(cc ^ 1), target);
+        }
+    } else {
+        done = false;
+    }
+    binary_unwiden(e, unw);
+    return done;
+}
+
+/* Jump to target when cond is `when`, else fall through. A comparison, and
+ * &&, || and ! over them, branch on the flags directly. */
+static void cond_jump(Expr *cond, bool when, int target) {
+    int64_t v;
+    if (int_leaf(cond, &v)) {
+        if ((v != 0) == when) jmp(target);
+        return;
+    }
+    if (cond->kind == EXPR_UNARY_PREFIX && cond->unary_prefix.op == TOK_BANG) {
+        cond_jump(cond->unary_prefix.operand, !when, target);
+        return;
+    }
+    if (cond->kind == EXPR_BINARY) {
+        int op = cond->binary.op;
+        if (op == TOK_AMPAMP || op == TOK_PIPEPIPE) {
+            /* a && b is true when both are, a || b false when both are */
+            if (when == (op == TOK_PIPEPIPE)) {
+                cond_jump(cond->binary.left, when, target);
+                cond_jump(cond->binary.right, when, target);
+            } else {
+                int skip = new_label();
+                cond_jump(cond->binary.left, !when, skip);
+                cond_jump(cond->binary.right, when, target);
+                label(skip);
+            }
+            return;
+        }
+        if (cond_compare(cond, when, target)) return;
+    }
     gen_expr(cond);
     testl(R(RAX), R(RAX));
-    jcc(CC_E, target);
+    jcc(when ? CC_NE : CC_E, target);
 }
 
 /* A branch body (one expression or a block) in its own defer scope. With
@@ -3703,9 +4140,18 @@ static void gen_scoped_branch(Expr *branch, int tail) {
 }
 
 static void gen_if(Expr *e) {
+    /* `if c then break` (or continue) with no defers to run on the way out:
+     * one branch to the loop's label. */
+    Expr *then = e->if_expr.then_body;
+    if (then->kind == EXPR_BLOCK && then->block.count == 1) then = then->block.stmts[0];
+    if (!e->if_expr.else_body && g_loop && !defers_to_loop_pending() &&
+        ((then->kind == EXPR_BREAK && !then->break_expr.value) || then->kind == EXPR_CONTINUE)) {
+        cond_jump(e->if_expr.cond, true, then->kind == EXPR_BREAK ? g_loop->brk : g_loop->cont);
+        return;
+    }
     bool valued = !type_valueless(e->type);
     int lelse = new_label(), lend = new_label();
-    cond_jump_false(e->if_expr.cond, lelse);
+    cond_jump(e->if_expr.cond, false, lelse);
     gen_scoped_branch(e->if_expr.then_body,
                       valued && !type_is_never(e->if_expr.then_body->type) ? TAIL_VALUE : TAIL_DISCARD);
     jmp(lend);
@@ -3733,7 +4179,7 @@ static void gen_match(Expr *e, bool tail) {
         bool test = any_guard || !last;
         if (test && pattern_has_predicate(arm->pattern)) gen_pat_test(arm->pattern, sub, st, next);
         gen_pat_bind(arm->pattern, sub, st);
-        if (arm->guard) cond_jump_false(arm->guard, next);
+        if (arm->guard) cond_jump(arm->guard, false, next);
         defer_push(false);
         int mode = tail ? TAIL_RETURN : (valued ? TAIL_VALUE : TAIL_DISCARD);
         bool done = gen_stmts(arm->body, arm->body_count, mode);
@@ -3879,6 +4325,12 @@ static void gen_let(Expr *s) {
     const char *name = s->let_expr.codegen_name ? s->let_expr.codegen_name : s->let_expr.let_name;
     if (type_valueless(conc(t))) { gen_expr(s->let_expr.let_init); return; }
     int32_t off = local_slot(name, conc(t));
+    int64_t v;
+    if (val_kind(t) == VK_INT && int_leaf(s->let_expr.let_init, &v) &&
+        (int_width(t) < 8 || fits_imm32(v))) {
+        x_mov(g_cur, int_width(t), IMM(v), fp(off));
+        return;
+    }
     gen_expr(s->let_expr.let_init);
     store_val(t, RBP, off);
 }
@@ -3956,7 +4408,7 @@ static void gen_return(Expr *v) {
         case EXPR_IF:
             if (v->if_expr.else_body || type_valueless(v->type)) {
                 int lelse = new_label();
-                cond_jump_false(v->if_expr.cond, lelse);
+                cond_jump(v->if_expr.cond, false, lelse);
                 gen_scoped_branch(v->if_expr.then_body, TAIL_RETURN);
                 jmp(g_ret_label);
                 label(lelse);
@@ -4007,9 +4459,7 @@ static void gen_return(Expr *v) {
 
 static void gen_assert(Expr *e) {
     int lok = new_label();
-    gen_expr(e->assert_expr.condition);
-    testl(R(RAX), R(RAX));
-    jcc(CC_NE, lok);
+    cond_jump(e->assert_expr.condition, true, lok);
     char *text = fmt_escape(e->assert_expr.expr_text ? e->assert_expr.expr_text : "",
                             e->assert_expr.expr_text ? e->assert_expr.expr_text_len : 0);
     if (e->assert_expr.message) {
@@ -4189,7 +4639,9 @@ static void gen_expr(Expr *e) {
     case EXPR_FIELD: gen_field(e); return;
     case EXPR_DEREF_FIELD: gen_deref_field(e); return;
     case EXPR_INDEX: {
-        Type *ot = conc(e->index.object->type);
+        Type *ot = conc(e->index.object->type), *mt;
+        Opnd m;
+        if (fixed_place(e, &m, &mt)) { load_val(mt, m); return; }
         gen_addr(e);
         if (!(ot->kind == TYPE_STRUCT && ot->struc.is_tuple) || val_kind(e->type) != VK_AGG)
             load_val(e->type, M(RAX, 0));
@@ -4375,6 +4827,7 @@ static void begin_function(void) {
     code_reset(&g_fnbody);
     code_reset(&g_cold);
     g_cur = &g_fnbody;
+    g_unreached = NULL;
 }
 
 /* The function into the text: prologue, body, epilogue, then the cold
@@ -4392,6 +4845,7 @@ static void end_function(const char *sym, bool global) {
     x_cfi(o, CFI_FRAME);
     int64_t frame = align_up(g_frame, 16);
     if (frame) subq(IMM(frame), R(RSP));
+    x_drop_final_jmp(&g_fnbody, g_ret_label);
     code_append(o, &g_fnbody);
     label(g_ret_label);
     leave();

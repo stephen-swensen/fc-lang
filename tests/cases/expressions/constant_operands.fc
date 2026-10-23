@@ -1,0 +1,72 @@
+// Arithmetic, bitwise and shift operators with a constant operand agree with
+// the same operation on that value held in a parameter. The native backend
+// uses a constant that fits in 32 bits as the instruction's immediate, so the
+// constants here sit on both sides of that line, and of the line where a
+// 32-bit pattern stops being a sign-extended immediate (u32 0xFFFFFFFF).
+
+let add = (x: i64, y: i64) -> x + y
+let sub = (x: i64, y: i64) -> x - y
+let mul = (x: i64, y: i64) -> x * y
+let band = (x: i64, y: i64) -> x & y
+let bor = (x: i64, y: i64) -> x | y
+let bxor = (x: i64, y: i64) -> x ^ y
+let shl = (x: i64, y: i64) -> x << y
+let shr = (x: i64, y: i64) -> x >> y
+let lt = (x: i64, y: i64) -> x < y
+
+let check_i64 = (x: i64) ->
+    assert(x + 2147483647 == add(x, 2147483647) && x + 2147483648i64 == add(x, 2147483648i64))
+    assert(x - -2147483648 == sub(x, -2147483648) && x - -2147483649i64 == sub(x, -2147483649i64))
+    assert(x * 3 == mul(x, 3) && x * -128 == mul(x, -128) && x * 3000000000i64 == mul(x, 3000000000i64))
+    assert(x & 255 == band(x, 255) && x & -4294967296i64 == band(x, -4294967296i64))
+    assert(x | 4294967296i64 == bor(x, 4294967296i64) && x ^ -1 == bxor(x, -1))
+    assert(x << 3 == shl(x, 3) && x << 64 == shl(x, 64) && x << 67 == shl(x, 67))
+    assert(x >> 63 == shr(x, 63) && x >> 1 == shr(x, 1) && x >> 0 == shr(x, 0))
+    assert((x < 2147483648i64) == lt(x, 2147483648i64) && (x < -2147483649i64) == lt(x, -2147483649i64))
+    // the constant on the left
+    assert(100 - x == sub(100, x) && 1i64 << x == shl(1, x) && -5 * x == mul(-5, x))
+    assert(4294967296i64 - x == sub(4294967296i64, x))
+    0
+
+let and32 = (x: u32, y: u32) -> x & y
+let add32 = (x: u32, y: u32) -> x + y
+let eq32 = (x: u32, y: u32) -> x == y
+let add8 = (x: u8, y: u8) -> x + y
+let mul8 = (x: i8, y: i8) -> x * y
+let shl8 = (x: u8, y: u8) -> x << y
+let ltu = (x: u64, y: u64) -> x < y
+
+let check_narrow = (a: u32, b: u8, c: i8, d: u64) ->
+    assert(a & 4294967295u32 == and32(a, 4294967295u32) && a + 4294967295u32 == add32(a, 4294967295u32))
+    assert((a == 4294967295u32) == eq32(a, 4294967295u32) && (a == 2147483648u32) == eq32(a, 2147483648u32))
+    assert(b + 200u8 == add8(b, 200u8) && c * 3i8 == mul8(c, 3i8) && c * -128i8 == mul8(c, -128i8))
+    assert(b << 9u8 == shl8(b, 9u8) && b << 7u8 == shl8(b, 7u8))
+    assert((d < 9223372036854775808u64) == ltu(d, 9223372036854775808u64))
+    assert((d < u64.max) == ltu(d, u64.max) && (d < 4294967295u64) == ltu(d, 4294967295u64))
+    0
+
+enum shade of u8 =
+    | black = 0
+    | dark = 1
+    | light = 200
+
+let main = (args: str[]) ->
+    for x in i64[9] { i64.min, -4294967297i64, -2147483649i64, -1, 0, 1, 2147483647, 4294967297i64, i64.max } do
+        check_i64(x)
+    for a in u32[4] { 0u32, 1u32, 2147483648u32, 4294967295u32 } do
+        for b in u8[3] { 0u8, 100u8, 255u8 } do
+            check_narrow(a, b, (i8) b, (u64) a * 4294967297u64)
+    // constants of other kinds as operands
+    let s = shade.light
+    assert(s == shade.light && s != shade.dark)
+    let n = 7i64
+    assert(n + sizeof(i64) == 15 && n * alignof(i32) == 28)
+    let ch = 'a'
+    assert(ch == 'a' && ch < 'b' && ch + 1u8 == 'b')
+    assert(n - i64.max == -9223372036854775800i64)
+    // a conversion of a constant, which may change its value
+    let u = 4294967295u32
+    let i = -56i8
+    let w = 4294967294i64
+    assert(u == (u32) -1 && i == (i8) 200u8 && w == (i64) (u32) -2 && w - (i64) (u8) 300 == 4294967250i64)
+    0

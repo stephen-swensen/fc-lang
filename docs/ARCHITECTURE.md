@@ -209,11 +209,22 @@ position-independent) for a fast development build, and `elf_link` links it
 into an executable: no C compilation, no assembler and no linker. With `-c`
 the object is written instead, for `cc out.o -o prog`. It walks the same typed,
 monomorphized AST as the C emitter and must mean exactly what the emitted C
-means; `make test-native` runs the suite through it. It does not optimize, so its code runs at roughly `gcc -O0`
-speed, except that a call in tail position is a jump whenever the callee
-cannot see the caller's frame (no pending defer, no address of a local, stack
-slice literal, interpolation buffer, `alloca` or capturing closure in the
-function, all arguments in registers).
+means; `make test-native` runs the suite through it. It does not optimize
+across expressions: every binding lives in its frame slot, and no value stays
+in a register past the expression that computes it. Within an expression it
+takes the short forms a C compiler takes at `-O0`. An operand that needs no
+code of its own, a constant or a place at a fixed address (a local, a global,
+a field or tuple element of one, a slice's `len` there), is read by the
+instruction that uses it, or loaded after its sibling without a spill, and a
+store to such a place goes straight to it. A comparison that decides a branch
+sets the flags the branch tests, and `&&`, `||` and `!` there become jumps.
+Division by a constant skips the checks that cannot fail, and a power of two
+becomes shifts. No jump is emitted where control cannot arrive or would fall
+through to its target anyway. So its code runs at about `gcc -O0` speed, and a
+call in tail position is a jump whenever the callee cannot see the caller's
+frame (no pending defer, no address of a local, stack slice literal,
+interpolation buffer, `alloca` or capturing closure in the function, all
+arguments in registers).
 
 The backend is built only on Linux x86-64, since its objects are ELF, its
 calls name the Linux C library's symbols (`stderr`, `__errno_location`) and it
@@ -227,7 +238,10 @@ macros named after the AT&T mnemonics with the operands in AT&T order
 encoded the way GNU as encodes the same line, branches included: a branch
 takes the two-byte form when its target is in reach, decided once the whole
 text is laid out. So the object is the one `as` would make of the equivalent
-assembly, and `objdump -d out.o` shows the code. Calls and jumps to functions
+assembly, and `objdump -d out.o` shows the code; `make test-native` checks
+the encoding against `as` itself (`tests/x86asm_test.c`, every form the
+encoder offers, over the registers and addressing modes that encode
+differently). Calls and jumps to functions
 in the object, and references to labels in `.text`, are resolved in place;
 everything else (data, the C library, the GOT) becomes a relocation, as `as`
 would make it. The object carries `.eh_frame` for the standard frame and a

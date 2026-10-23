@@ -464,6 +464,14 @@ void x_jmp(Code *c, int target) {
     g_syms[target].used = true;
 }
 
+bool x_drop_final_jmp(Code *c, int label) {
+    if (c->nev == 0) return false;
+    AsmEv *e = &c->ev[c->nev - 1];
+    if (e->kind != EV_JMP || e->sym != label || e->pos != c->len) return false;
+    c->nev--;
+    return true;
+}
+
 void x_jmp_plt(Code *c, int sym) { c1(c, 0xE9); ref32(c, RT_PLT, sym, 0, 0); }
 
 void x_call(Code *c, int sym, bool plt) { c1(c, 0xE8); ref32(c, plt ? RT_PLT : RT_BRANCH, sym, 0, 0); }

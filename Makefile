@@ -200,13 +200,23 @@ test-gcc: $(BIN)
 	@echo "=== Testing with gcc ==="
 	@CC=gcc $(RUN_TESTS)
 
+# The native backend's instruction encoder against GNU as: every form
+# src/x86asm.c offers, encoded both ways (tests/x86asm_test.c).
+X86ASM_TEST := $(BUILD_DIR)/x86asm_test
+$(X86ASM_TEST): tests/x86asm_test.c $(BUILD_DIR)/x86asm.o $(BUILD_DIR)/elfobj.o $(BUILD_DIR)/common.o
+	$(CC) $(CFLAGS) -Isrc -o $@ $^
+
+test-x86asm: $(X86ASM_TEST)
+	@$(X86ASM_TEST)
+
 # The native x86-64 backend (--native), which links the executable itself.
 # Experimental. Then its linker on C objects, archives and the inputs it
-# refuses (tests/run_link_tests.sh). test-native-cc links the backend's objects
-# with cc instead, the check on fcc's linker.
-test-native: $(BIN)
+# refuses (tests/run_link_tests.sh), and its encoder (test-x86asm).
+# test-native-cc links the backend's objects with cc instead, the check on
+# fcc's linker.
+test-native: $(BIN) $(X86ASM_TEST)
 	@echo "=== Testing the native backend ==="
-	@NATIVE=1 CC=gcc $(RUN_TESTS); s=$$?; CC=gcc bash tests/run_link_tests.sh && exit $$s
+	@NATIVE=1 CC=gcc $(RUN_TESTS); s=$$?; CC=gcc bash tests/run_link_tests.sh && $(X86ASM_TEST) && exit $$s
 
 test-native-cc: $(BIN)
 	@echo "=== Testing the native backend, linked by cc ==="
@@ -330,6 +340,7 @@ help:
 	@echo "  make test-{gcc,clang,all}-len16  Same, but with --len-repr 16 (16-bit slice lens)"
 	@echo "  make test-native  Run tests through the native backend and its linker (Linux x86-64)"
 	@echo "  make test-native-cc  Same, with cc linking the native objects"
+	@echo "  make test-x86asm  Check the native backend's instruction encoder against GNU as"
 	@echo "  make test-lsp     Run the LSP server wire tests (needs python3)"
 	@echo "  make test-vscode  Run the VSCode extension smoke test (needs node)"
 	@echo "  make asan         Build fcc with ASan/UBSan into $(BUILD_DIR)-asan"
@@ -340,6 +351,6 @@ help:
 .PHONY: all dev clean install uninstall install-vscode uninstall-vscode \
         check check-ascii check-warnings check-keywords check-examples \
         test-lsp test-vscode asan test-asan test-all-len16 \
-        test-gcc test-clang test-gcc-O2 test-clang-O2 test-native test-native-cc \
+        test-gcc test-clang test-gcc-O2 test-clang-O2 test-native test-native-cc test-x86asm \
         test-gcc-len16 test-clang-len16 \
         test-all test-all-O2 help print-bin

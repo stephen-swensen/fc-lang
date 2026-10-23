@@ -1,0 +1,7 @@
+// A checked conversion of a constant checks at run time wherever the constant
+// is used; here as an operand, which the native backend takes as an
+// immediate: 300 does not fit u8.
+let main = (args: str[]) ->
+    let x = 1i64
+    let _ = x + checked (i64) (u8) 300
+    1   // not reached: the line above aborts
