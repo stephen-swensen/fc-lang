@@ -3,5 +3,4 @@
 let main = (args: str[]) ->
     let s = "hell"
     let _ = checked (cstr[4]) s   // len 4 > max 3 -> abort
-    assert(false)   // not reached
-    0
+    1   // not reached

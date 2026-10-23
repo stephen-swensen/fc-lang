@@ -4,6 +4,5 @@ let gdiv = (a: 'a, b: 'a) -> a / b
 
 let main = (args: str[]) ->
     let x = gdiv(10, 0)   // aborts here
-    assert(false)         // not reached
     let _ = x
-    0
+    1                     // not reached

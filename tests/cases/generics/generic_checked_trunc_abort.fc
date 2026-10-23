@@ -8,5 +8,4 @@ let clip = (x: 'a) ->
 
 let main = (args: str[]) ->
     let _ = clip(1i32)
-    assert(false)   // not reached
-    0
+    1   // not reached

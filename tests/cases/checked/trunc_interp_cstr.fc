@@ -3,5 +3,4 @@
 let main = (args: str[]) ->
     let c = c"hello world"
     let _ = checked "user=%.5s{c}"   // strlen 11 > max 5 -> abort
-    assert(false)   // not reached
-    0
+    1   // not reached

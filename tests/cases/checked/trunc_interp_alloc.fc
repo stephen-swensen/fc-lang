@@ -5,5 +5,4 @@ let main = (args: str[]) ->
     let name = "hello world"
     let h = checked alloc("user=%.5s{name}")!   // len 11 > max 5 -> abort
     free(h)
-    assert(false)   // not reached
-    0
+    1   // not reached

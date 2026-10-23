@@ -4,6 +4,5 @@ let add_ck = (a: 'a, b: 'a) -> checked (a + b)
 let main = (args: str[]) ->
     assert(add_ck(3, 4) == 7)          // in-range: no trap
     let x = add_ck(i32.max, 1)         // aborts here
-    assert(false)                      // not reached
     let _ = x
-    0
+    1                                  // not reached

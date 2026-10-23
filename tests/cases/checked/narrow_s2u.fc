@@ -1,5 +1,4 @@
 let main = (args: str[]) ->
     let xs = i32[1]{-1}
     let _ = checked (u8) xs[0]
-    assert(false)   // not reached: the line above aborts
-    0
+    1   // not reached: the line above aborts

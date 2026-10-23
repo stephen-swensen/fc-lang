@@ -74,6 +74,9 @@ A **single-file test** is `name.fc`, optionally with:
   the compiler's output (a fixed-string match). Keep it to one line.
 - `name.expected_exit`: the expected exit code. Without it the program must
   exit 0. Most tests use `assert` instead, which aborts (exit 134) on failure.
+  A test that expects an abort (134) ends with a value that is not 134, such
+  as `1   // not reached`, never `assert(false)`: that aborts too, so the test
+  would pass without the abort it checks.
 
 A **multi-file test** is a directory holding several `.fc` files, compiled
 together, plus any of these files (note: no leading dot):
