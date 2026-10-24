@@ -943,6 +943,25 @@ static void load_int_to(Type *t, Opnd mem, Reg r) {
 
 static void load_int(Type *t, Opnd mem) { load_int_to(t, mem, RAX); }
 
+/* A slice's len as stored: i64, or i32/i16 under --len-repr 32/16, at
+ * offset 8 of the header. A read widens it to the i64 the language sees.
+ * Every stored len is in [0, fc_len_max()] (len_cap checks the ones known
+ * only at run time), so a store may write all 8 bytes: the header is 16
+ * bytes at every width, the pointer's alignment padding a narrow len. */
+static Type *len_type(void) {
+    return g_len_repr == 16 ? type_int16() : g_len_repr == 32 ? type_int32() : type_int64();
+}
+
+static void load_len_to(Opnd mem, Reg r) { load_int_to(len_type(), mem, r); }
+
+/* Widen the len of the header copy at hdr(%rbp) in place, for code that
+ * then uses it as an i64 operand. Scratch: %rcx. */
+static void widen_len(int32_t hdr) {
+    if (g_len_repr >= 64) return;
+    load_len_to(fp(hdr + 8), RCX);
+    movq(R(RCX), fp(hdr + 8));
+}
+
 static void store_int(Type *t, Opnd mem) {
     if (mem.kind == OPND_REG) movq(R(RAX), mem);
     else x_mov(g_cur, int_width(t), R(RAX), mem);
@@ -1350,6 +1369,20 @@ static int fail_simple(SrcLoc loc, const char *rest) {
     return l;
 }
 
+/* Under a narrow --len-repr, a slice length known only at run time (in
+ * %rax) must fit the stored width. A slice that long cannot exist, so this
+ * fails where it would be built, as the emitted C's fc_len_cap does. */
+static void len_cap(SrcLoc loc) {
+    if (g_len_repr >= 64) return;
+    int m = msg_label(loc, "slice length %lld exceeds length capacity %lld\n");
+    int l = fail_begin();
+    movq(R(RAX), R(RDX));
+    movq(IMM(fc_len_max()), R(RCX));
+    fail_end(m);
+    cmpq(IMM(fc_len_max()), R(RAX));
+    jcc(CC_G, l);
+}
+
 /* ---- Source lines ---- */
 
 static HMap g_files;
@@ -1637,8 +1670,9 @@ static bool fixed_place(Expr *e, Opnd *m, Type **t) {
         if (!fixed_place(e->field.object, m, &objt) || m->kind != OPND_MEM) return false;
         if (ot->kind == TYPE_SLICE) {
             if (val_kind(e->type) != VK_INT || int_width(e->type) != 8) return false;
-            if (strcmp(e->field.name, "len") == 0) m->disp += 8;
-            *t = e->type;
+            bool len = strcmp(e->field.name, "len") == 0;
+            if (len) m->disp += 8;
+            *t = len ? len_type() : e->type;
             return true;
         }
         int64_t off;
@@ -1654,8 +1688,9 @@ static bool fixed_place(Expr *e, Opnd *m, Type **t) {
         Reg base = (Reg)m->base;
         if (st->kind == TYPE_SLICE) {
             if (val_kind(e->type) != VK_INT || int_width(e->type) != 8) return false;
-            *m = M(base, strcmp(e->field.name, "len") == 0 ? 8 : 0);
-            *t = e->type;
+            bool len = strcmp(e->field.name, "len") == 0;
+            *m = M(base, len ? 8 : 0);
+            *t = len ? len_type() : e->type;
             return true;
         }
         int64_t off;
@@ -1995,6 +2030,9 @@ static void index_check(Expr *e, Reg ix, Opnd len) {
     if (len.kind == OPND_IMM && !fits_imm32(len.disp)) {
         movabsq(len.disp, R(RCX));
         len = R(RCX);
+    } else if (len.kind == OPND_MEM && g_len_repr < 64) {
+        load_len_to(len, RCX);
+        len = R(RCX);
     }
     cmpq(len, R(ix));
     int m = msg_label(e->loc, uns ? "slice index out of range: index=%llu len=%llu\n"
@@ -2157,7 +2195,7 @@ static void gen_field(Expr *e) {
     }
     if (ot->kind == TYPE_SLICE) {
         gen_expr(e->field.object);
-        (strcmp(e->field.name, "len") == 0 ? movq(M(RAX, 8), R(RAX)) : movq(M(RAX, 0), R(RAX)));
+        (strcmp(e->field.name, "len") == 0 ? load_len_to(M(RAX, 8), RAX) : movq(M(RAX, 0), R(RAX)));
         return;
     }
     int64_t off; Type *ft; ExtField *x;
@@ -2183,7 +2221,7 @@ static void gen_deref_field(Expr *e) {
     }
     gen_expr(e->field.object);
     if (st->kind == TYPE_SLICE) {
-        (strcmp(e->field.name, "len") == 0 ? movq(M(RAX, 8), R(RAX)) : movq(M(RAX, 0), R(RAX)));
+        (strcmp(e->field.name, "len") == 0 ? load_len_to(M(RAX, 8), RAX) : movq(M(RAX, 0), R(RAX)));
         return;
     }
     int64_t off; Type *ft; ExtField *x;
@@ -3328,7 +3366,7 @@ static void gen_cast(Expr *e) {
             int64_t n = e->cast.buffer_size;
             int32_t back = slot_alloc(align_up(n, 8), 8);
             movq(M(RAX, 0), R(RSI));
-            movq(M(RAX, 8), R(RDX));
+            load_len_to(M(RAX, 8), RDX);
             if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
                 char *rest = str_sprintf("string truncation in (cstr[%lld]) cast: len=%%lld max=%%lld\n", (long long)n);
                 int m = msg_label(e->loc, rest);
@@ -3356,17 +3394,17 @@ static void gen_cast(Expr *e) {
             /* (cstr) under alloca: a dynamic stack copy. */
             int32_t sp = spill_push();
             movq(R(RAX), fp(sp));
-            movq(M(RAX, 8), R(RAX));
+            load_len_to(M(RAX, 8), RAX);
             leaq(M(RAX, 16), R(RAX));
             andq(IMM(-16), R(RAX));
             subq(R(RAX), R(RSP));
             movq(fp(sp), R(RAX));
             movq(R(RSP), R(RDI));
             movq(M(RAX, 0), R(RSI));
-            movq(M(RAX, 8), R(RDX));
+            load_len_to(M(RAX, 8), RDX);
             call_c("memcpy");
             movq(fp(sp), R(RCX));
-            movq(M(RCX, 8), R(RCX));
+            load_len_to(M(RCX, 8), RCX);
             movb(IMM(0), MI(RAX, RCX, 1, 0));
             spill_pop();
         }
@@ -3378,6 +3416,7 @@ static void gen_cast(Expr *e) {
         movq(R(RAX), fp(t));
         movq(R(RAX), R(RDI));
         call_c("strlen");
+        len_cap(e->loc);
         movq(R(RAX), fp(t + 8));
         leaq(fp(t), R(RAX));
         return;
@@ -3440,7 +3479,7 @@ static void gen_struct_lit(Expr *e) {
             free(rest);
             int l = fail_begin();
             fail_end(m);
-            movq(M(RAX, 8), R(RDX));
+            load_len_to(M(RAX, 8), RDX);
             cmpq(IMM(cap), R(RDX));
             jcc(CC_G, l);
             movq(M(RAX, 0), R(RSI));
@@ -3511,7 +3550,7 @@ static void gen_array_lit(Expr *e, bool dynamic) {
         if (on_frame) zero_mem(RBP, back, N * es);
         else {
             movq(fp(hdr), R(RDI));
-            movq(fp(hdr + 8), R(RCX));
+            load_len_to(fp(hdr + 8), RCX);
             scale_reg(es, RCX);
             xorl(R(RAX), R(RAX));
             rep_stosb();
@@ -3542,6 +3581,10 @@ static void gen_slice_lit(Expr *e) {
         testq(R(RAX), R(RAX));
         jcc(CC_S, l);
     }
+    /* pass2 judges a literal len against the capacity */
+    Expr *le = e->slice_lit.len_expr;
+    if (le->kind == EXPR_CAST) le = le->cast.operand;
+    if (le->kind != EXPR_INT_LIT) len_cap(e->loc);
     movq(R(RAX), fp(t + 8));
     leaq(fp(t), R(RAX));
 }
@@ -3708,6 +3751,7 @@ static void gen_alloc(Expr *e) {
         } else if (at && e->alloc_expr.size_expr) {
             int64_t es = ty_size(at);
             gen_expr(e->alloc_expr.size_expr);
+            len_cap(e->loc);
             int32_t t = slot_alloc(16, 8);
             movq(R(RAX), fp(t + 8));
             scale_reg(es, RAX);
@@ -3740,9 +3784,20 @@ static void gen_alloc(Expr *e) {
         gen_expr(e->alloc_expr.size_expr);
         int32_t ls = slot_alloc(8, 8);
         movq(R(RAX), fp(ls));
+        /* Under a narrow --len-repr, a count over the stored width is an
+         * allocation that cannot succeed: none, not a trap. */
+        int lnone = -1;
+        if (g_len_repr < 64) {
+            lnone = new_label();
+            cmpq(IMM(fc_len_max()), R(RAX));
+            movl(IMM(0), R(RAX));
+            jcc(CC_G, lnone);
+            movq(fp(ls), R(RAX));
+        }
         alloc_n_rdi();
         movq(IMM(ty_size(at)), R(RSI));
         call_c("calloc");
+        if (lnone >= 0) label(lnone);
         some_slice_or_none(conc(e->type), ls);
         return;
     }
@@ -3793,7 +3848,7 @@ static void gen_alloc(Expr *e) {
         gen_expr(init->cast.operand);
         int32_t s = slot_alloc(16, 8);
         copy_mem(RBP, s, RAX, 0, 16);
-        movq(fp(s + 8), R(RDI));
+        load_len_to(fp(s + 8), RDI);
         incq(R(RDI));
         call_c("malloc");
         int lnull = new_label();
@@ -3803,9 +3858,9 @@ static void gen_alloc(Expr *e) {
         movq(R(RAX), fp(p));
         movq(R(RAX), R(RDI));
         movq(fp(s), R(RSI));
-        movq(fp(s + 8), R(RDX));
+        load_len_to(fp(s + 8), RDX);
         call_c("memcpy");
-        movq(fp(s + 8), R(RCX));
+        load_len_to(fp(s + 8), RCX);
         movb(IMM(0), MI(RAX, RCX, 1, 0));
         movq(fp(p), R(RAX));
         label(lnull);
@@ -3904,7 +3959,7 @@ static void gen_alloc(Expr *e) {
         gen_expr(init);
         int32_t s = slot_alloc(16, 8);
         copy_mem(RBP, s, RAX, 0, 16);
-        movq(fp(s + 8), R(RAX));
+        load_len_to(fp(s + 8), RAX);
         alloc_n_rdi();
         scale_reg(es, RDI);
         call_c("malloc");
@@ -3915,7 +3970,7 @@ static void gen_alloc(Expr *e) {
         jcc(CC_E, lnull);
         movq(R(RAX), R(RDI));
         movq(fp(s), R(RSI));
-        movq(fp(s + 8), R(RDX));
+        load_len_to(fp(s + 8), RDX);
         scale_reg(es, RDX);
         call_c("memcpy");
         label(lnull);
@@ -3979,7 +4034,7 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
                 int l = fail_begin();
                 movq(IMM(prec), R(RCX));
                 fail_end(m);
-                movq(fp(sslot[i] + 8), R(RDX));
+                load_len_to(fp(sslot[i] + 8), RDX);
                 cmpq(IMM(prec), R(RDX));
                 jcc(CC_G, l);
             } else {
@@ -4011,7 +4066,7 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
         Type *t = seg->is_literal ? NULL : instance_type(seg->expr->type);
         InterpSegBudget b = interp_seg_budget(seg, t);
         if (!b.runtime) { konst += b.bytes; continue; }
-        if (is_str_type(stype[i])) movq(fp(sslot[i] + 8), R(RAX));
+        if (is_str_type(stype[i])) load_len_to(fp(sslot[i] + 8), RAX);
         else { movq(fp(sslot[i]), R(RDI)); call_c("strlen"); }
         if (b.bytes > 0) {
             movq(IMM(b.bytes), R(RCX));
@@ -4021,6 +4076,12 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
         addq(R(RAX), fp(flen));
     }
     if (konst) addq(IMM(konst), fp(flen));
+    /* The result's len is bounded by the budget: capped once, before the
+     * buffer exists. */
+    if (g_len_repr < 64) {
+        movq(fp(flen), R(RAX));
+        len_cap(e->loc);
+    }
 
     /* The buffer. */
     int32_t buf = slot_alloc(8, 8);
@@ -4081,7 +4142,7 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
             interp_seg_spec(seg, &sp);
             buf_printf(&fmt, "%%%.*s.*s", sp.prec_at, seg->text);
             int32_t ls = slot_alloc(8, 8);
-            movq(fp(sslot[i] + 8), R(RAX));
+            load_len_to(fp(sslot[i] + 8), RAX);
             if (sp.precision >= 0) {
                 movq(IMM(sp.precision), R(RCX));
                 cmpq(R(RCX), R(RAX));
@@ -4226,7 +4287,7 @@ static void gen_assign(Expr *e) {
         free(rest);
         int l = fail_begin();
         fail_end(m);
-        movq(fp(src + 8), R(RDX));
+        load_len_to(fp(src + 8), RDX);
         cmpq(IMM(cap), R(RDX));
         jcc(CC_G, l);
         /* zero the whole field, then copy the source over it */
@@ -4236,7 +4297,7 @@ static void gen_assign(Expr *e) {
         rep_stosb();
         movq(fp(dst), R(RDI));
         movq(fp(src), R(RSI));
-        movq(fp(src + 8), R(RCX));
+        load_len_to(fp(src + 8), RCX);
         scale_reg(es, RCX);
         rep_movsb();
         return;
@@ -4341,7 +4402,10 @@ static void gen_pat_test(Pattern *pat, int32_t off, Type *t, int fail) {
         unsigned char *b = decode_lit(pat->string_lit.value, pat->string_lit.length, &n);
         int sl = str_label(b, n);
         free(b);
-        cmpq(IMM(n), fp(off + 8));
+        if (g_len_repr < 64) {
+            load_len_to(fp(off + 8), RAX);
+            cmp_rax_imm(n);
+        } else cmpq(IMM(n), fp(off + 8));
         jcc(CC_NE, fail);
         if (n > 0) {
             movq(fp(off), R(RDI));
@@ -4764,6 +4828,7 @@ static void gen_for(Expr *e) {
     gen_expr(e->for_expr.iter);
     int32_t sl = slot_alloc(16, 8);
     copy_mem(RBP, sl, RAX, 0, 16);
+    widen_len(sl);
     int32_t cnt = slot_alloc(8, 8);
     movq(IMM(0), fp(cnt));
     const char *en = e->for_expr.var_pattern ? e->for_expr.elem_tmp
@@ -4948,7 +5013,7 @@ static void gen_assert(Expr *e) {
         char *rest = str_sprintf("assertion failed: %s: %%.*s\n", text);
         int m = msg_label(e->loc, rest);
         free(rest);
-        movq(M(RAX, 8), R(RDX));
+        load_len_to(M(RAX, 8), RDX);
         movq(M(RAX, 0), R(RCX));
         movq(GOTREL(asm_sym("stderr")), R(RDI));
         movq(M(RDI, 0), R(RDI));
@@ -5122,6 +5187,7 @@ static void gen_expr(Expr *e) {
         gen_expr(e->slice.object);
         int32_t sh = slot_alloc(16, 8);
         copy_mem(RBP, sh, RAX, 0, 16);
+        widen_len(sh);
         int32_t lo = slot_alloc(8, 8);
         if (e->slice.lo) gen_expr(e->slice.lo); else xorl(R(RAX), R(RAX));
         movq(R(RAX), fp(lo));
@@ -6314,8 +6380,14 @@ static void emit_eq_helper(EqHelper *h) {
         Type *elem = conc(t->slice.elem);
         movq(M(RBP, -8), R(RAX));
         movq(M(RBP, -16), R(RCX));
-        movq(M(RAX, 8), R(RDX));
-        cmpq(M(RCX, 8), R(RDX));
+        if (g_len_repr < 64) {
+            load_len_to(M(RAX, 8), RDX);
+            load_len_to(M(RCX, 8), R8);
+            cmpq(R(R8), R(RDX));
+        } else {
+            movq(M(RAX, 8), R(RDX));
+            cmpq(M(RCX, 8), R(RDX));
+        }
         jcc(CC_NE, lfalse);
         testq(R(RDX), R(RDX));
         jcc(CC_E, ltrue);
@@ -6786,6 +6858,9 @@ static void emit_c_main(SrcLoc main_def) {
             defer_pop();
         }
     }
+    /* args: a str over each argv string. Under a narrow --len-repr, a string
+     * or a count over the stored width fails, reported from "<startup>". */
+    SrcLoc startup = { "<startup>", 0, 0 };
     int32_t arr = slot_alloc(8, 8), idx = slot_alloc(8, 8);
     int ltop = new_label(), lgo = new_label();
     movq(fp(argc), R(RAX));
@@ -6803,6 +6878,7 @@ static void emit_c_main(SrcLoc main_def) {
     addq(fp(arr), R(RAX));
     movq(R(RDI), M(RAX, 0));
     call_c("strlen");
+    len_cap(startup);
     movq(fp(idx), R(RCX));
     shlq(IMM(4), R(RCX));
     addq(fp(arr), R(RCX));
@@ -6810,6 +6886,10 @@ static void emit_c_main(SrcLoc main_def) {
     incq(fp(idx));
     jmp(ltop);
     label(lgo);
+    if (g_len_repr < 64) {
+        movq(fp(argc), R(RAX));
+        len_cap(startup);
+    }
     movq(fp(arr), R(RDI));
     movq(fp(argc), R(RSI));
     call_sym("fc_main");
@@ -7600,10 +7680,6 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
     g_arena = arena;
     g_intern = intern;
     g_symtab = symtab;
-    if (g_len_repr != 64) {
-        diag_error_simple("the native backend supports only --len-repr 64");
-        return;
-    }
 
     Decl **all = NULL;
     int n = 0, cap = 0;

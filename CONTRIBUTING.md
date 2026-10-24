@@ -36,6 +36,7 @@ exit code.
 | `make test-gcc` / `make test-clang` | One compiler. |
 | `make test-native` | The suite through the native x86-64 backend (`--native`, experimental; Linux x86-64), which links each test itself, then `tests/run_link_tests.sh`: its linker on C objects, archives and the inputs it refuses, and its C header search (`-I`, `CPATH`); then `test-x86asm`. Not part of `make check`. |
 | `make test-native-cc` | The same suite with `cc` linking the backend's objects (`--native -c`), the check on fcc's linker. |
+| `make test-native-len16` | The native suite with `--len-repr 16`. Keep it green when touching the backend's slice code. |
 | `make test-x86asm` | The native backend's instruction encoder against GNU `as`: every form it offers, encoded both ways and compared byte for byte (`tests/x86asm_test.c`). `make test-native` runs it too. |
 | `make test-all-O2` (and `test-gcc-O2`, `test-clang-O2`) | Compile the generated C at `-O2`, which surfaces undefined behavior the optimizer exploits. |
 | `make test-all-len16` (and `test-gcc-len16`, `test-clang-len16`) | The whole suite with 16-bit stored slice lengths (`--len-repr 16`). Keep these green when touching slice code. |

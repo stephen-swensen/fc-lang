@@ -244,6 +244,10 @@ test-clang-len16: $(BIN)
 	@echo "=== Testing with clang (--len-repr 16) ==="
 	@CC=clang FCC_EXTRA_ARGS="--len-repr 16" $(RUN_TESTS)
 
+test-native-len16: $(BIN)
+	@echo "=== Testing the native backend (--len-repr 16) ==="
+	@NATIVE=1 CC=gcc FCC_EXTRA_ARGS="--len-repr 16" $(RUN_TESTS)
+
 # Run the suite under gcc and clang at the same time and print each log whole.
 # $(1) is CC_OPT for the generated C (empty for the default, unoptimized), $(2)
 # extra fcc options for every test.
@@ -340,6 +344,7 @@ help:
 	@echo "  make test-{gcc,clang,all}-len16  Same, but with --len-repr 16 (16-bit slice lens)"
 	@echo "  make test-native  Run tests through the native backend and its linker (Linux x86-64)"
 	@echo "  make test-native-cc  Same, with cc linking the native objects"
+	@echo "  make test-native-len16  The native suite with --len-repr 16"
 	@echo "  make test-x86asm  Check the native backend's instruction encoder against GNU as"
 	@echo "  make test-lsp     Run the LSP server wire tests (needs python3)"
 	@echo "  make test-vscode  Run the VSCode extension smoke test (needs node)"
@@ -352,5 +357,5 @@ help:
         check check-ascii check-warnings check-keywords check-examples \
         test-lsp test-vscode asan test-asan test-all-len16 \
         test-gcc test-clang test-gcc-O2 test-clang-O2 test-native test-native-cc test-x86asm \
-        test-gcc-len16 test-clang-len16 \
+        test-gcc-len16 test-clang-len16 test-native-len16 \
         test-all test-all-O2 help print-bin

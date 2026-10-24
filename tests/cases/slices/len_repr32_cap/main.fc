@@ -1,0 +1,15 @@
+// The --len-repr 32 capacity is 2147483647: a heap slice of more elements
+// is none, and a raw-parts len one past it traps where it is built.
+let main = (args: str[]) ->
+    let mut n = 3000000000i64
+    n = n + 0
+    match alloc(u8[n] { }) with
+    | some(s) -> free(s)
+    | none -> void()
+    match alloc(u8, 16) with
+    | some(p) ->
+        let mut m = 2147483647i64
+        m = m + 1
+        let s = u8[] { ptr = p, len = m }
+        (i32) s.len
+    | none -> 1

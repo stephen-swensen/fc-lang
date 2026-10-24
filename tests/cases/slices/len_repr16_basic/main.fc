@@ -33,6 +33,16 @@ let main = (args: str[]) ->
     let view = i32[] { ptr = buf.ptr, len = (i64) n }
     assert(view.len == 6 && view[5] == 6)
 
+    // the capacity itself is representable
+    match alloc(u8, 32767) with
+    | some(p) ->
+        let mut m = 32766
+        m = m + 1
+        let big = u8[] { ptr = p, len = (i64) m }
+        assert(big.len == 32767 && big[32766] == 0u8)
+        free(p)
+    | none -> void()
+
     // interpolation result is a slice construction too
     let msg = "n=%d{n} len=%d{view.len}"
     assert(msg == "n=6 len=6")

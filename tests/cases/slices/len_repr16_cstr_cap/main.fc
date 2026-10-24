@@ -1,0 +1,11 @@
+// cstr -> str measures the string at run time. Under --len-repr 16 a
+// 40000-byte C string cannot become a str, so the cast traps where the
+// slice would be built.
+let main = (args: str[]) ->
+    match alloc(u8, 40001) with
+    | some(p) ->
+        for i in 0..40000 do p[i] = 'x'
+        let c = (cstr) p
+        let s = (str) c
+        (i32) s.len
+    | none -> 1

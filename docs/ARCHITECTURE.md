@@ -296,8 +296,13 @@ when the declarations change, a header changes, or a header appears that the
 search would find first. A result is not cached when a file it read changed
 in the second or two before the compile, since the compiler may have seen it
 mid-edit. Entries are written to a temporary file and renamed into place, so
-parallel builds never read a partial one. A `--len-repr` other than 64 is not
-supported yet.
+parallel builds never read a partial one.
+
+Under `--len-repr 16` or `32` a slice header is still 16 bytes, as in the C
+build, since the pointer's alignment pads a narrow len. The backend reads the
+len at its stored width and stores all 8 bytes of it, which is safe because
+every stored len is in range. The runtime capacity checks are the C build's,
+with the same messages.
 
 With `--backtraces`, every function the backend emits gets an entry in a
 table of code ranges, names and definition sites. Before it aborts, each
@@ -432,8 +437,9 @@ proven to lie in `[0, FC_LEN_MAX]` when the slice is constructed, either
 statically in pass2 (literals, fixed arrays, const-generic sizes) or by a
 runtime check in the emitted C (raw parts, `alloca`, `cstr` to `str`,
 `argv`, interpolation). An `alloc` of more elements than fit returns `none`.
-Any new way to construct a slice must go through this rule, and
-`make test-gcc-len16` must stay green.
+Any new way to construct a slice must go through this rule, in both
+backends, and `make test-gcc-len16` and `make test-native-len16` must stay
+green.
 
 ### Generic instances mean what concrete code means
 
