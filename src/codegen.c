@@ -2389,9 +2389,10 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
      * (a %s/cstr without an explicit precision) is alloca'd afresh on each
      * evaluation, which grows the frame per loop iteration (a documented cost;
      * alloc(s)! promotes to the heap), or malloc'd under alloc(s)!. */
-    if (g_len_repr < 64) {
+    if (g_len_repr < 64 && !is_cstr) {
         /* The result's len is bounded by _flen; cap _flen once, before the
-         * buffer exists, so the stores below fit fc_len_t. */
+         * buffer exists, so the stores below fit fc_len_t. A cstr result
+         * has no len, so it has no capacity to exceed. */
         fprintf(out, "if (__builtin_expect(_flen%d > FC_LEN_MAX, 0)) fc_len_cap(", tid);
         emit_loc_args(e->loc, out);
         fprintf(out, ", (long long)_flen%d); ", tid);

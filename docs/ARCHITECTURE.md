@@ -435,11 +435,11 @@ changes only how wide the stored length is (`fc_len_t`) and the width of
 bounds-check comparisons. Soundness rests on one rule: every stored length is
 proven to lie in `[0, FC_LEN_MAX]` when the slice is constructed, either
 statically in pass2 (literals, fixed arrays, const-generic sizes) or by a
-runtime check in the emitted C (raw parts, `alloca`, `cstr` to `str`,
-`argv`, interpolation). An `alloc` of more elements than fit returns `none`.
-Any new way to construct a slice must go through this rule, in both
-backends, and `make test-gcc-len16` and `make test-native-len16` must stay
-green.
+runtime check in the emitted code (raw parts, `alloca`, `cstr` to `str`,
+`argv`, `str` interpolation; a `cstr` has no stored length). An `alloc` of
+more elements than fit returns `none`. Any new way to construct a slice must
+go through this rule, in both backends, and `make test-gcc-len16` and
+`make test-native-len16` must stay green.
 
 ### Generic instances mean what concrete code means
 

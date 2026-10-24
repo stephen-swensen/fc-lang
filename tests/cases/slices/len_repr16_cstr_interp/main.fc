@@ -1,0 +1,15 @@
+// A cstr has no stored length, so a cstr interpolation longer than the
+// --len-repr 16 capacity is built like any other; converting the result to
+// a str is what traps.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let main = (args: str[]) ->
+    match alloc(u8[20000] { }) with
+    | some(a) ->
+        for i in 0..a.len do a[i] = 'x'
+        let s = alloca(c"%s{a}%s{a}!")
+        assert(c.strlen(s) == 40001usize)
+        let t = (str) s
+        (i32) t.len
+    | none -> 1

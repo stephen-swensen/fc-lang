@@ -4076,9 +4076,9 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
         addq(R(RAX), fp(flen));
     }
     if (konst) addq(IMM(konst), fp(flen));
-    /* The result's len is bounded by the budget: capped once, before the
-     * buffer exists. */
-    if (g_len_repr < 64) {
+    /* A str result's len is bounded by the budget: capped once, before the
+     * buffer exists. A cstr result has no len. */
+    if (g_len_repr < 64 && !is_cstr) {
         movq(fp(flen), R(RAX));
         len_cap(e->loc);
     }
