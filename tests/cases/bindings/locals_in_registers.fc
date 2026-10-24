@@ -1,0 +1,166 @@
+// Locals keep their values wherever they live. The native backend keeps
+// integer locals whose address is not taken in callee-saved registers,
+// several to a register when their live ranges are apart, and float locals
+// in registers no call can clobber. Each case below is a shape where a range
+// computed from the source order alone would be too short: a value read
+// later than it is written in the source (an argument read when the call is
+// made, a container indexed after its index is computed, an assignment's
+// target found after its value), a range's start kept in the loop variable
+// while its end is evaluated, a value carried around a loop, one read by a
+// defer at the scope's exit, and callee-saved registers kept across calls, a
+// tail call and a C callback.
+
+module libc from "stdlib.h" =
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> i32) -> void
+
+struct box =
+    vals: i64[4]
+    n: i64
+
+let pair = (a: i64, b: i64) -> a * 1000 + b
+
+// x is last named in the first argument; y is bound in the second.
+let late_arg = (x: i64, z: i64) -> pair(x, (let y = z * 3 in y + 1))
+
+// b is last named as the container; k is bound in the index.
+let late_index = (b: box*, i: i64) -> b.vals[let k = i + 1 in k]
+
+// b is last named as the target; w is bound in the value.
+let late_assign = (b: box*, v: i64) ->
+    b.n = (let w = v * 2 in w)
+    0
+
+// The loop variable holds the start while the end binds b.
+let late_range = (a: i64, c: i64) ->
+    let mut s = 0i64
+    for i in a..(let b = c + 2 in b) do
+        s = s + i
+    s
+
+// x is read at the top of every iteration, after t was bound in the last.
+let carried = () ->
+    let x = 10i64
+    let mut sum = 0i64
+    for i in 0..4 do
+        sum = sum + x
+        let t = i * 100
+        sum = sum + t
+    sum
+
+let mut seen = 0i64
+
+// k is read by the defer at the scope's exit, after j was bound.
+let with_defer = (n: i64) ->
+    let k = n * 2
+    defer seen = seen + k
+    let j = 5i64
+    j * 10 + j
+
+// More locals than registers, live at once.
+let many = (n: i64) ->
+    let a = n + 1
+    let b = a * 2
+    let c = b + a
+    let d = c * b
+    let e = d - a
+    let f = e + c
+    let g = f * 2 - b
+    a + b + c + d + e + f + g
+
+// Callee-saved registers survive calls: many uses them all.
+let keeps = (n: i64) ->
+    let p = n * 7
+    let q = n * 11
+    let r = n * 13
+    let s = n * 17
+    let t = n * 19
+    let u = many(n) + many(n + 1)
+    p + q + r + s + t + u
+
+let sum_to = (n: i64, acc: i64) -> if n == 0 then acc else sum_to(n - 1, acc + n)
+
+// A tail call from a function that uses registers puts them back first.
+let tail_entry = (n: i64) ->
+    let a = n * 3
+    let b = a + n
+    let c = b * 2
+    sum_to(n, a + b + c - 9 * n)
+
+// Its caller's registers are intact afterwards.
+let tail_caller = (n: i64) ->
+    let a = n + 1
+    let b = n + 2
+    let c = n + 3
+    let r = tail_entry(n)
+    r + a * b * c + (a + b + c)
+
+let cmp_i64 = (a: const any*, b: const any*) ->
+    let x = *((const i64*) a)
+    let y = *((const i64*) b)
+    let d = x - y
+    if d < 0 then -1 else if d > 0 then 1 else 0
+
+let set_to = (p: i64*, v: i64) ->
+    *p = v
+    0
+
+// An argument whose address is taken is read in its turn.
+let addr_arg = () ->
+    let mut x = 1i64
+    pair(x, set_to(&x, 2)) + x
+
+// So is one a later argument assigns.
+let assigned_arg = () ->
+    let mut x = 1i64
+    pair(x, (x = 7; 3)) + x
+
+let narrow = () ->
+    let mut a = 250u8
+    let mut b = 32760i16
+    let mut c = 2147483640
+    let mut d = 4294967290u32
+    let mut e = -126i8
+    for k in 0..10 do
+        a = a + 1u8
+        b = b + 1i16
+        c = c + 1
+        d = d + 1u32
+        e = e - 1i8
+    assert(a == 4u8 && b == -32766i16 && c == -2147483646 && d == 4u32 && e == 120i8)
+    (i64) a + (i64) b
+
+let matched = (o: i64?) ->
+    match o with
+    | some(v) ->
+        let w = v * 2
+        w + v
+    | none -> 0i64
+
+let captured = (n: i64) ->
+    let cap = n * 5
+    let f = (y: i64) -> y + cap
+    f(1) + f(2)
+
+let main = (args: str[]) ->
+    assert(late_arg(7, 5) == 7016)
+    let mut bx = box { vals = i64[4] { 10, 20, 30, 40 }, n = 0 }
+    assert(late_index(&bx, 1) == 30)
+    late_assign(&bx, 21)
+    assert(bx.n == 42)
+    assert(late_range(3, 5) == 18)
+    assert(carried() == 640)
+    assert(with_defer(4) == 55 && seen == 8)
+    assert(many(3) == 516)
+    assert(keeps(2) == 947)
+    assert(tail_entry(10000) == 50065000)
+    assert(tail_caller(10) == 115 + 11 * 12 * 13 + 36)
+    let mut xs = i64[9] { 5, -3, 99, 0, 7, -40, 12, 7, 1 }
+    libc.qsort((any*) xs.ptr, (usize) xs.len, (usize) sizeof(i64), cmp_i64)
+    for i in 1..xs.len do assert(xs[i - 1] <= xs[i])
+    assert(xs[0] == -40 && xs[8] == 99)
+    assert(addr_arg() == 1002)
+    assert(assigned_arg() == 1010)
+    assert(narrow() == -32762)
+    assert(matched(some(4i64)) == 12 && matched(none(i64)) == 0)
+    assert(captured(2) == 23)
+    0

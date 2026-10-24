@@ -223,11 +223,14 @@ generic behavior in `generics/`.
    `ast.h`; `TypeKind` in `types.h`) and its payload to the node.
 2. Build. Every `switch` over the kind that has no `default` now warns
    (`-Wswitch`), and those are the ones that must handle every kind: the
-   child visitors in `ast.c`, the two dispatchers (`check_expr_inner` in
-   pass2, `emit_expr` in codegen), the LSP's node finder, the whole-tree
-   predicates in pass2 (such as `expr_may_yield_stack`), the self-recursion
-   flow (`sr_flow`: whether control can complete through the kind, or leave
-   the function from inside it), codegen's evaluation-order predicates
+   child visitors in `ast.c`, the dispatchers (`check_expr_inner` in pass2,
+   `emit_expr` in codegen, `gen_expr` in the native backend), the native
+   backend's `ra_calls` (whether the kind's code calls a function, which
+   decides where a float local may stay in a register), the LSP's node
+   finder, the whole-tree predicates in pass2 (such as
+   `expr_may_yield_stack`), the self-recursion flow (`sr_flow`: whether
+   control can complete through the kind, or leave the function from inside
+   it), codegen's evaluation-order predicates
    (`expr_has_side_effects`, `expr_structurally_equal`), and for a type kind
    printing, equality, substitution and mangling in `types.c` and `emit_type`
    / `emit_type_ident` / `type_ident_eq` in codegen, which must agree on what
@@ -243,6 +246,11 @@ generic behavior in `generics/`.
    - `const_fold_expr`, `is_init_expr` and `const_clone_expr` (pass2):
      whether the kind is a compile-time constant and may initialize a module
      constant. The three must agree.
+   - `ra_node` (the native backend's register walk): a kind that binds a
+     local needs a case for the local to get a register. One whose code
+     evaluates its children in another order than the walk visits them needs
+     one, or a local's live range comes out too short and its register is
+     reused while the local is still read.
    For a type or pattern kind: `grep -n 'case TYPE_' src/*.c` (or `PAT_`).
 4. In pass2, check a child whose value the new node consumes (an operand, an
    argument, an element) with `check_operand`, not `check_expr`: it rejects a

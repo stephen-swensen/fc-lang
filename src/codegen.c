@@ -4078,11 +4078,21 @@ static void emit_for(Expr *e, FILE *out) {
     if (e->for_expr.range_end) {
         /* Range iteration: for i in lo..hi. The end bound goes into a temp
          * so a side-effecting end expression (`for i in 0..get_end()`) runs
-         * once, not on every iteration. pass2 has widened both endpoints to
-         * the loop variable's type, so the start, end temp, `<` test, and
-         * `++` all share `var_type`. */
+         * once, not on every iteration. The start is evaluated first: when
+         * either bound has effects, it goes into a temp ahead of the end's.
+         * pass2 has widened both endpoints to the loop variable's type, so
+         * the start, end temp, `<` test, and `++` all share `var_type`. */
         int tid = g_temp_counter++;
         Type *var_type = e->for_expr.iter->type;
+        Expr **bounds[2] = { &e->for_expr.iter, &e->for_expr.range_end };
+        bool start_first = seq_needed(bounds, 2) && !seq_is_atom(e->for_expr.iter);
+        if (start_first) {
+            emit_type(var_type, out);
+            fprintf(out, " _fb%d = ", tid);
+            emit_expr(e->for_expr.iter, out);
+            fprintf(out, ";\n");
+            emit_indent(out);
+        }
         emit_type(var_type, out);
         fprintf(out, " _fe%d = ", tid);
         emit_expr(e->for_expr.range_end, out);
@@ -4093,7 +4103,8 @@ static void emit_for(Expr *e, FILE *out) {
         const char *rvar = e->for_expr.var_codegen_name
             ? e->for_expr.var_codegen_name : c_safe_ident(g_intern, e->for_expr.var);
         fprintf(out, " %s = ", rvar);
-        emit_expr(e->for_expr.iter, out);
+        if (start_first) fprintf(out, "_fb%d", tid);
+        else emit_expr(e->for_expr.iter, out);
         fprintf(out, "; %s < _fe%d; %s++) {\n", rvar, tid, rvar);
     } else {
         /* Collection iteration. The iterable goes into a temp so it is
@@ -4647,7 +4658,21 @@ static void emit_expr(Expr *e, FILE *out) {
                              "_s%d.ptr + _i%d; }))", idx_unsigned ? "unsigned long long" : "long long", tid, tid, tid, tid);
             }
         } else {
-            /* Pointer indexing: no bounds check */
+            /* Pointer indexing: no bounds check. When an operand has
+             * effects, the pointer goes into a temp first, since C leaves
+             * the order of p[i]'s operands unspecified. */
+            Expr **ops[2] = { &e->index.object, &e->index.index };
+            if (!g_const_context && seq_needed(ops, 2) && !seq_is_atom(e->index.object)) {
+                int tid = g_temp_counter++;
+                fprintf(out, "(*({ ");
+                emit_type(obj_type, out);
+                fprintf(out, " _p%d = ", tid);
+                emit_expr(e->index.object, out);
+                fprintf(out, "; _p%d + (", tid);
+                emit_expr(e->index.index, out);
+                fprintf(out, "); }))");
+                break;
+            }
             emit_expr(e->index.object, out);
             fprintf(out, "[");
             emit_expr(e->index.index, out);

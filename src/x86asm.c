@@ -31,8 +31,8 @@ struct AsmEv {
     uint8_t rtype;          /* EV_REF */
     int32_t sym;            /* the symbol defined or referenced; EV_ALIGN: the alignment;
                              * EV_CFI: the op; EV_LOC: the file */
-    int32_t line;           /* EV_LOC */
-    int64_t addend;         /* EV_REF */
+    int32_t line;           /* EV_LOC; EV_CFI saved: the register */
+    int64_t addend;         /* EV_REF; EV_CFI saved: the offset from the CFA */
     uint32_t addr;          /* the address in .text, once laid out */
 };
 
@@ -499,6 +499,13 @@ void x_loc(Code *c, int file, int line) {
 
 void x_cfi(Code *c, CfiOp op) { cev(c, EV_CFI)->sym = (int32_t)op; }
 
+void x_cfi_saved(Code *c, Reg r, int32_t cfa_off) {
+    AsmEv *e = cev(c, EV_CFI);
+    e->sym = CFI_SAVED;
+    e->line = (int32_t)r;
+    e->addend = cfa_off;
+}
+
 /* ================================================================
  * Data
  * ================================================================ */
@@ -670,7 +677,10 @@ static void sec_secoff(int sec, int target) {
 
 /* ---- Unwind tables ---- */
 
-typedef struct { uint32_t addr; int op; } CfiPoint;
+typedef struct { uint32_t addr; int op, reg; int32_t off; } CfiPoint;
+
+/* The DWARF number of each register. */
+static const uint8_t DWARF_REG[16] = { 0, 2, 1, 3, 7, 6, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15 };
 
 static void cfa_advance(int sec, uint32_t delta) {
     if (delta == 0) return;
@@ -707,6 +717,9 @@ static uint64_t eh_fde(int sec, uint32_t cie, uint32_t start, uint32_t end, CfiP
             break;
         case CFI_RESTORE:
             sec_le(sec, 0x0b, 1);                                /* restore_state */
+            break;
+        case CFI_SAVED:                                          /* offset reg, cfa+off */
+            sec_le(sec, 0x80 | DWARF_REG[pts[i].reg], 1); sec_uleb(sec, (uint64_t)(-pts[i].off / 8));
             break;
         }
     }
@@ -749,7 +762,7 @@ static void build_eh_frame(Code *t) {
             open = false;
             break;
         default: {
-            CfiPoint p = { e->addr, e->sym };
+            CfiPoint p = { e->addr, e->sym, e->line, (int32_t)e->addend };
             DA_APPEND(pts, npts, cap, p);
             break;
         }

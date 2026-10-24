@@ -1547,6 +1547,7 @@ Within an expression, subexpressions are evaluated **left-to-right**, and each i
 
 - **Binary operands** — the left operand is evaluated before the right. This includes `/` and `%`: the dividend is evaluated before the divisor.
 - **Function and method call arguments** — the callee is evaluated first (for an indirect call through a function value), then the arguments in source order.
+- **Indexing** — the indexed value is evaluated before the index: in `s[f()]`, `s` is read before `f()` runs, so an index that reassigns `s` still indexes the slice `s` held. A sub-slice `s[lo..hi]` evaluates `s`, then `lo`, then `hi`.
 - **Assignment** — the target's lvalue subexpressions are evaluated first (e.g. the index in `s[f()] = g()` runs before the value), then the value, then the store.
 - **Aggregate literals** — struct fields, tuple elements, slice-literal elements, and the `ptr`/`len` of a raw slice literal are evaluated in source order.
 

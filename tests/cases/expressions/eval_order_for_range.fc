@@ -1,0 +1,39 @@
+// A for loop's range evaluates its start, then its end, each once, before
+// the loop begins: a start reads what it reads before the end runs, and the
+// end sees what the start did.
+
+let mut trace = 0i64
+let mut g = 0i64
+
+// Records d, returns v.
+let note = (d: i64, v: i64) ->
+    trace = trace * 10 + d
+    v
+
+let set_g = (v: i64, r: i64) ->
+    g = v
+    r
+
+let main = (args: str[]) ->
+    let mut n = 0i64
+    for i in note(1, 0)..note(2, 3) do n = n + i
+    assert(trace == 12 && n == 3)
+
+    // the start reads g before the end changes it
+    g = 2
+    n = 0
+    for i in g..set_g(10, 5) do n = n + i
+    assert(n == 2 + 3 + 4 && g == 10)
+
+    // the end reads g after the start changed it
+    g = 0
+    n = 0
+    for i in set_g(4, 1)..g do n = n + i
+    assert(n == 1 + 2 + 3)
+
+    // the same with a local the end assigns
+    let mut x = 0i64
+    n = 0
+    for i in x..(x = 9; 3) do n = n + i
+    assert(n == 0 + 1 + 2 && x == 9)
+    0

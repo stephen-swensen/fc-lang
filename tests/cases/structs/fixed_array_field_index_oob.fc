@@ -1,0 +1,13 @@
+// Indexing a fixed-array field past its length aborts.
+
+struct bank =
+    words: u32[4]
+    after: u32
+
+let at = (p: bank*, i: i64) -> p.words[i]
+
+let main = (args: str[]) ->
+    let mut b = default(bank)
+    b.after = 5u32
+    let x = at(&b, 4)
+    if x == 5u32 then 2 else 1   // not reached

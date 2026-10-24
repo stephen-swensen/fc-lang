@@ -1,0 +1,87 @@
+// Float locals keep their values across calls, defers and loops. The native
+// backend keeps a float local in a register only where no call can clobber
+// it (no register keeps a float across a call in the System V ABI), so
+// these cases put a call where a float is live: in a later statement, in a
+// defer run as a loop is left, and in the other functions it calls. The
+// comparisons run on floats in registers and in memory, NaN included, and
+// the constants include -0.0 and f32 values.
+
+// Uses float registers itself, so it clobbers any a caller left there.
+let clobber = () ->
+    let a = 7.5
+    let b = a * 2.0
+    let c = b - a + 0.25
+    c * 0.0
+
+let across_call = (x: f64) ->
+    let f = x * 2.0
+    let g = clobber()
+    f + g
+
+let mut exits = 0
+
+let across_defer = (x: f64) ->
+    let f = x + 0.5
+    let mut i = 0
+    loop
+        defer exits = exits + (i32) clobber() + 1
+        if i == 3 then break
+        i = i + 1
+    f
+
+// Every comparison as a bool, on the values in registers.
+let compares = (x: f64, y: f64) ->
+    let a = x * 1.0
+    let b = y * 1.0
+    let mut bits = 0
+    if a < b then bits = bits | 1
+    if a <= b then bits = bits | 2
+    if a > b then bits = bits | 4
+    if a >= b then bits = bits | 8
+    if a == b then bits = bits | 16
+    if a != b then bits = bits | 32
+    if b < 1.5 then bits = bits | 64
+    if b > 1.5 then bits = bits | 128
+    bits
+
+let compares32 = (x: f32, y: f32) ->
+    let a = x * 1.0f32
+    let b = y * 1.0f32
+    let mut bits = 0
+    if a < b then bits = bits | 1
+    if a > b then bits = bits | 4
+    if a == b then bits = bits | 16
+    if a != b then bits = bits | 32
+    if b < 1.5f32 then bits = bits | 64
+    bits
+
+let constants = () ->
+    let nz = -0.0
+    let z = 0.0
+    let h = 0.5f32
+    assert(1.0 / nz == -f64.inf && 1.0 / z == f64.inf)
+    assert(h + 0.25f32 == 0.75f32 && h * 4.0f32 == 2.0f32)
+    let mut acc = 0.0
+    for i in 0..10 do acc = acc + 0.1
+    acc
+
+// More float arguments than registers carry: the rest come on the stack.
+let ten = (a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f64, j: f64) ->
+    let s = a + b + c + d + e + f + g + h
+    s * 100.0 + i * 10.0 + j
+
+let main = (args: str[]) ->
+    assert(across_call(1.25) == 2.5)
+    assert(across_defer(2.0) == 2.5 && exits == 4)
+    let nan = f64.nan
+    assert(compares(1.0, 2.0) == 1 | 2 | 32 | 128)
+    assert(compares(2.0, 2.0) == 2 | 8 | 16 | 128)
+    assert(compares(3.0, 1.0) == 4 | 8 | 32 | 64)
+    assert(compares(nan, 1.0) == 32 | 64)
+    assert(compares(1.0, nan) == 32)
+    assert(compares32(1.0f32, 2.0f32) == 1 | 32)
+    assert(compares32(f32.nan, 1.0f32) == 32 | 64)
+    let acc = constants()
+    assert(acc > 0.99 && acc < 1.01)
+    assert(ten(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 0.5) == 3690.5)
+    0

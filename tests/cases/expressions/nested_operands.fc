@@ -1,0 +1,27 @@
+// A binary operator's left value is kept while its right operand is
+// evaluated. The native backend keeps it in a scratch register when the
+// right operand makes no call, nesting three deep, and in memory past that
+// depth or across a call; these expressions nest deeper, with calls among
+// the operands, in arithmetic, element addresses and assignments.
+
+// Keeps values itself, so it clobbers the scratch registers.
+let churn = (a: i64[], k: i64) -> a[0] - (a[1] - (a[2] - (a[3] - k)))
+let churnf = (f: f64[], k: f64) -> f[0] - (f[1] - (f[2] - (f[3] - k)))
+
+let main = (args: str[]) ->
+    let mut a = i64[8] { 100, 21, 13, 8, 5, 3, 2, 1 }
+    let f = f64[6] { 64.0, 32.0, 16.0, 8.0, 4.0, 2.0 }
+    let p = a.ptr
+    let one = 1i64
+    assert(a[0] - (a[1] - (a[2] - (a[3] - (a[4] - (a[5] - (a[6] - a[7])))))) == 87)
+    assert(a[0] - (a[1] * (a[2] - churn(a, a[3] - (a[4] - a[5])) * a[6])) == 3607)
+    assert(f[0] - (f[1] - (f[2] - (f[3] - (f[4] - f[5])))) == 42.0)
+    assert(f[0] * (f[1] - (f[2] - churnf(f, f[3] - (f[4] - f[5])))) == 3968.0)
+    // element addresses with computed indexes
+    assert(p[one + (one + (one + (one + one)))] == 3 && a[a[7] + (a[7] + a[6])] == 5)
+    // assignments: the target's address is kept while the value is computed
+    a[one + one] = a[0] - (a[1] - (a[2] - (a[3] - a[4])))
+    assert(a[2] == 89 && a[1] == 21 && a[3] == 8)
+    p[one + 0] = a[0] * (a[3] - churn(a, one))
+    assert(a[1] == -15300 && a[0] == 100 && a[2] == 89)
+    0

@@ -8,7 +8,9 @@
  * written and no assembler runs. It does not optimize across expressions;
  * its job is to mean exactly what the emitted C means, quickly. Within an
  * expression it takes the short forms: see "Leaves" (operands that take no
- * code), cond_jump (branching on the flags) and gen_divmod_const.
+ * code), "Holds", cond_jump (branching on the flags), gen_divmod_const and
+ * arg_at_call. Across a function it keeps locals in registers: see
+ * "Register locals".
  *
  * Value model. Every expression leaves its value in a fixed place:
  *   - an integer, bool, enum, pointer or null-sentinel option: %rax, sign- or
@@ -20,13 +22,14 @@
  *     expression's own lvalue or a temporary in the frame.
  * Values in memory are stored at their natural width; loads extend.
  *
- * Frame. %rbp-based. Every local binding, parameter and temporary has a slot
- * at a fixed negative offset. Temporaries are never reused within a function
- * (monotonic allocation), except the 8-byte spill slots that hold a scalar
- * operand while its sibling is evaluated (unless the sibling is a leaf),
- * which nest strictly and so are reused by depth. Nothing is pushed: %rsp
- * stays 16-byte aligned throughout a body, which keeps calls and `alloca`
- * simple.
+ * Frame. %rbp-based. Every local binding and parameter that is not kept in
+ * a register, and every temporary, has a slot at a fixed negative offset, as
+ * do the callee-saved registers the function uses. Temporaries are never
+ * reused within a function (monotonic allocation), except the 8-byte spill
+ * slots that hold a scalar operand while its sibling is evaluated (when the
+ * sibling is not a leaf and may call), which nest strictly and so are
+ * reused by depth. Nothing is pushed: %rsp stays 16-byte aligned throughout
+ * a body, which keeps calls and `alloca` simple.
  *
  * Calls use the System V ABI everywhere, FC to FC included, so FC functions
  * are callable from C and the debugger. A call in tail position is a jump
@@ -850,23 +853,52 @@ static int32_t spill_push(void) {
 
 static void spill_pop(void) { g_spill_depth--; }
 
-/* The slot of a local binding, allocated on first sight. */
-static int32_t local_slot(const char *name, Type *t) {
+/* Registers. A local whose address is never taken may live in a register
+ * instead of a frame slot (see "Register locals"): an integer in a
+ * callee-saved register, a float in %xmm8-%xmm15 when no call comes while it
+ * is live. g_reg_locals maps its name to the register. An integer register
+ * always holds the canonical 64-bit form, so it is read and written whole.
+ * The function saves the callee-saved registers it uses in frame slots and
+ * restores them before it returns or jumps to a tail callee. */
+static HMap g_reg_locals;           /* codegen name -> register, REG_XMM + n for %xmm<n> */
+enum { REG_XMM = 16 };
+
+static Opnd reg_home(int64_t v) { return v >= REG_XMM ? X((int)(v - REG_XMM)) : R((Reg)v); }
+
+static const Reg SAVED_REGS[] = { RBX, R12, R13, R14, R15 };
+enum { NSAVED = sizeof SAVED_REGS / sizeof SAVED_REGS[0] };
+static int g_nsaved;                /* the registers the function uses */
+static Reg g_save_reg[NSAVED];
+static int32_t g_save_slot[NSAVED];
+
+/* Put back the callee-saved registers the function used. */
+static void restore_saved(void) {
+    for (int i = 0; i < g_nsaved; i++) movq(fp(g_save_slot[i]), R(g_save_reg[i]));
+}
+
+/* Where a local lives: its register, or its frame slot, allocated on first
+ * sight. */
+static Opnd local_home(const char *name, Type *t) {
     size_t n = strlen(name);
-    HEnt *e = hmap_get(&g_locals, name, n);
-    if (e) return (int32_t)e->val;
+    HEnt *e = hmap_get(&g_reg_locals, name, n);
+    if (e) return reg_home(e->val);
+    e = hmap_get(&g_locals, name, n);
+    if (e) return fp((int32_t)e->val);
     int64_t s, a;
     ty_layout(t, &s, &a);
     int32_t off = val_kind(t) == VK_AGG ? slot_alloc(align_up(s, 8), a > 8 ? a : 8)
                                         : slot_alloc(8, 8);
     hmap_put(&g_locals, name, n)->val = off;
-    return off;
+    return fp(off);
 }
 
-static bool local_find(const char *name, int32_t *off) {
-    HEnt *e = hmap_get(&g_locals, name, strlen(name));
+static bool local_find(const char *name, Opnd *home) {
+    size_t n = strlen(name);
+    HEnt *e = hmap_get(&g_reg_locals, name, n);
+    if (e) { *home = reg_home(e->val); return true; }
+    e = hmap_get(&g_locals, name, n);
     if (!e) return false;
-    *off = (int32_t)e->val;
+    *home = fp((int32_t)e->val);
     return true;
 }
 
@@ -876,23 +908,30 @@ static void local_bind(const char *name, int32_t off) {
 
 /* ---- Loads, stores, normalization ---- */
 
-/* Re-extend %rax to canonical form for VK_INT type t. */
-static void normalize(Type *t) {
+/* Re-extend r to canonical form for VK_INT type t. */
+static void normalize_reg(Type *t, Reg r) {
     int w = int_width(t);
     bool s = int_signed(t);
-    if (conc(t)->kind == TYPE_BOOL) { movzbl(R(RAX), R(RAX)); return; }
+    if (conc(t)->kind == TYPE_BOOL) { movzbl(R(r), R(r)); return; }
     switch (w) {
-    case 1: (s ? movsbq(R(RAX), R(RAX)) : movzbl(R(RAX), R(RAX))); break;
-    case 2: (s ? movswq(R(RAX), R(RAX)) : movzwl(R(RAX), R(RAX))); break;
-    case 4: (s ? movslq(R(RAX), R(RAX)) : movl(R(RAX), R(RAX))); break;
+    case 1: (s ? movsbq(R(r), R(r)) : movzbl(R(r), R(r))); break;
+    case 2: (s ? movswq(R(r), R(r)) : movzwl(R(r), R(r))); break;
+    case 4: (s ? movslq(R(r), R(r)) : movl(R(r), R(r))); break;
     default: break;
     }
 }
 
-/* Load the integer of type t at mem into r, extended to canonical form. */
+static void normalize(Type *t) { normalize_reg(t, RAX); }
+
+/* Load the integer of type t at mem (or in a register local) into r,
+ * extended to canonical form. */
 static void load_int_to(Type *t, Opnd mem, Reg r) {
     int w = int_width(t);
     bool s = int_signed(t);
+    if (mem.kind == OPND_REG) {         /* already canonical */
+        if (mem.base != (int8_t)r) movq(mem, R(r));
+        return;
+    }
     switch (w) {
     case 1: (s ? movsbq(mem, R(r)) : movzbl(mem, R(r))); break;
     case 2: (s ? movswq(mem, R(r)) : movzwl(mem, R(r))); break;
@@ -904,7 +943,8 @@ static void load_int_to(Type *t, Opnd mem, Reg r) {
 static void load_int(Type *t, Opnd mem) { load_int_to(t, mem, RAX); }
 
 static void store_int(Type *t, Opnd mem) {
-    x_mov(g_cur, int_width(t), R(RAX), mem);
+    if (mem.kind == OPND_REG) movq(R(RAX), mem);
+    else x_mov(g_cur, int_width(t), R(RAX), mem);
 }
 
 /* Load the value of type t stored at mem into the value registers (an
@@ -912,7 +952,10 @@ static void store_int(Type *t, Opnd mem) {
 static void load_val(Type *t, Opnd mem) {
     switch (val_kind(t)) {
     case VK_INT: load_int(t, mem); break;
-    case VK_FLOAT: (is_f32(t) ? movss(mem, X(0)) : movsd(mem, X(0))); break;
+    case VK_FLOAT:
+        if (mem.kind == OPND_XMM) movaps(mem, X(0));
+        else (is_f32(t) ? movss(mem, X(0)) : movsd(mem, X(0)));
+        break;
     case VK_AGG: leaq(mem, R(RAX)); break;
     case VK_VOID: break;
     }
@@ -973,7 +1016,10 @@ static void zero_mem(Reg base, int64_t off, int64_t size) {
 static void store_at(Type *t, Opnd mem) {
     switch (val_kind(t)) {
     case VK_INT: store_int(t, mem); break;
-    case VK_FLOAT: (is_f32(t) ? movss(X(0), mem) : movsd(X(0), mem)); break;
+    case VK_FLOAT:
+        if (mem.kind == OPND_XMM) movaps(X(0), mem);
+        else (is_f32(t) ? movss(X(0), mem) : movsd(X(0), mem));
+        break;
     case VK_AGG: copy_mem((Reg)mem.base, mem.disp, RAX, 0, ty_size(t)); break;
     case VK_VOID: break;
     }
@@ -1071,28 +1117,62 @@ static void mov_imm_to(int64_t v, Reg r) {
 /* Load an immediate into %rax. */
 static void mov_imm(int64_t v) { mov_imm_to(v, RAX); }
 
+/* r *= n, for an element size or a count: a power of two shifts. */
+static void scale_reg(int64_t n, Reg r) {
+    int k = 0;
+    while (k < 63 && n != (int64_t)1 << k) k++;
+    if (k == 0) return;
+    if (k < 63) shlq(IMM(k), R(r));
+    else imulq3(n, R(r), R(r));
+}
+
 static void mov_imm_reg(int64_t v, Opnd reg64) {
     if (v >= INT32_MIN && v <= INT32_MAX) movq(IMM(v), reg64);
     else movabsq(v, reg64);
 }
 
-/* Load a float constant into %xmm<n> through the integer register via. */
-static void float_const_to(double v, bool f32, int n, Reg via) {
+static HMap g_fconsts;      /* 'f' or 'd' and the bits -> label */
+
+/* The label of a float constant in .rodata. */
+static int fconst_label(double v, bool f32, uint64_t *bits) {
+    char key[9];
     if (f32) {
         float f = (float)v;
-        uint32_t bits;
-        memcpy(&bits, &f, 4);
-        movl(IMM(bits), R(via));
-        movd(R(via), X(n));
+        uint32_t b;
+        memcpy(&b, &f, 4);
+        *bits = b;
     } else {
-        uint64_t bits;
-        memcpy(&bits, &v, 8);
-        movabsq(bits, R(via));
-        movq(R(via), X(n));
+        memcpy(bits, &v, 8);
     }
+    key[0] = f32 ? 'f' : 'd';
+    memcpy(key + 1, bits, 8);
+    HEnt *e = hmap_get(&g_fconsts, key, 9);
+    if (e) return (int)e->val;
+    char *k = arena_alloc(g_arena, 9);
+    memcpy(k, key, 9);
+    int l = new_label();
+    d_align(ASM_RODATA, f32 ? 4 : 8);
+    d_def(ASM_RODATA, l);
+    d_int(ASM_RODATA, *bits, f32 ? 4 : 8);
+    hmap_put(&g_fconsts, k, 9)->val = l;
+    return l;
 }
 
-static void float_const(double v, bool f32) { float_const_to(v, f32, 0, RAX); }
+/* A float constant as an operand: in .rodata. */
+static Opnd fconst(double v, bool f32) {
+    uint64_t bits;
+    return RIPREL(fconst_label(v, f32, &bits), 0);
+}
+
+/* Load a float constant into %xmm<n>. */
+static void float_const_to(double v, bool f32, int n) {
+    uint64_t bits;
+    int l = fconst_label(v, f32, &bits);
+    if (bits == 0) xorps(X(n), X(n));
+    else (f32 ? movss(RIPREL(l, 0), X(n)) : movsd(RIPREL(l, 0), X(n)));
+}
+
+static void float_const(double v, bool f32) { float_const_to(v, f32, 0); }
 
 /* ---- Snapshots: hold the current value while other code runs ---- */
 
@@ -1479,19 +1559,33 @@ static bool int_leaf(Expr *e, int64_t *v) {
     }
 }
 
+/* Whether every value of integer type from is one of type to, so both have
+ * the same canonical form and the conversion is free (and cannot fail). */
+static bool int_widens(Type *from, Type *to) {
+    if (conc(to)->kind == TYPE_BOOL) return conc(from)->kind == TYPE_BOOL;
+    int wf = int_width(from), wt = int_width(to);
+    if (int_signed(from)) return int_signed(to) && wt >= wf;
+    return wt > wf || (wt == wf && !int_signed(to));
+}
+
 /* Storage at a fixed place: a local or a global, a field or tuple element of
- * one, or the ptr or len of a slice there. *m addresses it and *t is the type
- * gen_expr loads from it, so reading it is that one load. */
+ * one, or the ptr or len of a slice there, or a widening of an integer
+ * there; or the same through a pointer in a register local. *m addresses it
+ * (or is the register of a register local) and *t is the type gen_expr loads
+ * from it, so reading it is that one load. */
 static bool fixed_place(Expr *e, Opnd *m, Type **t) {
     while (e->kind == EXPR_GUARD) e = e->guard.body;
     switch (e->kind) {
+    case EXPR_CAST: {
+        Type *from = conc(e->cast.operand->type), *to = conc(e->cast.target);
+        return val_kind(from) == VK_INT && val_kind(to) == VK_INT && int_widens(from, to) &&
+               fixed_place(e->cast.operand, m, t);
+    }
     case EXPR_IDENT: {
         if (e->ident.is_std_stream || fn_static_target(e)) return false;
         const char *name = e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
         if (e->ident.is_local) {
-            int32_t off;
-            if (!local_find(name, &off)) return false;
-            *m = fp(off);
+            if (!local_find(name, m)) return false;
         } else {
             Symbol *s = e->ident.resolved_sym;
             if (s && s->decl && s->decl->kind == DECL_EXTERN) return false;
@@ -1510,7 +1604,7 @@ static bool fixed_place(Expr *e, Opnd *m, Type **t) {
             return true;
         }
         Type *ot = conc(e->field.object->type), *objt;
-        if (!fixed_place(e->field.object, m, &objt)) return false;
+        if (!fixed_place(e->field.object, m, &objt) || m->kind != OPND_MEM) return false;
         if (ot->kind == TYPE_SLICE) {
             if (val_kind(e->type) != VK_INT || int_width(e->type) != 8) return false;
             if (strcmp(e->field.name, "len") == 0) m->disp += 8;
@@ -1523,6 +1617,23 @@ static bool fixed_place(Expr *e, Opnd *m, Type **t) {
         m->disp += off;
         return true;
     }
+    case EXPR_DEREF_FIELD: {        /* through a pointer in a register local */
+        if (e->field.fixed_array_type) return false;
+        Type *objt, *st = conc(conc(e->field.object->type)->pointer.pointee);
+        if (!fixed_place(e->field.object, m, &objt) || m->kind != OPND_REG) return false;
+        Reg base = (Reg)m->base;
+        if (st->kind == TYPE_SLICE) {
+            if (val_kind(e->type) != VK_INT || int_width(e->type) != 8) return false;
+            *m = M(base, strcmp(e->field.name, "len") == 0 ? 8 : 0);
+            *t = e->type;
+            return true;
+        }
+        int64_t off;
+        ExtField *x;
+        if (!field_info_x(st, e->field.name, &off, t, &x) || x) return false;
+        *m = M(base, off);
+        return true;
+    }
     case EXPR_INDEX: {
         Type *ot = conc(e->index.object->type), *objt, *ft;
         if (ot->kind != TYPE_STRUCT || !ot->struc.is_tuple) return false;
@@ -1530,7 +1641,7 @@ static bool fixed_place(Expr *e, Opnd *m, Type **t) {
         snprintf(nm, sizeof nm, "e%llu", (unsigned long long)e->index.index->int_lit.value);
         int64_t off;
         if (!field_info(ot, intern_cstr(g_intern, nm), &off, &ft)) return false;
-        if (!fixed_place(e->index.object, m, &objt)) return false;
+        if (!fixed_place(e->index.object, m, &objt) || m->kind != OPND_MEM) return false;
         m->disp += off;
         *t = e->type;
         return true;
@@ -1560,7 +1671,7 @@ static bool leaf_to(Expr *e, Reg r) {
 }
 
 /* An integer leaf as an instruction's source operand: an immediate that
- * sign-extends from 32 bits, or an 8-byte fixed place. */
+ * sign-extends from 32 bits, an 8-byte fixed place, or a register local. */
 static bool leaf_src(Expr *e, Opnd *o) {
     int64_t v;
     Type *t;
@@ -1569,7 +1680,8 @@ static bool leaf_src(Expr *e, Opnd *o) {
         *o = IMM(v);
         return true;
     }
-    return fixed_place(e, o, &t) && val_kind(t) == VK_INT && int_width(t) == 8;
+    return fixed_place(e, o, &t) && val_kind(t) == VK_INT &&
+           (int_width(t) == 8 || o->kind == OPND_REG);
 }
 
 /* Load a float leaf (a literal, or a fixed place) into %xmm<n>. Scratch:
@@ -1579,11 +1691,12 @@ static bool float_leaf_to(Expr *e, int n) {
     Type *t;
     while (e->kind == EXPR_GUARD) e = e->guard.body;
     if (e->kind == EXPR_FLOAT_LIT) {
-        float_const_to(e->float_lit.value, e->float_lit.lit_type->kind == TYPE_FLOAT32, n, R11);
+        float_const_to(e->float_lit.value, e->float_lit.lit_type->kind == TYPE_FLOAT32, n);
         return true;
     }
     if (!fixed_place(e, &m, &t) || val_kind(t) != VK_FLOAT) return false;
-    (is_f32(t) ? movss(m, X(n)) : movsd(m, X(n)));
+    if (m.kind == OPND_XMM) { if (m.base != n) movaps(m, X(n)); }
+    else (is_f32(t) ? movss(m, X(n)) : movsd(m, X(n)));
     return true;
 }
 
@@ -1591,6 +1704,66 @@ static bool float_leaf_to(Expr *e, int n) {
 static void src_to_rcx(Opnd o) {
     if (o.kind == OPND_IMM) mov_imm_to(o.disp, RCX);
     else if (!(o.kind == OPND_REG && o.base == RCX)) movq(o, R(RCX));
+}
+
+/* ---- Holds: a value kept while its sibling is evaluated ----
+ * Code that makes no call leaves %r8-%r10 and %xmm2-%xmm4 alone (calls use
+ * them for arguments), so a value held across such code stays in one of
+ * them, nested holds in the next; else it goes to a spill slot. */
+
+static const Reg HOLD_REGS[] = { R10, R9, R8 };
+enum { NHOLD = sizeof HOLD_REGS / sizeof HOLD_REGS[0] };
+static int g_hold_n;
+
+/* Whether evaluating e makes no call (but on a failure path, which does not
+ * return): a conservative test. Nothing it accepts assigns either, so code
+ * it accepts has no effect, and a read may move across it. */
+static bool call_free(Expr *e) {
+    switch (e->kind) {
+    case EXPR_INT_LIT: case EXPR_FLOAT_LIT: case EXPR_BOOL_LIT: case EXPR_CHAR_LIT:
+    case EXPR_STRING_LIT: case EXPR_CSTRING_LIT: case EXPR_IDENT: case EXPR_SIZEOF:
+    case EXPR_ALIGNOF: case EXPR_TYPE_VAR_REF:
+        return true;
+    case EXPR_GUARD:
+        return call_free(e->guard.body);
+    case EXPR_CAST: {
+        Type *from = conc(e->cast.operand->type), *to = conc(e->cast.target);
+        if ((is_str_type(from) && is_cstr_type(to)) || (is_cstr_type(from) && is_str_type(to))) return false;
+        return call_free(e->cast.operand);
+    }
+    case EXPR_BINARY:
+        if ((e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ) && needs_eq_func(e->binary.left->type))
+            return false;
+        return call_free(e->binary.left) && call_free(e->binary.right);
+    case EXPR_UNARY_PREFIX:
+        return call_free(e->unary_prefix.operand);
+    case EXPR_FIELD: case EXPR_DEREF_FIELD:
+        return !e->field.object || call_free(e->field.object);
+    case EXPR_INDEX:
+        return call_free(e->index.object) && call_free(e->index.index);
+    default:
+        return false;
+    }
+}
+
+/* Hold %rax (%xmm0 when is_float) while `sibling` is evaluated; hold_take
+ * gives the place to read it back from, and hold_pop ends the hold. */
+static Opnd hold_push(Expr *sibling, bool is_float) {
+    Opnd h;
+    if (g_hold_n < NHOLD && call_free(sibling)) {
+        h = is_float ? X(2 + g_hold_n) : R(HOLD_REGS[g_hold_n]);
+        g_hold_n++;
+    } else {
+        h = fp(spill_push());
+    }
+    if (is_float) (h.kind == OPND_XMM ? movaps(X(0), h) : movq(X(0), h));
+    else movq(R(RAX), h);
+    return h;
+}
+
+static void hold_pop(Opnd h) {
+    if (h.kind == OPND_MEM) spill_pop();
+    else g_hold_n--;
 }
 
 /* ---- Identifiers and globals ---- */
@@ -1646,12 +1819,12 @@ static void gen_ident(Expr *e) {
     }
     const char *name = e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
     if (e->ident.is_local) {
-        int32_t off;
-        if (!local_find(name, &off)) {
+        Opnd home;
+        if (!local_find(name, &home)) {
             internal_error(e->loc, "unknown local '%s'", name);
             return;
         }
-        load_val(e->type, fp(off));
+        load_val(e->type, home);
         return;
     }
     Symbol *s = e->ident.resolved_sym;
@@ -1664,16 +1837,18 @@ static void gen_ident(Expr *e) {
 
 /* ---- Address of an lvalue ---- */
 
-static void gen_slice_elem_addr(Expr *e);
+static Opnd gen_slice_elem(Expr *e, bool sib);
+static Opnd gen_ptr_elem(Expr *e, bool sib);
 
 static void gen_addr(Expr *e) {
     switch (e->kind) {
     case EXPR_IDENT: {
         const char *name = e->ident.codegen_name ? e->ident.codegen_name : e->ident.name;
         if (e->ident.is_local) {
-            int32_t off;
-            if (!local_find(name, &off)) { internal_error(e->loc, "unknown local '%s'", name); return; }
-            leaq(fp(off), R(RAX));
+            Opnd home;
+            if (!local_find(name, &home)) { internal_error(e->loc, "unknown local '%s'", name); return; }
+            if (home.kind != OPND_MEM) { internal_error(e->loc, "the address of register local '%s'", name); return; }
+            leaq(home, R(RAX));
         } else {
             leaq(RIPREL(asm_sym(name), 0), R(RAX));
         }
@@ -1710,21 +1885,8 @@ static void gen_addr(Expr *e) {
                 leaq(M(RAX, off), R(RAX));
             return;
         }
-        if (ot->kind == TYPE_SLICE) { gen_slice_elem_addr(e); return; }
-        /* Pointer indexing: unchecked. */
-        int64_t es = ty_size(ot->pointer.pointee);
-        gen_expr(e->index.object);
-        if (leaf_to(e->index.index, RCX)) {
-            if (es != 1) imulq3(es, R(RCX), R(RCX));
-            addq(R(RCX), R(RAX));
-            return;
-        }
-        int32_t s = spill_push();
-        movq(R(RAX), fp(s));
-        gen_expr(e->index.index);
-        if (es != 1) imulq3(es, R(RAX), R(RAX));
-        addq(fp(s), R(RAX));
-        spill_pop();
+        if (ot->kind == TYPE_SLICE) gen_slice_elem(e, false);
+        else gen_ptr_elem(e, false);
         return;
     }
     case EXPR_UNARY_PREFIX:
@@ -1746,42 +1908,144 @@ static void gen_addr(Expr *e) {
     if (val_kind(e->type) != VK_AGG) internal_error(e->loc, "address of a non-lvalue");
 }
 
-/* &s[i] with the bounds check. */
-static void gen_slice_elem_addr(Expr *e) {
+static bool sib_scale(int64_t es) { return es == 1 || es == 2 || es == 4 || es == 8; }
+
+/* s[i] with the bounds check: the element's place, at (%rax) or, with sib,
+ * indexed by %rax from %rcx. */
+/* The storage of a struct's fixed-array field f when it needs no code to
+ * find: in a local or a global, or through a pointer in a register local. */
+static bool fixed_array_place(Expr *f, Opnd *m) {
+    Type *t, *st = conc(f->field.object->type);
+    if (f->kind == EXPR_DEREF_FIELD) st = conc(st->pointer.pointee);
+    int64_t off;
+    Type *ft;
+    ExtField *x;
+    if (!field_info_x(st, f->field.name, &off, &ft, &x) || x) return false;
+    if (!fixed_place(f->field.object, m, &t)) return false;
+    if (f->kind == EXPR_DEREF_FIELD) {
+        if (m->kind != OPND_REG) return false;
+        *m = M((Reg)m->base, off);
+    } else {
+        if (m->kind != OPND_MEM) return false;
+        m->disp += off;
+    }
+    return true;
+}
+
+/* The index into a register, returned: %rax, or the register local that
+ * holds it. The container's place is in *at: evaluated first when it takes
+ * code (eval: its address or value into %rax), else just found. The place
+ * is then based on %rdx. */
+static Reg index_operands(Expr *e, Opnd *at, bool found, void (*eval)(Expr *)) {
+    if (found) {
+        Opnd m;
+        Type *t;
+        if (fixed_place(e->index.index, &m, &t) && m.kind == OPND_REG) return (Reg)m.base;
+        gen_expr(e->index.index);
+        return RAX;
+    }
+    eval(e->index.object);
+    if (is_int_leaf(e->index.index)) {
+        movq(R(RAX), R(RDX));
+        leaf_to(e->index.index, RAX);
+    } else {
+        Opnd h = hold_push(e->index.index, false);
+        gen_expr(e->index.index);
+        movq(h, R(RDX));
+        hold_pop(h);
+    }
+    *at = M(RDX, 0);
+    return RAX;
+}
+
+/* The bounds check of the index in ix against len (an operand). */
+static void index_check(Expr *e, Reg ix, Opnd len) {
+    if (g_guards_suppressed && facts_guard_governs(e, subst_resolve)) return;
+    bool uns = !int_signed(e->index.index->type);
+    if (len.kind == OPND_IMM && !fits_imm32(len.disp)) {
+        movabsq(len.disp, R(RCX));
+        len = R(RCX);
+    }
+    cmpq(len, R(ix));
+    int m = msg_label(e->loc, uns ? "slice index out of range: index=%llu len=%llu\n"
+                                  : "slice index out of range: index=%lld len=%llu\n");
+    int l = fail_begin();
+    if (len.kind == OPND_IMM) mov_imm_to(len.disp, RCX);
+    else if (!(len.kind == OPND_REG && len.base == RCX)) movq(len, R(RCX));
+    movq(R(ix), R(RDX));
+    fail_end(m);
+    jcc(CC_AE, l);
+}
+
+/* The container is evaluated before the index. One found without code is
+ * found after it instead, which is the same when the index has no effect
+ * (call_free), or when the container is storage at a fixed address. */
+static Opnd gen_slice_elem(Expr *e, bool sib) {
     Type *ot = conc(e->index.object->type), *ht;
     int64_t es = ty_size(ot->slice.elem);
-    Opnd hdr;       /* the slice: its ptr, then its len */
-    if (fixed_place(e->index.object, &hdr, &ht)) {
-        gen_expr(e->index.index);
-    } else {
-        gen_expr(e->index.object);
-        if (is_int_leaf(e->index.index)) {
-            movq(R(RAX), R(RDX));
-            leaf_to(e->index.index, RAX);
-        } else {
-            int32_t s = spill_push();
-            movq(R(RAX), fp(s));
-            gen_expr(e->index.index);
-            movq(fp(s), R(RDX));
-            spill_pop();
+    Expr *obj = e->index.object;
+    bool pure = call_free(e->index.index);
+    while (obj->kind == EXPR_GUARD) obj = obj->guard.body;
+    if ((obj->kind == EXPR_FIELD || obj->kind == EXPR_DEREF_FIELD) && obj->field.fixed_array_type) {
+        /* A fixed-array field: indexed in place, its length a constant. In a
+         * local or a global it stays where it is; through a pointer, the
+         * index might change the pointer. */
+        Opnd arr;
+        bool found = fixed_array_place(obj, &arr) && (pure || arr.base == RBP || arr.base == RIP);
+        Reg ix = index_operands(e, &arr, found, gen_addr);
+        index_check(e, ix, IMM(fixarr_size(obj->field.fixed_array_type)));
+        if (arr.base != RIP && arr.index < 0 && sib_scale(es)) {
+            Opnd el = MI((Reg)arr.base, ix, (int)es, arr.disp);
+            if (sib) return el;
+            leaq(el, R(RAX));
+            return M(RAX, 0);
         }
-        hdr = M(RDX, 0);
+        if (ix != RAX) movq(R(ix), R(RAX));
+        scale_reg(es, RAX);
+        leaq(arr, R(RCX));
+        addq(R(RCX), R(RAX));
+        return M(RAX, 0);
+    }
+    Opnd hdr;       /* the slice: its ptr, then its len */
+    Reg ix = RAX;
+    if (pure) {
+        ix = index_operands(e, &hdr, fixed_place(e->index.object, &hdr, &ht), gen_expr);
+    } else {
+        /* The index might change the slice where it is: a copy first. */
+        gen_expr(e->index.object);
+        hdr = fp(temp_alloc(ot));
+        copy_mem(RBP, hdr.disp, RAX, 0, 16);
+        gen_expr(e->index.index);
     }
     Opnd len = hdr;
     len.disp += 8;
-    if (!(g_guards_suppressed && facts_guard_governs(e, subst_resolve))) {
-        bool uns = !int_signed(e->index.index->type);
-        movq(len, R(RCX));
-        cmpq(R(RCX), R(RAX));
-        int m = msg_label(e->loc, uns ? "slice index out of range: index=%llu len=%llu\n"
-                                      : "slice index out of range: index=%lld len=%llu\n");
-        int l = fail_begin();
-        movq(R(RAX), R(RDX));
-        fail_end(m);
-        jcc(CC_AE, l);
+    index_check(e, ix, len);
+    if (sib && sib_scale(es)) {
+        movq(hdr, R(RCX));
+        return MI(RCX, ix, (int)es, 0);
     }
-    if (es != 1) imulq3(es, R(RAX), R(RAX));
+    if (ix != RAX) movq(R(ix), R(RAX));
+    scale_reg(es, RAX);
     addq(hdr, R(RAX));
+    return M(RAX, 0);
+}
+
+/* p[i], unchecked: the element's place, at (%rax) or, with sib, indexed. */
+static Opnd gen_ptr_elem(Expr *e, bool sib) {
+    int64_t es = ty_size(conc(e->index.object->type)->pointer.pointee);
+    gen_expr(e->index.object);
+    if (leaf_to(e->index.index, RCX)) {
+        if (sib && sib_scale(es)) return MI(RAX, RCX, (int)es, 0);
+        scale_reg(es, RCX);
+        addq(R(RCX), R(RAX));
+        return M(RAX, 0);
+    }
+    Opnd h = hold_push(e->index.index, false);
+    gen_expr(e->index.index);
+    scale_reg(es, RAX);
+    addq(h, R(RAX));
+    hold_pop(h);
+    return M(RAX, 0);
 }
 
 /* ---- Fields ---- */
@@ -1929,12 +2193,11 @@ static void gen_operands(Expr *l, Expr *r) {
     if (val_kind(l->type) == VK_FLOAT) {
         gen_expr(l);
         if (float_leaf_to(r, 1)) return;
-        int32_t s = spill_push();
-        movq(X(0), fp(s));
+        Opnd h = hold_push(r, true);
         gen_expr(r);
         movaps(X(0), X(1));
-        movq(fp(s), X(0));
-        spill_pop();
+        (h.kind == OPND_XMM ? movaps(h, X(0)) : movq(h, X(0)));
+        hold_pop(h);
         return;
     }
     int64_t v;
@@ -1946,12 +2209,11 @@ static void gen_operands(Expr *l, Expr *r) {
     }
     gen_expr(l);
     if (leaf_to(r, RCX)) return;
-    int32_t s = spill_push();
-    movq(R(RAX), fp(s));
+    Opnd h = hold_push(r, false);
     gen_expr(r);
     movq(R(RAX), R(RCX));
-    movq(fp(s), R(RAX));
-    spill_pop();
+    movq(h, R(RAX));
+    hold_pop(h);
 }
 
 /* x / c and x % c for a constant c that is neither 0 nor, signed, -1: no
@@ -2043,29 +2305,55 @@ static void gen_divmod(Expr *e, Type *rt) {
     label(ldone);
 }
 
+/* A float leaf as an instruction's source operand: a float register local,
+ * a fixed place, or a literal from the constant pool. */
+static bool float_src(Expr *e, Opnd *o) {
+    Type *t;
+    while (e->kind == EXPR_GUARD) e = e->guard.body;
+    if (e->kind == EXPR_FLOAT_LIT) {
+        *o = fconst(e->float_lit.value, e->float_lit.lit_type->kind == TYPE_FLOAT32);
+        return true;
+    }
+    return fixed_place(e, o, &t) && val_kind(t) == VK_FLOAT;
+}
+
+/* Evaluate two float operands: the left into %xmm0, and the right as the
+ * instruction's source (float_src) when it is a leaf, else into %xmm1.
+ * With want_reg the source must be a register: an instruction comparing
+ * the other way round takes it as the destination. */
+static Opnd gen_float_operands(Expr *l, Expr *r, bool want_reg) {
+    Opnd o;
+    if (float_src(r, &o) && (!want_reg || o.kind == OPND_XMM)) {
+        gen_expr(l);
+        return o;
+    }
+    gen_operands(l, r);
+    return X(1);
+}
+
 static void gen_float_binary(Expr *e) {
     int op = e->binary.op;
     bool f = is_f32(e->binary.left->type);
-    gen_operands(e->binary.left, e->binary.right);
+    Opnd src = gen_float_operands(e->binary.left, e->binary.right, op == TOK_LT || op == TOK_LTEQ);
     switch (op) {
-    case TOK_PLUS: sse(f ? SSE_ADDSS : SSE_ADDSD, X(1), X(0)); return;
-    case TOK_MINUS: sse(f ? SSE_SUBSS : SSE_SUBSD, X(1), X(0)); return;
-    case TOK_STAR: sse(f ? SSE_MULSS : SSE_MULSD, X(1), X(0)); return;
-    case TOK_SLASH: sse(f ? SSE_DIVSS : SSE_DIVSD, X(1), X(0)); return;
+    case TOK_PLUS: sse(f ? SSE_ADDSS : SSE_ADDSD, src, X(0)); return;
+    case TOK_MINUS: sse(f ? SSE_SUBSS : SSE_SUBSD, src, X(0)); return;
+    case TOK_STAR: sse(f ? SSE_MULSS : SSE_MULSD, src, X(0)); return;
+    case TOK_SLASH: sse(f ? SSE_DIVSS : SSE_DIVSD, src, X(0)); return;
     default: break;
     }
     SseOp uc = f ? SSE_UCOMISS : SSE_UCOMISD;
     switch (op) {
     case TOK_EQEQ:
-        sse(uc, X(1), X(0)); setcc(CC_E, R(RAX)); setcc(CC_NP, R(RCX)); andb(R(RCX), R(RAX));
+        sse(uc, src, X(0)); setcc(CC_E, R(RAX)); setcc(CC_NP, R(RCX)); andb(R(RCX), R(RAX));
         break;
     case TOK_BANGEQ:
-        sse(uc, X(1), X(0)); setcc(CC_NE, R(RAX)); setcc(CC_P, R(RCX)); orb(R(RCX), R(RAX));
+        sse(uc, src, X(0)); setcc(CC_NE, R(RAX)); setcc(CC_P, R(RCX)); orb(R(RCX), R(RAX));
         break;
-    case TOK_GT: sse(uc, X(1), X(0)); setcc(CC_A, R(RAX)); break;
-    case TOK_GTEQ: sse(uc, X(1), X(0)); setcc(CC_AE, R(RAX)); break;
-    case TOK_LT: sse(uc, X(0), X(1)); setcc(CC_A, R(RAX)); break;
-    case TOK_LTEQ: sse(uc, X(0), X(1)); setcc(CC_AE, R(RAX)); break;
+    case TOK_GT: sse(uc, src, X(0)); setcc(CC_A, R(RAX)); break;
+    case TOK_GTEQ: sse(uc, src, X(0)); setcc(CC_AE, R(RAX)); break;
+    case TOK_LT: sse(uc, X(0), src); setcc(CC_A, R(RAX)); break;
+    case TOK_LTEQ: sse(uc, X(0), src); setcc(CC_AE, R(RAX)); break;
     default:
         internal_error(e->loc, "float operator %s", token_kind_name(op));
         return;
@@ -2096,7 +2384,14 @@ static Opnd gen_int_operands(Expr *l, Expr *r) {
 
 /* Compare two integer operands: the flags for cond_for's condition. */
 static void gen_int_compare(Expr *l, Expr *r) {
-    Opnd o = gen_int_operands(l, r);
+    Opnd lr, o;
+    Type *t;
+    if (fixed_place(l, &lr, &t) && lr.kind == OPND_REG && leaf_src(r, &o)) {
+        if (o.kind == OPND_IMM && o.disp == 0) testq(lr, lr);
+        else cmpq(o, lr);
+        return;
+    }
+    o = gen_int_operands(l, r);
     if (o.kind == OPND_IMM && o.disp == 0) testq(R(RAX), R(RAX));
     else cmpq(o, R(RAX));
 }
@@ -2142,11 +2437,11 @@ static void gen_binary_op(Expr *e) {
         }
         if (lt->kind == TYPE_POINTER) {
             int64_t es = ty_size(lt->pointer.pointee);
-            if (es != 1) imulq3(es, R(RCX), R(RCX));
+            scale_reg(es, RCX);
             (op == TOK_PLUS ? addq(R(RCX), R(RAX)) : subq(R(RCX), R(RAX)));
         } else {
             int64_t es = ty_size(rtt->pointer.pointee);
-            if (es != 1) imulq3(es, R(RAX), R(RAX));
+            scale_reg(es, RAX);
             addq(R(RCX), R(RAX));
         }
         return;
@@ -2179,7 +2474,11 @@ static void gen_binary_op(Expr *e) {
             }
             return;
         }
-        gen_arith(op, src);
+        int k = 0;
+        if (!checked && op == TOK_STAR && src.kind == OPND_IMM && src.disp > 1)
+            while (k < 31 && src.disp != (int64_t)1 << k) k++;
+        if (k > 0 && k < 31) shlq(IMM(k), R(RAX));
+        else gen_arith(op, src);
         if (checked) {
             movq(R(RAX), R(RDX));
             normalize(rt);
@@ -2422,6 +2721,8 @@ typedef struct {
     Type *type;     /* concrete type as passed */
     int32_t slot;   /* frame offset: an 8-byte scalar, or the aggregate's bytes */
     bool zero;      /* the constant 0 (a null context) */
+    Expr *leaf;     /* a scalar read when the call is made (arg_at_call) */
+    bool in_acc;    /* a scalar left in %rax or %xmm0: the last one evaluated */
 } CallArg;
 
 typedef struct {
@@ -2436,14 +2737,52 @@ typedef struct {
 
 static const Reg IREG[6] = { RDI, RSI, RDX, RCX, R8, R9 };
 
-/* Evaluate an argument into a fresh slot. Returns true when it took a
- * spill slot (the caller pops it after the call). */
-static bool eval_arg(Expr *a, CallArg *ca) {
+static bool assign_pred(Expr *e, void *ctx) {
+    (void)ctx;
+    return e->kind == EXPR_ASSIGN || expr_any_child(e, assign_pred, NULL);
+}
+
+static HMap g_addr_taken;          /* locals whose address is taken: name -> 1 */
+static bool g_addr_known;           /* g_addr_taken is filled for this function */
+
+/* Whether argument i of n can be read when the call is made instead of in
+ * its turn: a constant, or a scalar local whose address is not taken (so no
+ * call can change it) and which no later argument assigns. */
+static bool arg_at_call(Expr **args, int i, int n) {
+    Expr *a = args[i];
+    ValKind k = val_kind(a->type);
+    int64_t v;
+    Opnd m;
+    Type *t;
+    if (k == VK_INT && int_leaf(a, &v)) return true;
+    Expr *b = a;
+    while (b->kind == EXPR_GUARD || b->kind == EXPR_CAST)
+        b = b->kind == EXPR_GUARD ? b->guard.body : b->cast.operand;
+    if (k == VK_FLOAT && b->kind == EXPR_FLOAT_LIT && b == a) return true;
+    if (b->kind != EXPR_IDENT || !b->ident.is_local || !g_addr_known) return false;
+    if (k != VK_INT && k != VK_FLOAT) return false;
+    if (!fixed_place(a, &m, &t) || val_kind(t) != k) return false;
+    const char *name = b->ident.codegen_name ? b->ident.codegen_name : b->ident.name;
+    if (hmap_get(&g_addr_taken, name, strlen(name))) return false;
+    for (int j = i + 1; j < n; j++)
+        if (args[j]->kind == EXPR_ASSIGN || expr_any_child(args[j], assign_pred, NULL)) return false;
+    return true;
+}
+
+/* Evaluate an argument into a fresh slot, or not at all when it is read at
+ * the call (at_call), or into %rax or %xmm0 when it is the last argument
+ * evaluated (last). Returns true when it took a spill slot (the caller pops
+ * it after the call). */
+static bool eval_arg(Expr *a, CallArg *ca, bool at_call, bool last) {
     Type *t = conc(a->type);
     ca->type = t;
     ca->zero = false;
     ca->slot = 0;
+    ca->leaf = NULL;
+    ca->in_acc = false;
+    if (at_call) { ca->leaf = a; return false; }
     gen_expr(a);
+    if (last && (val_kind(t) == VK_INT || val_kind(t) == VK_FLOAT)) { ca->in_acc = true; return false; }
     switch (val_kind(t)) {
     case VK_INT: ca->slot = spill_push(); movq(R(RAX), fp(ca->slot)); return true;
     case VK_FLOAT: ca->slot = spill_push(); movq(X(0), fp(ca->slot)); return true;
@@ -2460,6 +2799,8 @@ static bool eval_arg(Expr *a, CallArg *ca) {
 static void arg_from_rax(CallArg *ca, Type *t) {
     ca->type = t;
     ca->zero = false;
+    ca->leaf = NULL;
+    ca->in_acc = false;
     ca->slot = slot_alloc(8, 8);
     movq(R(RAX), fp(ca->slot));
 }
@@ -2494,16 +2835,56 @@ static bool emit_call(CallSpec *cs, CallArg *args, int n) {
     bool tail = cs->tail && total == 0 && (!mem_ret || g_hidden_ret);
     int32_t res = 0;
     if (mem_ret && !tail) res = temp_alloc(cs->ret);
+    if (g_hold_n) internal_error((SrcLoc){0}, "a call while a value is held in a register");
     if (total) subq(IMM(total), R(RSP));
+    /* Stack arguments first, through %r11, which leaves the value in %rax or
+     * %xmm0 (in_acc) alone. */
     for (int i = 0; i < n; i++) {
         if (where[i] != 2) continue;
-        if (args[i].zero) { movq(IMM(0), M(RSP, soff[i])); continue; }
-        if (val_kind(args[i].type) == VK_AGG)
+        Opnd at = M(RSP, soff[i]);
+        if (args[i].zero) { movq(IMM(0), at); continue; }
+        ValKind k = val_kind(args[i].type);
+        if (args[i].in_acc) { (k == VK_FLOAT ? movq(X(0), at) : movq(R(RAX), at)); continue; }
+        if (args[i].leaf && k == VK_INT) { leaf_to(args[i].leaf, R11); movq(R(R11), at); continue; }
+        if (args[i].leaf) {
+            Expr *lf = args[i].leaf;
+            Opnd m;
+            Type *ft;
+            while (lf->kind == EXPR_GUARD) lf = lf->guard.body;
+            if (lf->kind == EXPR_FLOAT_LIT) {
+                double d = lf->float_lit.value;
+                if (is_f32(args[i].type)) { float f = (float)d; uint32_t b; memcpy(&b, &f, 4); movl(IMM(b), R(R11)); }
+                else { uint64_t b; memcpy(&b, &d, 8); movabsq((int64_t)b, R(R11)); }
+            } else if (fixed_place(lf, &m, &ft)) {
+                (is_f32(ft) ? movl(m, R(R11)) : movq(m, R(R11)));
+            }
+            movq(R(R11), at);
+            continue;
+        }
+        if (k == VK_AGG)
             copy_mem(RSP, soff[i], RBP, args[i].slot, align_up(ty_size(args[i].type), 8));
         else {
             movq(fp(args[i].slot), R(R11));
-            movq(R(R11), M(RSP, soff[i]));
+            movq(R(R11), at);
         }
+    }
+    /* Register arguments: the one in %rax or %xmm0 first, since loading the
+     * others may use those. */
+    int *reg = xcalloc((size_t)(n > 0 ? n : 1), sizeof(int));
+    ni = mem_ret ? 1 : 0;
+    ns = 0;
+    for (int i = 0; i < n; i++) {
+        if (where[i] != 1) continue;
+        if (args[i].zero) { reg[i] = ni++; continue; }
+        ValKind k = val_kind(args[i].type);
+        if (k == VK_INT) { reg[i] = ni++; continue; }
+        if (k == VK_FLOAT) { reg[i] = ns++; continue; }
+        for (int q = 0; q < ab[i].n; q++) (ab[i].cls[q] == 'I' ? ni++ : ns++);
+    }
+    for (int i = 0; i < n; i++) {
+        if (where[i] != 1 || !args[i].in_acc) continue;
+        if (val_kind(args[i].type) == VK_FLOAT) { if (reg[i]) movaps(X(0), X(reg[i])); }
+        else movq(R(RAX), R(IREG[reg[i]]));
     }
     ni = mem_ret ? 1 : 0;
     ns = 0;
@@ -2511,6 +2892,12 @@ static bool emit_call(CallSpec *cs, CallArg *args, int n) {
         if (where[i] != 1) continue;
         if (args[i].zero) { xorl(R(IREG[ni]), R(IREG[ni])); ni++; continue; }
         ValKind k = val_kind(args[i].type);
+        if (args[i].in_acc) { (k == VK_FLOAT ? ns++ : ni++); continue; }
+        if (args[i].leaf) {
+            if (k == VK_FLOAT) float_leaf_to(args[i].leaf, ns++);
+            else leaf_to(args[i].leaf, IREG[ni++]);
+            continue;
+        }
         if (k == VK_INT) { movq(fp(args[i].slot), R(IREG[ni++])); continue; }
         if (k == VK_FLOAT) { movq(fp(args[i].slot), X(ns++)); continue; }
         for (int q = 0; q < ab[i].n; q++) {
@@ -2518,6 +2905,7 @@ static bool emit_call(CallSpec *cs, CallArg *args, int n) {
             else movq(fp(args[i].slot + 8 * q), X(ns++));
         }
     }
+    free(reg);
     if (mem_ret) {
         if (tail) movq(fp(g_hidden_ret), R(RDI));
         else leaq(fp(res), R(RDI));
@@ -2526,6 +2914,7 @@ static bool emit_call(CallSpec *cs, CallArg *args, int n) {
     if (cs->variadic) movl(IMM(ns), R(RAX));
     free(where); free(soff); free(ab);
     if (tail) {
+        restore_saved();
         leave();
         x_cfi(g_cur, CFI_LEFT);
         if (!cs->sym) jmp_ind(R(R11));
@@ -2561,7 +2950,10 @@ static bool emit_call(CallSpec *cs, CallArg *args, int n) {
 }
 
 /* A runtime library call with arguments already in registers. */
-static void call_c(const char *sym) { call_plt(sym); }
+static void call_c(const char *sym) {
+    if (g_hold_n) internal_error((SrcLoc){0}, "a call to %s while a value is held in a register", sym);
+    call_plt(sym);
+}
 
 static const char *resolve_direct_name(Expr *e) {
     Expr *callee = e->call.func;
@@ -2678,6 +3070,16 @@ static bool gen_call(Expr *e, bool want_tail) {
             unw[i] = widen_for_instance(&e->call.args[i], ft->func.param_types[i]);
     }
     CallArg *args = xcalloc((size_t)n + 1, sizeof(CallArg));
+    bool *at = xcalloc((size_t)n + 1, sizeof(bool));
+    int last = -1;          /* the last argument evaluated in its turn */
+    for (int i = 0; i < n; i++) {
+        Type *pt = (e->call.is_extern_call && ft && ft->kind == TYPE_FUNC && i < ft->func.param_count)
+            ? conc(ft->func.param_types[i]) : NULL;
+        bool own = e->call.is_extern_call && (pt ? pt->kind == TYPE_FUNC || pt->kind == TYPE_OPTION
+                                                 : is_f32(e->call.args[i]->type));
+        at[i] = !own && arg_at_call(e->call.args, i, n);    /* `own`: the C forms below */
+        if (!at[i]) last = i;
+    }
     int nspill = 0;
     CallSpec cs = { 0 };
     cs.ret = conc(e->type);
@@ -2687,7 +3089,7 @@ static bool gen_call(Expr *e, bool want_tail) {
         gen_expr(fn);
         int32_t fs = slot_alloc(16, 8);
         copy_mem(RBP, fs, RAX, 0, 16);
-        for (int i = 0; i < n; i++) nspill += eval_arg(e->call.args[i], &args[i]);
+        for (int i = 0; i < n; i++) nspill += eval_arg(e->call.args[i], &args[i], at[i], i == last);
         args[n].type = type_any_ptr();
         args[n].slot = fs + 8;
         cs.fn_slot = fs;
@@ -2716,7 +3118,7 @@ static bool gen_call(Expr *e, bool want_tail) {
                     args[i].slot = slot_alloc(8, 8);
                     movq(X(0), fp(args[i].slot));
                 } else {
-                    nspill += eval_arg(a, &args[i]);
+                    nspill += eval_arg(a, &args[i], at[i], i == last);
                 }
             }
             cs.sym = name;
@@ -2735,7 +3137,7 @@ static bool gen_call(Expr *e, bool want_tail) {
                 did_tail = emit_call(&cs, args, n);
             }
         } else {
-            for (int i = 0; i < n; i++) nspill += eval_arg(e->call.args[i], &args[i]);
+            for (int i = 0; i < n; i++) nspill += eval_arg(e->call.args[i], &args[i], at[i], i == last);
             args[n].zero = true;
             args[n].type = type_any_ptr();
             cs.sym = name;
@@ -2744,6 +3146,7 @@ static bool gen_call(Expr *e, bool want_tail) {
     }
     while (nspill-- > 0) spill_pop();
     free(args);
+    free(at);
     for (int i = 0; unw && i < n; i++)
         if (unw[i]) e->call.args[i] = unw[i];
     free(unw);
@@ -2770,12 +3173,7 @@ static F2i f2i_info(Type *t) {
     }
 }
 
-static void dbl_to_xmm1(double v) {
-    uint64_t bits;
-    memcpy(&bits, &v, 8);
-    movabsq(bits, R(R11));
-    movq(R(R11), X(1));
-}
+static void dbl_to_xmm1(double v) { float_const_to(v, false, 1); }
 
 /* Truncate the double in %xmm0 (in range for `to`) into %rax. */
 static void cvt_double_to_int(Type *to) {
@@ -3055,7 +3453,7 @@ static void gen_array_lit(Expr *e, bool dynamic) {
         dyn_alloca_rax();
     } else {
         movq(fp(nslot), R(RAX));
-        if (es != 1) imulq3(es, R(RAX), R(RAX));
+        scale_reg(es, RAX);
         dyn_alloca_rax();
     }
     movq(R(RAX), fp(hdr));
@@ -3066,7 +3464,7 @@ static void gen_array_lit(Expr *e, bool dynamic) {
         else {
             movq(fp(hdr), R(RDI));
             movq(fp(hdr + 8), R(RCX));
-            if (es != 1) imulq3(es, R(RCX), R(RCX));
+            scale_reg(es, RCX);
             xorl(R(RAX), R(RAX));
             rep_stosb();
         }
@@ -3187,12 +3585,12 @@ static void fill_captures(Expr *lam, Reg base, int64_t base_off) {
     ctx_layout(lam, offs, NULL);
     for (int i = 0; i < n; i++) {
         Capture *c = &lam->func.captures[i];
-        int32_t loc;
-        if (!local_find(c->codegen_name, &loc)) {
+        Opnd home;
+        if (!local_find(c->codegen_name, &home)) {
             internal_error(lam->loc, "capture '%s' not in scope", c->name);
             continue;
         }
-        load_val(c->type, fp(loc));
+        load_val(c->type, home);
         if (base != RBP) {
             /* the base pointer lives in a spill slot passed as base_off */
             movq(fp((int32_t)base_off), R(RDX));
@@ -3257,14 +3655,14 @@ static void gen_alloc(Expr *e) {
         if (at && e->alloc_expr.size_expr && e->alloc_expr.alloc_raw) {
             gen_expr(e->alloc_expr.size_expr);
             int64_t es = ty_size(at);
-            if (es != 1) imulq3(es, R(RAX), R(RAX));
+            scale_reg(es, RAX);
             dyn_alloca_rax();
         } else if (at && e->alloc_expr.size_expr) {
             int64_t es = ty_size(at);
             gen_expr(e->alloc_expr.size_expr);
             int32_t t = slot_alloc(16, 8);
             movq(R(RAX), fp(t + 8));
-            if (es != 1) imulq3(es, R(RAX), R(RAX));
+            scale_reg(es, RAX);
             int32_t bytes = slot_alloc(8, 8);
             movq(R(RAX), fp(bytes));
             dyn_alloca_rax();
@@ -3460,7 +3858,7 @@ static void gen_alloc(Expr *e) {
         copy_mem(RBP, s, RAX, 0, 16);
         movq(fp(s + 8), R(RAX));
         alloc_n_rdi();
-        if (es != 1) imulq3(es, R(RDI), R(RDI));
+        scale_reg(es, RDI);
         call_c("malloc");
         int lnull = new_label();
         int32_t p = slot_alloc(8, 8);
@@ -3470,7 +3868,7 @@ static void gen_alloc(Expr *e) {
         movq(R(RAX), R(RDI));
         movq(fp(s), R(RSI));
         movq(fp(s + 8), R(RDX));
-        if (es != 1) imulq3(es, R(RDX), R(RDX));
+        scale_reg(es, RDX);
         call_c("memcpy");
         label(lnull);
         movq(fp(p), R(RAX));
@@ -3744,6 +4142,12 @@ static bool store_leaf(Type *t, Expr *value) {
             x_mov(g_cur, w, IMM(v), M(RAX, 0));
             return true;
         }
+        Opnd m;
+        Type *mt;
+        if (fixed_place(value, &m, &mt) && m.kind == OPND_REG) {
+            x_mov(g_cur, w, m, M(RAX, 0));
+            return true;
+        }
         if (!leaf_to(value, RCX)) return false;
         x_mov(g_cur, w, R(RCX), M(RAX, 0));
         return true;
@@ -3785,7 +4189,7 @@ static void gen_assign(Expr *e) {
         movq(fp(dst), R(RDI));
         movq(fp(src), R(RSI));
         movq(fp(src + 8), R(RCX));
-        if (es != 1) imulq3(es, R(RCX), R(RCX));
+        scale_reg(es, RCX);
         rep_movsb();
         return;
     }
@@ -3806,19 +4210,26 @@ static void gen_assign(Expr *e) {
     }
     Opnd m;
     Type *mt;
-    if (fixed_place(target, &m, &mt) && (val_kind(target->type) != VK_AGG || m.base == RBP)) {
+    /* A place through a register pointer is found before the value is
+     * evaluated, so the value must not change the pointer. */
+    if (fixed_place(target, &m, &mt) && (val_kind(target->type) != VK_AGG || m.base == RBP) &&
+        (m.kind != OPND_MEM || m.base == RBP || m.base == RIP ||
+         !(e->assign.value->kind == EXPR_ASSIGN || expr_any_child(e->assign.value, assign_pred, NULL)))) {
+        if (m.kind == OPND_REG && leaf_to(e->assign.value, (Reg)m.base)) return;
+        if (m.kind == OPND_XMM && float_leaf_to(e->assign.value, m.base)) return;
         gen_expr(e->assign.value);
         store_at(target->type, m);
         return;
     }
     gen_addr(target);
     if (store_leaf(target->type, e->assign.value)) return;
-    int32_t s = spill_push();
-    movq(R(RAX), fp(s));
+    Opnd h = hold_push(e->assign.value, false);
     gen_expr(e->assign.value);
-    movq(fp(s), R(RDX));
-    spill_pop();
-    store_val(target->type, RDX, 0);
+    Reg base = RDX;
+    if (h.kind == OPND_REG) base = (Reg)h.base;
+    else movq(h, R(RDX));
+    store_val(target->type, base, 0);
+    hold_pop(h);
 }
 
 /* ================================================================
@@ -3980,9 +4391,9 @@ static void gen_pat_bind(Pattern *pat, int32_t off, Type *t) {
     switch (pat->kind) {
     case PAT_BINDING: {
         const char *nm = pat->binding.codegen_name ? pat->binding.codegen_name : pat->binding.name;
-        int32_t s = local_slot(nm, t);
-        if (val_kind(t) == VK_AGG) copy_mem(RBP, s, RBP, off, ty_size(t));
-        else { load_val(t, fp(off)); store_val(t, RBP, s); }
+        Opnd home = local_home(nm, t);
+        if (val_kind(t) == VK_AGG) copy_mem(RBP, home.disp, RBP, off, ty_size(t));
+        else { load_val(t, fp(off)); store_at(t, home); }
         return;
     }
     case PAT_SOME:
@@ -4066,11 +4477,11 @@ static bool cond_compare(Expr *e, bool when, int target) {
         jcc(when ? cc : (Cond)(cc ^ 1), target);    /* cc ^ 1 is cc's opposite */
     } else if (val_kind(lt) == VK_FLOAT) {
         SseOp uc = is_f32(lt) ? SSE_UCOMISS : SSE_UCOMISD;
-        gen_operands(e->binary.left, e->binary.right);
+        Opnd src = gen_float_operands(e->binary.left, e->binary.right, op == TOK_LT || op == TOK_LTEQ);
         /* Unordered (a NaN) sets ZF, PF and CF: every comparison is false
          * but !=, and only parity tells unordered from equal. */
         if (op == TOK_EQEQ || op == TOK_BANGEQ) {
-            sse(uc, X(1), X(0));
+            sse(uc, src, X(0));
             if ((op == TOK_EQEQ) == when) {
                 int skip = new_label();
                 jcc(CC_P, skip);
@@ -4082,7 +4493,7 @@ static bool cond_compare(Expr *e, bool when, int target) {
             }
         } else {
             bool gt = op == TOK_GT || op == TOK_GTEQ;
-            (gt ? sse(uc, X(1), X(0)) : sse(uc, X(0), X(1)));
+            (gt ? sse(uc, src, X(0)) : sse(uc, X(0), src));
             Cond cc = op == TOK_GT || op == TOK_LT ? CC_A : CC_AE;
             jcc(when ? cc : (Cond)(cc ^ 1), target);
         }
@@ -4151,6 +4562,12 @@ static void gen_if(Expr *e) {
     }
     bool valued = !type_valueless(e->type);
     int lelse = new_label(), lend = new_label();
+    if (!e->if_expr.else_body && !valued) {
+        cond_jump(e->if_expr.cond, false, lend);
+        gen_scoped_branch(e->if_expr.then_body, TAIL_DISCARD);
+        label(lend);
+        return;
+    }
     cond_jump(e->if_expr.cond, false, lelse);
     gen_scoped_branch(e->if_expr.then_body,
                       valued && !type_is_never(e->if_expr.then_body->type) ? TAIL_VALUE : TAIL_DISCARD);
@@ -4251,17 +4668,28 @@ static void gen_for(Expr *e) {
     LoopCtx lc = { new_label(), new_label(), 0, NULL, g_loop };
     int ltop = new_label();
     if (e->for_expr.range_end) {
+        /* The start, into the loop variable (which the end cannot name),
+         * then the end, each once. */
         Type *vt = conc(e->for_expr.iter->type);
-        gen_expr(e->for_expr.range_end);
-        int32_t end = slot_alloc(8, 8);
-        movq(R(RAX), fp(end));
         const char *vn = e->for_expr.var_codegen_name ? e->for_expr.var_codegen_name : e->for_expr.var;
-        int32_t iv = local_slot(vn, vt);
-        gen_expr(e->for_expr.iter);
-        store_val(vt, RBP, iv);
+        Opnd iv = local_home(vn, vt);
+        if (iv.kind != OPND_REG || !leaf_to(e->for_expr.iter, (Reg)iv.base)) {
+            gen_expr(e->for_expr.iter);
+            store_at(vt, iv);
+        }
+        int64_t n;
+        Opnd end;
+        if (int_leaf(e->for_expr.range_end, &n) && fits_imm32(n)) {
+            end = IMM(n);
+        } else {
+            gen_expr(e->for_expr.range_end);
+            end = fp(slot_alloc(8, 8));
+            movq(R(RAX), end);
+        }
         label(ltop);
-        load_int(vt, fp(iv));
-        cmpq(fp(end), R(RAX));
+        Opnd cur = iv;
+        if (iv.kind != OPND_REG) { load_int(vt, iv); cur = R(RAX); }
+        cmpq(end, cur);
         (int_signed(vt) ? jcc(CC_GE, lc.brk) : jcc(CC_AE, lc.brk));
         g_loop = &lc;
         defer_push(true);
@@ -4270,10 +4698,14 @@ static void gen_for(Expr *e) {
         defer_pop();
         g_loop = lc.parent;
         label(lc.cont);
-        load_int(vt, fp(iv));
-        addq(IMM(1), R(RAX));
-        normalize(vt);
-        store_val(vt, RBP, iv);
+        if (iv.kind == OPND_REG) {
+            addq(IMM(1), iv);       /* below the end before, so within the type after */
+        } else {
+            load_int(vt, iv);
+            addq(IMM(1), R(RAX));
+            normalize(vt);
+            store_at(vt, iv);
+        }
         jmp(ltop);
         label(lc.brk);
         return;
@@ -4288,21 +4720,21 @@ static void gen_for(Expr *e) {
     movq(IMM(0), fp(cnt));
     const char *en = e->for_expr.var_pattern ? e->for_expr.elem_tmp
         : (e->for_expr.var_codegen_name ? e->for_expr.var_codegen_name : e->for_expr.var);
-    int32_t ev = local_slot(en, elem);
+    Opnd ev = local_home(en, elem);
     label(ltop);
     movq(fp(cnt), R(RAX));
     cmpq(fp(sl + 8), R(RAX));
     jcc(CC_GE, lc.brk);
-    if (es != 1) imulq3(es, R(RAX), R(RAX));
+    scale_reg(es, RAX);
     addq(fp(sl), R(RAX));
     load_val(elem, M(RAX, 0));
-    store_val(elem, RBP, ev);
-    if (e->for_expr.var_pattern) gen_pat_bind(e->for_expr.var_pattern, ev, elem);
+    store_at(elem, ev);
+    if (e->for_expr.var_pattern) gen_pat_bind(e->for_expr.var_pattern, (int32_t)ev.disp, elem);
     if (e->for_expr.index_var) {
         const char *in = e->for_expr.index_codegen_name ? e->for_expr.index_codegen_name : e->for_expr.index_var;
-        int32_t ix = local_slot(in, type_int64());
+        Opnd ix = local_home(in, type_int64());
         movq(fp(cnt), R(RAX));
-        movq(R(RAX), fp(ix));
+        movq(R(RAX), ix);
     }
     g_loop = &lc;
     defer_push(true);
@@ -4324,15 +4756,16 @@ static void gen_let(Expr *s) {
     Type *t = s->let_expr.let_type ? s->let_expr.let_type : s->let_expr.let_init->type;
     const char *name = s->let_expr.codegen_name ? s->let_expr.codegen_name : s->let_expr.let_name;
     if (type_valueless(conc(t))) { gen_expr(s->let_expr.let_init); return; }
-    int32_t off = local_slot(name, conc(t));
+    Opnd home = local_home(name, conc(t));
     int64_t v;
-    if (val_kind(t) == VK_INT && int_leaf(s->let_expr.let_init, &v) &&
-        (int_width(t) < 8 || fits_imm32(v))) {
-        x_mov(g_cur, int_width(t), IMM(v), fp(off));
+    if (home.kind == OPND_REG && leaf_to(s->let_expr.let_init, (Reg)home.base)) return;
+    if (home.kind == OPND_XMM && float_leaf_to(s->let_expr.let_init, home.base)) return;
+    if (val_kind(t) == VK_INT && int_leaf(s->let_expr.let_init, &v) && (int_width(t) < 8 || fits_imm32(v))) {
+        x_mov(g_cur, int_width(t), IMM(v), home);
         return;
     }
     gen_expr(s->let_expr.let_init);
-    store_val(t, RBP, off);
+    store_at(t, home);
 }
 
 static void gen_let_destruct(Expr *s) {
@@ -4642,6 +5075,8 @@ static void gen_expr(Expr *e) {
         Type *ot = conc(e->index.object->type), *mt;
         Opnd m;
         if (fixed_place(e, &m, &mt)) { load_val(mt, m); return; }
+        if (ot->kind == TYPE_SLICE) { load_val(e->type, gen_slice_elem(e, true)); return; }
+        if (ot->kind == TYPE_POINTER) { load_val(e->type, gen_ptr_elem(e, true)); return; }
         gen_addr(e);
         if (!(ot->kind == TYPE_STRUCT && ot->struc.is_tuple) || val_kind(e->type) != VK_AGG)
             load_val(e->type, M(RAX, 0));
@@ -4673,7 +5108,7 @@ static void gen_expr(Expr *e) {
         int32_t t = slot_alloc(16, 8);
         subq(R(RCX), R(RAX));
         movq(R(RAX), fp(t + 8));
-        if (es != 1) imulq3(es, R(RCX), R(RCX));
+        scale_reg(es, RCX);
         addq(fp(sh), R(RCX));
         movq(R(RCX), fp(t));
         leaq(fp(t), R(RAX));
@@ -4814,10 +5249,464 @@ typedef struct {
     bool is_main;
 } FnSpec;
 
+/* ---- Register locals ----
+ * Before a function's code is generated, its locals are ranked by how
+ * often they are read or written, a use inside a loop counting eight times
+ * one outside it, and integer locals whose address is never taken get the
+ * callee-saved registers, most used first. A call leaves those intact, so
+ * nothing is kept around calls; the cost is saving and restoring each
+ * register the function uses, which the uses of its locals must outweigh.
+ *
+ * Locals share a register when their live ranges are apart. The walk
+ * numbers the nodes in source order; a local is live from its binding (after
+ * its initializer) to its last use, and through the end of every loop that
+ * uses it but does not bind it, since the next iteration reads it again. A
+ * use inside a defer, which runs at the scope's exits, counts as live to the
+ * function's end. A few reads come later than their place in the source,
+ * and the range covers them: a container found without code is indexed
+ * after its index is evaluated, an assignment's target is found after its
+ * value, and an argument may be read when the call is made (arg_at_call).
+ * Otherwise code runs in source order, except for loops and defers, so a
+ * local is never read outside its range.
+ *
+ * Float locals get %xmm8-%xmm15, which nothing else uses but a callee, so
+ * only a local whose range no call falls inside can have one; they cost no
+ * saving. The walk records where calls happen: after the operands for a
+ * call, or anywhere in a node's span for one that calls midway (alloc). A
+ * call in a defer counts where the defer is written: a local live at an exit
+ * that runs it is live there too, as it was bound before and is used
+ * after. */
+
+typedef struct {
+    const char *name;
+    int64_t weight;
+    int def, last;          /* the live range, in walk positions */
+    bool bound, ok, addr;   /* addr: its address is taken */
+    bool is_float;
+} RegCand;
+
+typedef struct { int lo, hi; } PosSpan;
+
+typedef struct {
+    RegCand *c;
+    int n, cap;
+    HMap idx;
+    int pos;                /* the walk position */
+    int in_defer;
+    PosSpan *calls;         /* where calls happen */
+    int ncalls, capcalls;
+} RegCands;
+
+enum { REG_MIN_WEIGHT = 3, POS_END = 1 << 30 };
+
+static int64_t ra_weight(int depth) { return (int64_t)1 << (3 * (depth < 10 ? depth : 10)); }
+
+static RegCand *ra_cand(RegCands *rc, const char *name) {
+    size_t n = strlen(name);
+    HEnt *e = hmap_get(&rc->idx, name, n);
+    if (e) return &rc->c[e->val];
+    RegCand c = { name, 0, rc->pos, rc->pos, false, true, false, false };
+    DA_APPEND(rc->c, rc->n, rc->cap, c);
+    hmap_put(&rc->idx, name, n)->val = rc->n - 1;
+    return &rc->c[rc->n - 1];
+}
+
+static void ra_use(RegCands *rc, const char *name, int depth) {
+    RegCand *c = ra_cand(rc, name);
+    c->weight += ra_weight(depth);
+    int at = rc->in_defer ? POS_END : rc->pos;
+    if (at > c->last) c->last = at;
+}
+
+/* A binding site: where gen_* gives the name its home. */
+static void ra_bind(RegCands *rc, const char *name, Type *t, int depth) {
+    RegCand *c = ra_cand(rc, name);
+    if (!c->bound) c->def = rc->pos;
+    c->bound = true;
+    ValKind k = val_kind(t);
+    if (k != VK_INT && k != VK_FLOAT) c->ok = false;
+    if (k == VK_FLOAT) c->is_float = true;
+    c->weight += ra_weight(depth);
+    if (rc->pos > c->last) c->last = rc->pos;
+}
+
+/* The bindings of a pattern over a value of type t, as gen_pat_bind makes
+ * them. */
+static void ra_pat(RegCands *rc, Pattern *pat, Type *t, int depth) {
+    t = conc(t);
+    switch (pat->kind) {
+    case PAT_BINDING:
+        ra_bind(rc, pat->binding.codegen_name ? pat->binding.codegen_name : pat->binding.name, t, depth);
+        return;
+    case PAT_SOME:
+        if (pat->some_pat.inner) ra_pat(rc, pat->some_pat.inner, t->option.inner, depth);
+        return;
+    case PAT_OK:
+        if (pat->some_pat.inner) ra_pat(rc, pat->some_pat.inner, t->result.inner, depth);
+        return;
+    case PAT_ERR:
+        if (pat->some_pat.inner) ra_pat(rc, pat->some_pat.inner, type_int32(), depth);
+        return;
+    case PAT_VARIANT:
+        if (pat->variant.payload && t->kind == TYPE_UNION) {
+            Type *pt = union_variant_payload(t, pat->variant.variant);
+            if (pt) ra_pat(rc, pat->variant.payload, pt, depth);
+        }
+        return;
+    case PAT_STRUCT:
+        for (int i = 0; i < pat->struc.field_count; i++) {
+            int64_t fo; Type *ft; ExtField *x;
+            if (field_info_x(t, pat->struc.fields[i].name, &fo, &ft, &x))
+                ra_pat(rc, pat->struc.fields[i].pattern, ft, depth);
+        }
+        return;
+    case PAT_TUPLE:
+        for (int i = 0; i < pat->tuple_pat.pattern_count; i++) {
+            int64_t fo;
+            ra_pat(rc, pat->tuple_pat.patterns[i], tuple_elem_type(pat, t, i, &fo), depth);
+        }
+        return;
+    default:
+        return;
+    }
+}
+
+/* &e: the local whose storage it addresses, if any, cannot be a register. */
+static void ra_addr(RegCands *rc, Expr *e) {
+    for (;;) {
+        switch (e->kind) {
+        case EXPR_GUARD: e = e->guard.body; continue;
+        case EXPR_FIELD:
+            if (e->field.codegen_name) return;
+            e = e->field.object;
+            continue;
+        case EXPR_INDEX: {
+            Type *ot = conc(e->index.object->type);
+            if (ot->kind != TYPE_STRUCT || !ot->struc.is_tuple) return;
+            e = e->index.object;
+            continue;
+        }
+        case EXPR_IDENT:
+            if (e->ident.is_local) {
+                RegCand *c = ra_cand(rc, e->ident.codegen_name ? e->ident.codegen_name : e->ident.name);
+                c->ok = false;
+                c->addr = true;
+            }
+            return;
+        default:
+            return;
+        }
+    }
+}
+
+/* A loop from walk position start to here: a local it uses but that is
+ * bound before it stays live to its end. */
+static void ra_loop_end(RegCands *rc, int start) {
+    for (int i = 0; i < rc->n; i++) {
+        RegCand *c = &rc->c[i];
+        if (c->def < start && c->last >= start && c->last < rc->pos) c->last = rc->pos;
+    }
+}
+
+static bool pat_has_string(Pattern *p) {
+    if (p->kind == PAT_STRING_LIT) return true;
+    switch (p->kind) {
+    case PAT_SOME: case PAT_OK: case PAT_ERR:
+        return p->some_pat.inner && pat_has_string(p->some_pat.inner);
+    case PAT_VARIANT:
+        return p->variant.payload && pat_has_string(p->variant.payload);
+    case PAT_STRUCT:
+        for (int i = 0; i < p->struc.field_count; i++)
+            if (pat_has_string(p->struc.fields[i].pattern)) return true;
+        return false;
+    case PAT_TUPLE:
+        for (int i = 0; i < p->tuple_pat.pattern_count; i++)
+            if (pat_has_string(p->tuple_pat.patterns[i])) return true;
+        return false;
+    case PAT_OR:
+        for (int i = 0; i < p->or_pat.alt_count; i++)
+            if (pat_has_string(p->or_pat.alts[i])) return true;
+        return false;
+    default:
+        return false;
+    }
+}
+
+/* Whether the code for e itself calls a function: 1 once its operands are
+ * evaluated, 2 at some point among them, 0 not at all (a failure path that
+ * calls and does not return aside). Every kind is listed, so a new one
+ * cannot be missed. */
+static int ra_calls(Expr *e) {
+    switch (e->kind) {
+    case EXPR_CALL: case EXPR_FREE: case EXPR_INTERP_STRING:
+        return 1;
+    case EXPR_ALLOC:
+        return 2;
+    case EXPR_CAST: {
+        Type *from = conc(e->cast.operand->type), *to = conc(e->cast.target);
+        return (is_str_type(from) && is_cstr_type(to)) || (is_cstr_type(from) && is_str_type(to));
+    }
+    case EXPR_BINARY:
+        return (e->binary.op == TOK_EQEQ || e->binary.op == TOK_BANGEQ) && needs_eq_func(e->binary.left->type);
+    case EXPR_MATCH:            /* a string pattern compares with memcmp */
+        for (int i = 0; i < e->match_expr.arm_count; i++)
+            if (pat_has_string(e->match_expr.arms[i].pattern)) return 2;
+        return 0;
+    case EXPR_INT_LIT: case EXPR_FLOAT_LIT: case EXPR_BOOL_LIT: case EXPR_CHAR_LIT:
+    case EXPR_STRING_LIT: case EXPR_CSTRING_LIT: case EXPR_VOID_LIT: case EXPR_IDENT:
+    case EXPR_UNARY_PREFIX: case EXPR_UNARY_POSTFIX: case EXPR_FIELD: case EXPR_INDEX:
+    case EXPR_SLICE: case EXPR_IF: case EXPR_LOOP: case EXPR_FOR: case EXPR_BREAK:
+    case EXPR_CONTINUE: case EXPR_RETURN: case EXPR_BLOCK: case EXPR_FUNC:
+    case EXPR_STRUCT_LIT: case EXPR_TUPLE_LIT: case EXPR_ARRAY_LIT: case EXPR_SLICE_LIT:
+    case EXPR_SIZEOF: case EXPR_ALIGNOF: case EXPR_BITCAST: case EXPR_ENUM_OF:
+    case EXPR_DEFAULT: case EXPR_ASSIGN: case EXPR_SOME: case EXPR_OK: case EXPR_ERR:
+    case EXPR_ERROR_NAME: case EXPR_DEREF_FIELD: case EXPR_LET: case EXPR_LET_DESTRUCT:
+    case EXPR_TYPE_VAR_REF: case EXPR_ASSERT: case EXPR_STATIC_ASSERT: case EXPR_DEFER:
+    case EXPR_IGNORE: case EXPR_ATOMIC_LOAD: case EXPR_ATOMIC_STORE: case EXPR_GUARD:
+    case EXPR_ERROR:
+        return 0;
+    }
+    return 2;
+}
+
+/* The local a place found without code (fixed_place) is based on, if any. */
+static Expr *place_root(Expr *e) {
+    for (;;) {
+        switch (e->kind) {
+        case EXPR_GUARD: e = e->guard.body; continue;
+        case EXPR_CAST: e = e->cast.operand; continue;
+        case EXPR_FIELD: case EXPR_DEREF_FIELD:
+            if (e->field.codegen_name || !e->field.object) return NULL;
+            e = e->field.object;
+            continue;
+        case EXPR_INDEX: {
+            Type *ot = conc(e->index.object->type);
+            if (ot->kind != TYPE_STRUCT || !ot->struc.is_tuple) return NULL;
+            e = e->index.object;
+            continue;
+        }
+        case EXPR_IDENT:
+            return e->ident.is_local ? e : NULL;
+        default:
+            return NULL;
+        }
+    }
+}
+
+/* A place read after the code that follows it in the source: its local is
+ * live to here. */
+static void ra_read_late(RegCands *rc, Expr *place) {
+    Expr *id = place_root(place);
+    if (!id) return;
+    RegCand *c = ra_cand(rc, id->ident.codegen_name ? id->ident.codegen_name : id->ident.name);
+    if (rc->pos > c->last) c->last = rc->pos;
+}
+
+static void ra_call_at(RegCands *rc, int lo, int hi) {
+    PosSpan sp = { lo, hi };
+    DA_APPEND(rc->calls, rc->ncalls, rc->capcalls, sp);
+}
+
+/* Whether a call happens while c is live. */
+static bool ra_crosses_call(RegCands *rc, RegCand *c) {
+    for (int i = 0; i < rc->ncalls; i++)
+        if (c->def < rc->calls[i].hi && c->last > rc->calls[i].lo) return true;
+    return false;
+}
+
+static void ra_expr(RegCands *rc, Expr *e, int depth);
+
+typedef struct { RegCands *rc; int depth; } RaWalk;
+
+static void ra_child(Expr *e, void *ctx) { RaWalk *w = ctx; ra_expr(w->rc, e, w->depth); }
+
+static void ra_body(RegCands *rc, Expr **body, int n, int depth) {
+    for (int i = 0; i < n; i++) ra_expr(rc, body[i], depth);
+}
+
+static void ra_node(RegCands *rc, Expr *e, int depth);
+
+static void ra_expr(RegCands *rc, Expr *e, int depth) {
+    if (!e) return;
+    int start = ++rc->pos;
+    ra_node(rc, e, depth);
+    switch (e->kind) {
+    case EXPR_INDEX: rc->pos++; ra_read_late(rc, e->index.object); break;
+    case EXPR_ASSIGN: rc->pos++; ra_read_late(rc, e->assign.target); break;
+    case EXPR_CALL:
+        rc->pos++;
+        for (int i = 0; i < e->call.arg_count; i++) ra_read_late(rc, e->call.args[i]);
+        break;
+    default: break;
+    }
+    switch (ra_calls(e)) {
+    case 1: rc->pos++; ra_call_at(rc, rc->pos, rc->pos); break;
+    case 2: rc->pos++; ra_call_at(rc, start, rc->pos); break;
+    default: break;
+    }
+}
+
+static void ra_node(RegCands *rc, Expr *e, int depth) {
+    switch (e->kind) {
+    case EXPR_IDENT:
+        if (e->ident.is_local) ra_use(rc, e->ident.codegen_name ? e->ident.codegen_name : e->ident.name, depth);
+        return;
+    case EXPR_UNARY_PREFIX:
+        if (e->unary_prefix.op == TOK_AMP) ra_addr(rc, e->unary_prefix.operand);
+        break;
+    case EXPR_FUNC:             /* a function of its own; the captures are read here */
+        for (int i = 0; i < e->func.capture_count; i++) ra_use(rc, e->func.captures[i].codegen_name, depth);
+        return;
+    case EXPR_LET: {
+        ra_expr(rc, e->let_expr.let_init, depth);
+        rc->pos++;
+        Type *t = conc(e->let_expr.let_type ? e->let_expr.let_type : e->let_expr.let_init->type);
+        if (!type_valueless(t))
+            ra_bind(rc, e->let_expr.codegen_name ? e->let_expr.codegen_name : e->let_expr.let_name, t, depth);
+        return;
+    }
+    case EXPR_LET_DESTRUCT:
+        ra_expr(rc, e->let_destruct.init, depth);
+        rc->pos++;
+        ra_pat(rc, e->let_destruct.pattern, e->let_destruct.init_type, depth);
+        return;
+    case EXPR_MATCH:
+        ra_expr(rc, e->match_expr.subject, depth);
+        for (int i = 0; i < e->match_expr.arm_count; i++) {
+            MatchArm *arm = &e->match_expr.arms[i];
+            rc->pos++;
+            ra_pat(rc, arm->pattern, e->match_expr.subject->type, depth);
+            ra_expr(rc, arm->guard, depth);
+            ra_body(rc, arm->body, arm->body_count, depth);
+        }
+        return;
+    case EXPR_DEFER:
+        rc->in_defer++;
+        ra_expr(rc, e->defer_expr.value, depth);
+        rc->in_defer--;
+        return;
+    case EXPR_LOOP: {
+        int start = ++rc->pos;
+        ra_body(rc, e->loop_expr.body, e->loop_expr.body_count, depth + 1);
+        rc->pos++;
+        ra_loop_end(rc, start);
+        return;
+    }
+    case EXPR_FOR: {
+        /* A range's start goes into the loop variable before the end is
+         * evaluated (gen_for). */
+        int in = depth + 1;
+        const char *vn = e->for_expr.var_codegen_name ? e->for_expr.var_codegen_name : e->for_expr.var;
+        ra_expr(rc, e->for_expr.iter, depth);
+        rc->pos++;
+        if (e->for_expr.range_end) ra_bind(rc, vn, conc(e->for_expr.iter->type), in);
+        ra_expr(rc, e->for_expr.range_end, depth);
+        int start = ++rc->pos;
+        if (e->for_expr.range_end) {
+            ra_use(rc, vn, in);             /* the test and the step */
+            ra_use(rc, vn, in);
+        } else {
+            Type *elem = conc(conc(e->for_expr.iter->type)->slice.elem);
+            if (e->for_expr.var_pattern) ra_pat(rc, e->for_expr.var_pattern, elem, in);
+            else ra_bind(rc, vn, elem, in);
+            if (e->for_expr.index_var)
+                ra_bind(rc, e->for_expr.index_codegen_name ? e->for_expr.index_codegen_name
+                                                           : e->for_expr.index_var, type_int64(), in);
+        }
+        ra_body(rc, e->for_expr.body, e->for_expr.body_count, in);
+        rc->pos++;
+        ra_loop_end(rc, start);
+        return;
+    }
+    default:
+        break;
+    }
+    RaWalk w = { rc, depth };
+    expr_for_each_child(e, ra_child, &w);
+}
+
+/* Most used first; then in source order, for a stable choice. */
+static int ra_heavier(const void *a, const void *b) {
+    const RegCand *x = *(RegCand *const *)a, *y = *(RegCand *const *)b;
+    if (x->weight != y->weight) return x->weight > y->weight ? -1 : 1;
+    return x < y ? -1 : x > y;
+}
+
+/* Choose the function's register locals and give each register used a
+ * save slot. */
+static void assign_registers(FnSpec *f) {
+    RegCands rc = { 0 };
+    for (int i = 0; i < f->nparams; i++) {
+        Param *p = &f->params[i];
+        ra_bind(&rc, p->codegen_name ? p->codegen_name : p->name, conc(p->type), 0);
+    }
+    if (f->lambda) {
+        for (int i = 0; i < f->lambda->func.capture_count; i++) {
+            Capture *c = &f->lambda->func.captures[i];
+            ra_bind(&rc, c->codegen_name, conc(c->type), 0);
+        }
+        if (f->lambda->func.self_codegen_name) ra_cand(&rc, f->lambda->func.self_codegen_name)->ok = false;
+    }
+    ra_body(&rc, f->body, f->body_count, 0);
+    for (int i = 0; i < rc.n; i++)
+        if (rc.c[i].addr) hmap_put(&g_addr_taken, rc.c[i].name, strlen(rc.c[i].name))->val = 1;
+    g_addr_known = true;
+    /* Most used first, each into the first register whose locals' ranges
+     * it does not meet; then the callee-saved registers whose locals are used
+     * too little to pay for saving one are left unused. Registers 0..NSAVED
+     * are SAVED_REGS, the rest %xmm8 on. */
+    enum { NREG = NSAVED + 8 };
+    RegCand **taken[NREG] = { 0 };
+    int ntaken[NREG] = { 0 }, captaken[NREG] = { 0 };
+    int64_t wsum[NREG] = { 0 };
+    RegCand **order = xcalloc((size_t)(rc.n ? rc.n : 1), sizeof(RegCand *));
+    int norder = 0;
+    for (int i = 0; i < rc.n; i++)
+        if (rc.c[i].bound && rc.c[i].ok) order[norder++] = &rc.c[i];
+    qsort(order, (size_t)norder, sizeof *order, ra_heavier);
+    for (int i = 0; i < norder; i++) {
+        RegCand *best = order[i];
+        if (best->is_float && ra_crosses_call(&rc, best)) continue;
+        for (int r = best->is_float ? NSAVED : 0; r < (best->is_float ? NREG : NSAVED); r++) {
+            bool meets = false;
+            for (int k = 0; k < ntaken[r] && !meets; k++)
+                meets = best->def <= taken[r][k]->last && taken[r][k]->def <= best->last;
+            if (meets) continue;
+            DA_APPEND(taken[r], ntaken[r], captaken[r], best);
+            wsum[r] += best->weight;
+            break;
+        }
+    }
+    for (int r = NSAVED; r < NREG; r++) {
+        for (int k = 0; k < ntaken[r]; k++)
+            hmap_put(&g_reg_locals, taken[r][k]->name, strlen(taken[r][k]->name))->val = REG_XMM + 8 + (r - NSAVED);
+        free(taken[r]);
+    }
+    g_nsaved = 0;
+    for (int r = 0; r < NSAVED; r++) {
+        if (ntaken[r] && wsum[r] >= REG_MIN_WEIGHT) {
+            for (int k = 0; k < ntaken[r]; k++)
+                hmap_put(&g_reg_locals, taken[r][k]->name, strlen(taken[r][k]->name))->val = SAVED_REGS[r];
+            g_save_reg[g_nsaved] = SAVED_REGS[r];
+            g_save_slot[g_nsaved++] = slot_alloc(8, 8);
+        }
+        free(taken[r]);
+    }
+    free(order);
+    free(rc.c);
+    free(rc.calls);
+    hmap_free(&rc.idx);
+}
+
 static void begin_function(void) {
     hmap_clear(&g_locals);
+    hmap_clear(&g_reg_locals);
+    hmap_clear(&g_addr_taken);
+    g_addr_known = false;
+    g_nsaved = 0;
     g_frame = 0;
     g_spill_n = g_spill_depth = 0;
+    g_hold_n = 0;
     g_hidden_ret = 0;
     g_ret_label = new_label();
     g_guards_suppressed = g_overflow_checked = false;
@@ -4845,9 +5734,14 @@ static void end_function(const char *sym, bool global) {
     x_cfi(o, CFI_FRAME);
     int64_t frame = align_up(g_frame, 16);
     if (frame) subq(IMM(frame), R(RSP));
+    for (int i = 0; i < g_nsaved; i++) {
+        movq(R(g_save_reg[i]), fp(g_save_slot[i]));
+        x_cfi_saved(o, g_save_reg[i], g_save_slot[i] - 16);     /* the CFA is %rbp + 16 */
+    }
     x_drop_final_jmp(&g_fnbody, g_ret_label);
     code_append(o, &g_fnbody);
     label(g_ret_label);
+    restore_saved();
     leave();
     x_cfi(o, CFI_LEFT);
     x_op0(o, OP_RET);
@@ -4868,6 +5762,7 @@ static void emit_function(FnSpec *f) {
     g_fn_ret = f->is_main ? type_int32() : conc(f->ret);
     g_fn_is_main = f->is_main;
     g_tco_ok = !f->is_main && !body_escapes(f->body, f->body_count);
+    assign_registers(f);
 
     Abi ra = abi_classify(g_fn_ret);
     int ni = 0, ns = 0;
@@ -4887,14 +5782,19 @@ static void emit_function(FnSpec *f) {
             int ci = 0, cS = 0;
             for (int k = 0; k < a.n; k++) { if (a.cls[k] == 'I') ci++; else cS++; }
             if (ni + ci <= 6 && ns + cS <= 8) {
-                int32_t off = local_slot(name, pt);
+                Opnd home = local_home(name, pt);
                 ValKind vk = val_kind(pt);
-                if (vk == VK_INT) movq(R(IREG[ni++]), fp(off));
-                else if (vk == VK_FLOAT) movq(X(ns++), fp(off));
+                if (vk == VK_INT && home.kind == OPND_REG) {
+                    movq(R(IREG[ni++]), home);
+                    normalize_reg(pt, (Reg)home.base);  /* the caller need not have */
+                }
+                else if (vk == VK_INT) movq(R(IREG[ni++]), home);
+                else if (vk == VK_FLOAT && home.kind == OPND_XMM) movaps(X(ns++), home);
+                else if (vk == VK_FLOAT) movq(X(ns++), home);
                 else
                     for (int k = 0; k < a.n; k++) {
-                        if (a.cls[k] == 'I') movq(R(IREG[ni++]), fp(off + 8 * k));
-                        else movq(X(ns++), fp(off + 8 * k));
+                        if (a.cls[k] == 'I') movq(R(IREG[ni++]), fp(home.disp + 8 * k));
+                        else movq(X(ns++), fp(home.disp + 8 * k));
                     }
                 continue;
             }
@@ -4902,7 +5802,11 @@ static void emit_function(FnSpec *f) {
         int64_t al = ty_align(pt);
         if (al < 8) al = 8;
         stack = align_up(stack, al);
-        local_bind(name, (int32_t)stack);
+        Opnd home;
+        bool reg = local_find(name, &home);
+        if (reg && home.kind == OPND_REG) load_int_to(pt, M(RBP, stack), (Reg)home.base);
+        else if (reg && home.kind == OPND_XMM) (is_f32(pt) ? movss(M(RBP, stack), home) : movsd(M(RBP, stack), home));
+        else local_bind(name, (int32_t)stack);
         stack += align_up(ty_size(pt), 8);
     }
     int32_t ctx_slot = 0;
@@ -4922,12 +5826,12 @@ static void emit_function(FnSpec *f) {
         for (int i = 0; i < n; i++) {
             Capture *c = &lam->func.captures[i];
             Type *ct = conc(c->type);
-            int32_t off = local_slot(c->codegen_name, ct);
+            Opnd home = local_home(c->codegen_name, ct);
             movq(fp(ctx_slot), R(RDX));
-            if (val_kind(ct) == VK_AGG) copy_mem(RBP, off, RDX, offs[i], ty_size(ct));
+            if (val_kind(ct) == VK_AGG) copy_mem(RBP, home.disp, RDX, offs[i], ty_size(ct));
             else {
                 load_val(ct, M(RDX, offs[i]));
-                store_val(ct, RBP, off);
+                store_at(ct, home);
             }
         }
         free(offs);
@@ -5266,7 +6170,7 @@ static void emit_eq_helper(EqHelper *h) {
             movq(M(RAX, 0), R(RDI));
             movq(M(RCX, 0), R(RSI));
             int64_t es = ty_size(elem);
-            if (es != 1) imulq3(es, R(RDX), R(RDX));
+            scale_reg(es, RDX);
             call_c("memcmp");
             testl(R(RAX), R(RAX));
             jcc(CC_NE, lfalse);
@@ -6644,7 +7548,7 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
 done:
     asm_free();
     code_free(&g_fnbody); code_free(&g_cold); code_free(&g_text);
-    hmap_free(&g_locals); hmap_free(&g_strings); hmap_free(&g_strhdrs); hmap_free(&g_fnvals);
+    hmap_free(&g_locals); hmap_free(&g_reg_locals); hmap_free(&g_addr_taken); hmap_free(&g_fconsts); hmap_free(&g_strings); hmap_free(&g_strhdrs); hmap_free(&g_fnvals);
     hmap_free(&g_layouts); hmap_free(&g_files); hmap_free(&g_probe); hmap_free(&g_probed_layouts);
     free(g_spills); g_spills = NULL; g_spill_cap = 0;
     free(g_eqs); g_eqs = NULL; g_eq_n = g_eq_cap = 0;

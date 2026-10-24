@@ -1,0 +1,17 @@
+// A C caller may leave junk in the register above a narrow argument, which
+// the System V ABI leaves undefined: an FC callback reads only the argument.
+// (The native backend extends such a parameter as it moves it into a
+// register local.)
+module wide from "wide.h" =
+    extern call_i32_junk: ((i32) -> i64) -> i64
+    extern call_i32_neg: ((i32) -> i64) -> i64
+    extern call_u8_junk: ((u8) -> i64) -> i64
+
+let use_i32 = (x: i32) -> (i64) x * 1000 + (i64) x + (i64) x
+let use_u8 = (x: u8) -> (i64) x * 1000 + (i64) x + (i64) x
+
+let main = (args: str[]) ->
+    assert(wide.call_i32_junk(use_i32) == 42084)
+    assert(wide.call_i32_neg(use_i32) == -10020)
+    assert(wide.call_u8_junk(use_u8) == 200400)
+    0

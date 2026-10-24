@@ -136,8 +136,11 @@ typedef enum {
     CFI_LEFT,           /* after leave: remember the state; cfa = rsp+8 */
     CFI_RESTORE,        /* restore the remembered state */
     CFI_END,            /* .cfi_endproc */
+    CFI_SAVED,          /* a callee-saved register stored in the frame (x_cfi_saved) */
 } CfiOp;
 void x_cfi(Code *c, CfiOp op);
+/* .cfi_offset: register r is saved at cfa_off from the CFA. */
+void x_cfi_saved(Code *c, Reg r, int32_t cfa_off);
 
 /* ---- Data ---- */
 

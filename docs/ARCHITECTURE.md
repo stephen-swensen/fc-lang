@@ -209,22 +209,42 @@ position-independent) for a fast development build, and `elf_link` links it
 into an executable: no C compilation, no assembler and no linker. With `-c`
 the object is written instead, for `cc out.o -o prog`. It walks the same typed,
 monomorphized AST as the C emitter and must mean exactly what the emitted C
-means; `make test-native` runs the suite through it. It does not optimize
-across expressions: every binding lives in its frame slot, and no value stays
-in a register past the expression that computes it. Within an expression it
-takes the short forms a C compiler takes at `-O0`. An operand that needs no
-code of its own, a constant or a place at a fixed address (a local, a global,
-a field or tuple element of one, a slice's `len` there), is read by the
-instruction that uses it, or loaded after its sibling without a spill, and a
-store to such a place goes straight to it. A comparison that decides a branch
-sets the flags the branch tests, and `&&`, `||` and `!` there become jumps.
-Division by a constant skips the checks that cannot fail, and a power of two
-becomes shifts. No jump is emitted where control cannot arrive or would fall
-through to its target anyway. So its code runs at about `gcc -O0` speed, and a
-call in tail position is a jump whenever the callee cannot see the caller's
-frame (no pending defer, no address of a local, stack slice literal,
-interpolation buffer, `alloca` or capturing closure in the function, all
-arguments in registers).
+means; `make test-native` runs the suite through it. It does no data-flow
+analysis; across a function it only keeps locals in registers. Before a
+function is emitted, one walk over its body numbers the nodes in source order
+and finds each local's live range: from its binding to its last use,
+stretched to the end of a loop that uses it but binds it outside, to the end
+of the function when a defer reads it, and over the few reads the emitter
+makes later than their place in the source (an argument read at the call, a
+container indexed after its index, an assignment's target found after its
+value). Integer locals whose address is never taken then share the
+callee-saved registers, most used first (a use in a loop counts eight times
+one outside), where a register's uses outweigh saving it; float locals take
+`%xmm8`-`%xmm15` where no call falls in their range, since no register keeps
+a float across a call. A register local has no address: the walk keeps a
+local whose address is taken in its frame slot, and an emitter change that
+reads a local out of source order must stretch its range in the walk.
+
+Within an expression it takes the short forms a C compiler takes at `-O0`.
+An operand that needs no code of its own, a constant or a place at a fixed
+address (a local, a global, a field or tuple element of one, a slice's `len`
+there, the same through a pointer in a register, an integer widened from
+one), is read by the instruction that uses it, or loaded after its sibling
+without a spill, and a store to such a place goes straight to it. A value
+kept while its sibling is evaluated stays in a scratch register when the
+sibling makes no call. A constant argument, or a local one no later argument
+can change, is loaded into its register at the call, and the last argument
+computed stays where it was computed. A struct's fixed-array field is indexed
+in place against its constant length, and an element is loaded through an
+indexed address. A comparison that decides a branch sets the flags the branch
+tests, and `&&`, `||` and `!` there become jumps. Division by a constant
+skips the checks that cannot fail, and a power of two becomes shifts. No jump
+is emitted where control cannot arrive or would fall through to its target
+anyway. So its code runs at about twice the speed of `gcc -O0` and half that
+of `gcc -O1`, and a call in tail position is a jump whenever the callee
+cannot see the caller's frame (no pending defer, no address of a local,
+stack slice literal, interpolation buffer, `alloca` or capturing closure in
+the function, all arguments in registers).
 
 The backend is built only on Linux x86-64, since its objects are ELF, its
 calls name the Linux C library's symbols (`stderr`, `__errno_location`) and it

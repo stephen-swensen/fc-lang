@@ -1,0 +1,71 @@
+// A struct's fixed-array field is indexed in place (the native backend
+// addresses the element from the struct and checks the index against the
+// constant length): reads and writes of every element size, including one
+// that is not 1, 2, 4 or 8 bytes, through a pointer, in a local, in a
+// global and in a nested struct, with each neighbor left intact.
+
+struct trio =
+    a: i32
+    b: i32
+    c: i32
+
+struct bank =
+    tag: u8
+    bytes: u8[5]
+    shorts: i16[3]
+    words: u32[4]
+    longs: i64[3]
+    reals: f64[2]
+    trios: trio[3]
+
+struct outer =
+    pad: i64
+    inner: bank
+
+let mut glob = default(bank)
+
+let fill = (p: bank*, k: i64) ->
+    for i in 0..5 do p.bytes[i] = (u8) (k + i)
+    for i in 0..3 do p.shorts[i] = (i16) (-k - i)
+    for i in 0..4 do p.words[i] = (u32) (k * 1000 + i)
+    for i in 0..3 do p.longs[i] = k * 4294967296i64 + i
+    p.reals[1] = (f64) k + 0.5
+    for i in 0..3 do p.trios[i] = trio { a = (i32) i, b = (i32) k, c = (i32) (i + k) }
+    0
+
+let sum = (p: const bank*) ->
+    let mut s = 0i64
+    for i in 0..5 do s = s + (i64) p.bytes[i]
+    for i in 0..3 do s = s + (i64) p.shorts[i]
+    for i in 0..4 do s = s + (i64) p.words[i]
+    for i in 0..3 do s = s + p.longs[i] % 1000
+    for i in 0..3 do s = s + (i64) p.trios[i].a + (i64) p.trios[i].c
+    s
+
+let main = (args: str[]) ->
+    let mut b = default(bank)
+    b.tag = 7u8
+    fill(&b, 3)
+    assert(b.tag == 7u8 && b.bytes[0] == 3u8 && b.bytes[4] == 7u8)
+    assert(b.shorts[0] == -3i16 && b.shorts[2] == -5i16)
+    assert(b.words[3] == 3003u32 && b.longs[2] == 3 * 4294967296i64 + 2)
+    assert(b.reals[0] == 0.0 && b.reals[1] == 3.5)
+    assert(b.trios[2].a == 2 && b.trios[2].b == 3 && b.trios[2].c == 5)
+    assert(sum(&b) == 25 - 12 + 12006 + 2667 + 15)
+    // a local indexed by a variable, and its neighbors
+    let mut j = 1
+    b.words[j] = 9u32
+    assert(b.words[0] == 3000u32 && b.words[1] == 9u32 && b.words[2] == 3002u32)
+    // a global
+    fill(&glob, 1)
+    glob.longs[j] = -1i64
+    assert(glob.longs[0] == 4294967296i64 && glob.longs[1] == -1i64 && glob.longs[2] == 4294967298i64)
+    assert(glob.trios[j].c == 2)
+    // nested in another struct, through a pointer and directly
+    let mut o = default(outer)
+    o.pad = -1i64
+    fill(&o.inner, 2)
+    assert(o.inner.bytes[j] == 3u8 && o.inner.shorts[j] == -3i16 && o.pad == -1i64)
+    let op = &o
+    assert(op.inner.words[3] == 2003u32 && op.inner.trios[1].c == 3)
+    0

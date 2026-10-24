@@ -1,0 +1,55 @@
+// Arguments mean the same however they are passed. The native backend reads
+// a constant or a local whose address is not taken when the call is made,
+// leaves the last argument it evaluates in its register, and spills the
+// rest; these calls mix all three, in registers and on the stack (past six
+// integers and eight floats), through a function value and to C's variadic
+// snprintf.
+
+module c from "stdio.h" =
+    extern snprintf: (any*, usize, const cstr, ...) -> i32
+
+let eight = (a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64) ->
+    ((((((a * 3 + b) * 3 + c) * 3 + d) * 3 + e) * 3 + f) * 3 + g) * 3 + h
+
+let mixed = (a: f64, n: i32, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f64, m: u8) ->
+    let s = a + b + c + d + e + f + g + h
+    s * 1000.0 + i * 100.0 + (f64) n * 10.0 + (f64) m
+
+// The ninth float comes on the stack.
+let ninth = (a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f64) -> i
+let ninth32 = (a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, g: f32, h: f32, i: f32) -> i
+
+let bump = (p: i64*) ->
+    *p = *p + 1
+    *p
+
+let main = (args: str[]) ->
+    let x = 2i64
+    let mut y = 5i64
+    let z = x * 7
+    // constants, locals, computed values, the last computed one last
+    assert(eight(1, x, y, z, x + y, 0, -1, z - 3) == 6191)
+    // a computed value in each position, the rest leaves
+    assert(eight(x + 0, 1, 1, 1, 1, 1, 1, 1) == 5467)
+    assert(eight(1, 1, 1, 1, 1, 1, 1, x + 0) == 3281)
+    // an address-taken local is read in its turn, before bump changes it
+    assert(eight(y, bump(&y), y, 0, 0, 0, 0, 0) == 16767)
+    assert(y == 6)
+    let h = 0.5
+    let k = 3i32
+    assert(mixed(1.0, k, 2.0, h, 4.0, h, 6.0, 7.0, h, 9.0, 200u8) == 21500.0 + 900.0 + 30.0 + 200.0)
+    assert(mixed(h * 2.0, k + 1i32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, h + 1.0, (u8) k) == 36000.0 + 150.0 + 40.0 + 3.0)
+    // the last computed argument is the second float
+    assert(mixed(1.0, k, h * 4.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 200u8) == 36000.0 + 900.0 + 30.0 + 200.0)
+    let t = 0.1f32
+    assert(ninth(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1) == 0.1 && ninth(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, h) == h)
+    assert(ninth32(t, t, t, t, t, t, t, t, 0.3f32) == 0.3f32 && ninth32(t, t, t, t, t, t, t, t, t) == t)
+    // through a function value
+    let fv = eight
+    assert(fv(1, x, y, z, x + y, 0, -1, z - 3) == 6461)
+    // to C, variadic: integers and a double in registers, counted for %al
+    let buf = u8[32] {}
+    let n = c.snprintf((any*) buf.ptr, 32usize, c"%d %.2f %.1f %d", (i32) x, h * 5.0, h, k * 4i32)
+    assert(n == 13 && buf[0] == 50u8 && buf[2] == 50u8 && buf[4] == 53u8 && buf[7] == 48u8)
+    assert(buf[9] == 53u8 && buf[11] == 49u8 && buf[12] == 50u8)
+    0
