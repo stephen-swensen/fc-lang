@@ -5,4 +5,4 @@ backtrace:
 # Frames render with FC names and definition sites (looked up via the
 # FC-emitted address table; no linker flags required)
 helper
-main
+main                     defined at

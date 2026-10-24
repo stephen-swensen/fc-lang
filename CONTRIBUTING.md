@@ -91,8 +91,8 @@ together, plus any of these files (note: no leading dot):
 | `expected_stderr_contains` | Lines that must each appear in the program's stderr (fixed-string); `#` starts a comment line. For output whose exact layout varies, such as backtraces. |
 | `*.h` | C headers the test's `extern` declarations include; the test's directory is on the C include path. |
 | `skip_windows` | Skip on Windows (MSYS2/UCRT). The backtrace tests use it: frames come from `execinfo`, which that platform lacks. |
-| `skip_o2` | Skip in the `-O2` runs. For assertions that only hold unoptimized, such as a full backtrace that tail-call optimization would shorten. |
-| `only_o2` | Run only in the `-O2` runs. |
+| `skip_o2` | Skip in the `-O2` runs. For assertions that only hold unoptimized, such as a full backtrace that tail-call optimization would shorten. The native backend's runs count as `-O2` runs here, since it eliminates tail calls too. |
+| `only_o2` | Run only in the `-O2` runs (and the native backend's). |
 
 Every test, including error tests, needs a `let main`; put the bad code inside
 `main`'s body. Exit codes are taken mod 256. Test programs follow FC naming

@@ -3,4 +3,4 @@ unwrap failed
 backtrace:
 # `inner` (crash site) and `main` survive; `outer` is TCO-elided at -O2.
 inner
-main
+main                     defined at

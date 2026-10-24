@@ -1,0 +1,7 @@
+assertion failed: a + b < 0
+backtrace:
+# Every frame, in a chain of non-tail calls
+leaf
+middle
+top
+main                     defined at

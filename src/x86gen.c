@@ -48,9 +48,9 @@
  * x86-64. Elsewhere the rest of fcc is unaffected and --native is an error. */
 void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
                  Arena *arena, InternTable *intern, SymbolTable *symtab,
-                 const char *const *include_dirs, int ninclude_dirs) {
+                 const char *const *include_dirs, int ninclude_dirs, bool backtraces) {
     (void)prog; (void)obj; (void)mono; (void)arena; (void)intern; (void)symtab;
-    (void)include_dirs; (void)ninclude_dirs;
+    (void)include_dirs; (void)ninclude_dirs; (void)backtraces;
     diag_error_simple("--native is supported only on Linux x86-64");
 }
 
@@ -227,6 +227,7 @@ static MonoTable *g_mono = NULL;
 static Arena *g_arena = NULL;
 static InternTable *g_intern = NULL;
 static SymbolTable *g_symtab = NULL;
+static bool g_backtraces;           /* --backtraces: a failure prints the FC call stack */
 
 static void enter_instance(MonoInstance *inst, SubstCtx *subst) {
     *subst = (SubstCtx){ inst->type_param_names, inst->type_args, inst->type_param_count };
@@ -1255,6 +1256,27 @@ static int fnval_label(const char *sym) {
     return l;
 }
 
+/* The declared error codes' names, { ptr, len } each, indexed by code -
+ * FC_ERROR_CODE_BASE; the names are NUL-terminated too. */
+static int g_errnames_label = 0;
+
+static int errnames_label(void) {
+    if (g_errnames_label) return g_errnames_label;
+    int n = error_code_count();
+    g_errnames_label = new_label();
+    int *labels = xcalloc((size_t)(n ? n : 1), sizeof(int));
+    for (int i = 0; i < n; i++) labels[i] = cstr_label(error_code_info(i).qualified);
+    d_align(ASM_RELRO, 8);
+    d_def(ASM_RELRO, g_errnames_label);
+    for (int i = 0; i < n; i++) {
+        d_addr(ASM_RELRO, labels[i], 0);
+        d_int(ASM_RELRO, strlen(error_code_info(i).qualified), 8);
+    }
+    if (n == 0) d_zero(ASM_RELRO, 8);
+    free(labels);
+    return g_errnames_label;
+}
+
 /* Decode a string literal's source text to bytes (caller frees). */
 static unsigned char *decode_lit(const char *s, int slen, int *n) {
     *n = decode_str_lit(s, slen, NULL);
@@ -1294,6 +1316,14 @@ static int msg_label(SrcLoc loc, const char *rest) {
  * values from the jump site. */
 static Code *g_cur_saved;
 
+#define BACKTRACE_SYM "fc_dump_backtrace"
+
+/* Abort, under --backtraces after printing the FC call stack. */
+static void call_abort(void) {
+    if (g_backtraces) call_sym(BACKTRACE_SYM);
+    call_plt("abort");
+}
+
 static int fail_begin(void) {
     int l = new_label();
     g_cur_saved = g_cur;
@@ -1308,7 +1338,7 @@ static void fail_end(int msg) {
     leaq(RIPREL(msg, 0), R(RSI));
     xorl(R(RAX), R(RAX));
     call_plt("fprintf");
-    call_plt("abort");
+    call_abort();
     g_cur = g_cur_saved;
 }
 
@@ -2648,11 +2678,29 @@ static void gen_unary_postfix(Expr *e) {
             ? fmt_escape(e->unary_postfix.expr_text, e->unary_postfix.expr_text_len) : str_dup("");
         gen_expr(e->unary_postfix.operand);
         if (ot->kind == TYPE_RESULT) {
-            char *rest = str_sprintf("unwrap failed: %s (error code %%lld)\n", text);
+            /* Under --backtraces with declared errors, the code's name too. */
+            bool named = g_backtraces && error_code_count() > 0;
+            char *rest = str_sprintf(named ? "unwrap failed: %s (error code %%lld%%s%%s)\n"
+                                           : "unwrap failed: %s (error code %%lld)\n", text);
             int m = msg_label(e->loc, rest);
             free(rest);
             int l = fail_begin();
             movslq(M(RAX, 0), R(RDX));
+            if (named) {
+                /* %rcx, %r8: ": " and the name, or "" and "" for a code with none */
+                int lnone = new_label();
+                leaq(RIPREL(cstr_label(""), 0), R(RCX));
+                movq(R(RCX), R(R8));
+                movq(R(RDX), R(RAX));
+                subq(IMM(FC_ERROR_CODE_BASE), R(RAX));
+                cmpq(IMM(error_code_count()), R(RAX));
+                jcc(CC_AE, lnone);
+                shlq(IMM(4), R(RAX));
+                leaq(RIPREL(errnames_label(), 0), R(R8));
+                movq(MI(R8, RAX, 1, 0), R(R8));
+                leaq(RIPREL(cstr_label(": "), 0), R(RCX));
+                label(lnone);
+            }
             fail_end(m);
             cmpl(IMM(0), M(RAX, 0));
             jcc(CC_NE, l);
@@ -4610,7 +4658,7 @@ static void gen_match(Expr *e, bool tail) {
         if (!arm->guard && !pattern_has_predicate(arm->pattern)) { exhausted = true; break; }
         if (!any_guard && last) exhausted = true;
     }
-    if (!exhausted) call_c("abort");
+    if (!exhausted) call_abort();
     label(lend);
 }
 
@@ -4907,7 +4955,7 @@ static void gen_assert(Expr *e) {
         leaq(RIPREL(m, 0), R(RSI));
         xorl(R(RAX), R(RAX));
         call_c("fprintf");
-        call_c("abort");
+        call_abort();
     } else {
         char *rest = str_sprintf("assertion failed: %s\n", text);
         int m = msg_label(e->loc, rest);
@@ -4917,7 +4965,7 @@ static void gen_assert(Expr *e) {
         leaq(RIPREL(m, 0), R(RSI));
         xorl(R(RAX), R(RAX));
         call_c("fprintf");
-        call_c("abort");
+        call_abort();
     }
     free(text);
     label(lok);
@@ -4953,24 +5001,10 @@ static void gen_enum_of(Expr *e) {
     leaq(fp(t), R(RAX));
 }
 
-static int g_errnames_label = 0;
-
 static void gen_error_name(Expr *e) {
     Type *opt = conc(e->type);
     int n = error_code_count();
-    if (!g_errnames_label) {
-        g_errnames_label = new_label();
-        int *labels = xcalloc((size_t)(n ? n : 1), sizeof(int));
-        for (int i = 0; i < n; i++) labels[i] = cstr_label(error_code_info(i).qualified);
-        d_align(ASM_RELRO, 8);
-        d_def(ASM_RELRO, g_errnames_label);
-        for (int i = 0; i < n; i++) {
-            d_addr(ASM_RELRO, labels[i], 0);
-            d_int(ASM_RELRO, strlen(error_code_info(i).qualified), 8);
-        }
-        if (n == 0) d_zero(ASM_RELRO, 8);
-        free(labels);
-    }
+    int names = errnames_label();
     gen_expr(e->error_name_expr.code);
     int32_t t = temp_alloc(opt);
     int32_t cs = slot_alloc(8, 8);
@@ -4982,7 +5016,7 @@ static void gen_error_name(Expr *e) {
     cmpq(IMM(n), R(RAX));
     jcc(CC_AE, lnone);
     shlq(IMM(4), R(RAX));
-    leaq(RIPREL(g_errnames_label, 0), R(RCX));
+    leaq(RIPREL(names, 0), R(RCX));
     addq(R(RCX), R(RAX));
     movq(M(RAX, 0), R(RCX));
     movq(R(RCX), fp(t));
@@ -5247,6 +5281,8 @@ typedef struct {
     int body_count;
     Expr *lambda;       /* a lifted lambda: its captures and self binding */
     bool is_main;
+    const char *disp;   /* --backtraces: its name in a frame, or NULL to leave it out */
+    SrcLoc def;         /* and where it is defined */
 } FnSpec;
 
 /* ---- Register locals ----
@@ -5720,8 +5756,8 @@ static void begin_function(void) {
 }
 
 /* The function into the text: prologue, body, epilogue, then the cold
- * failure paths, under one unwind entry. */
-static void end_function(const char *sym, bool global) {
+ * failure paths, under one unwind entry. Returns the label of its end. */
+static int end_function(const char *sym, bool global) {
     Code *o = g_cur = &g_text;
     int s = asm_sym(sym);
     if (global) asm_sym_global(s);
@@ -5747,9 +5783,123 @@ static void end_function(const char *sym, bool global) {
     x_op0(o, OP_RET);
     x_cfi(o, CFI_RESTORE);
     code_append(o, &g_cold);
+    int end = new_label();
+    x_label(o, end);
     x_cfi(o, CFI_END);
     x_func_end(o, s);
     g_cur = NULL;
+    return end;
+}
+
+/* ---- Backtraces ----
+ * Under --backtraces each FC function gets an entry in a table: its code's
+ * range, its name in a frame (NULL for one left out, an extern's wrapper)
+ * and where it is defined. A failure calls fc_dump_backtrace before it
+ * aborts; that walks the stack with the C library's backtrace(), which
+ * unwinds through the functions' .eh_frame entries, names each return
+ * address by the entry whose range holds it, and stops at main. A frame no
+ * entry holds (the C library's, a shim function's) is printed as its
+ * address. The output is the C backend's. */
+
+typedef struct { int sym, end; const char *name; SrcLoc def; } TraceEntry;
+static TraceEntry *g_traces;
+static int g_ntraces, g_traces_cap;
+
+static void trace_add(const char *sym, int end, const char *name, SrcLoc def) {
+    TraceEntry t = { asm_sym(sym), end, name, def };
+    DA_APPEND(g_traces, g_ntraces, g_traces_cap, t);
+}
+
+/* The table, { start, end, name, file, line } per function, and the helper
+ * that prints a backtrace from it. */
+static void emit_backtrace_helper(void) {
+    enum { ENTRY = 40, NFRAMES = 64 };
+    int tab = new_label();
+    d_align(ASM_RELRO, 8);
+    d_def(ASM_RELRO, tab);
+    for (int i = 0; i < g_ntraces; i++) {
+        TraceEntry *t = &g_traces[i];
+        d_addr(ASM_RELRO, t->sym, 0);
+        d_addr(ASM_RELRO, t->end, 0);
+        if (t->name) d_addr(ASM_RELRO, cstr_label(t->name), 0);
+        else d_zero(ASM_RELRO, 8);
+        d_addr(ASM_RELRO, cstr_label(t->def.filename ? t->def.filename : "<unknown>"), 0);
+        d_int(ASM_RELRO, (uint64_t)(t->def.line > 0 ? t->def.line : 0), 8);
+    }
+    if (g_ntraces == 0) d_zero(ASM_RELRO, 8);
+
+    begin_function();
+    int32_t frames = slot_alloc(8 * NFRAMES, 16);
+    int32_t n = slot_alloc(8, 8), i = slot_alloc(8, 8), printed = slot_alloc(8, 8), ent = slot_alloc(8, 8);
+    int ltop = new_label(), lsearch = new_label(), lnext = new_label();
+    int lunknown = new_label(), lfound = new_label(), lcont = new_label();
+    leaq(fp(frames), R(RDI));
+    movl(IMM(NFRAMES), R(RSI));
+    call_plt("backtrace");
+    movslq(R(RAX), R(RAX));
+    movq(R(RAX), fp(n));
+    cmpq(IMM(2), R(RAX));
+    jcc(CC_L, g_ret_label);
+    leaq(RIPREL(cstr_label("backtrace:\n"), 0), R(RDI));
+    movq(GOTREL(asm_sym("stderr")), R(RSI));
+    movq(M(RSI, 0), R(RSI));
+    call_plt("fputs");
+    movq(IMM(0), fp(printed));
+    movq(IMM(1), fp(i));            /* frame 0 is this function */
+    label(ltop);
+    movq(fp(i), R(RAX));
+    cmpq(fp(n), R(RAX));
+    jcc(CC_GE, g_ret_label);
+    /* The entry holding the return address less one: the call. */
+    movq(MI(RBP, RAX, 8, frames), R(RDX));
+    subq(IMM(1), R(RDX));
+    leaq(RIPREL(tab, 0), R(RSI));
+    mov_imm_to(g_ntraces, RCX);
+    label(lsearch);
+    testq(R(RCX), R(RCX));
+    jcc(CC_E, lunknown);
+    cmpq(M(RSI, 0), R(RDX));
+    jcc(CC_B, lnext);
+    cmpq(M(RSI, 8), R(RDX));
+    jcc(CC_B, lfound);
+    label(lnext);
+    addq(IMM(ENTRY), R(RSI));
+    subq(IMM(1), R(RCX));
+    jmp(lsearch);
+    label(lunknown);
+    movq(GOTREL(asm_sym("stderr")), R(RDI));
+    movq(M(RDI, 0), R(RDI));
+    leaq(RIPREL(cstr_label("  #%d %p\n"), 0), R(RSI));
+    movq(fp(printed), R(RDX));
+    movq(fp(i), R(RAX));
+    movq(MI(RBP, RAX, 8, frames), R(RCX));
+    xorl(R(RAX), R(RAX));
+    call_plt("fprintf");
+    incq(fp(printed));
+    jmp(lcont);
+    label(lfound);
+    cmpq(IMM(0), M(RSI, 16));
+    jcc(CC_E, lcont);               /* a frame left out */
+    movq(R(RSI), fp(ent));
+    movq(GOTREL(asm_sym("stderr")), R(RDI));
+    movq(M(RDI, 0), R(RDI));
+    leaq(RIPREL(cstr_label("  #%d %-24s defined at %s:%d\n"), 0), R(RSI));
+    movq(fp(printed), R(RDX));
+    movq(fp(ent), R(RAX));
+    movq(M(RAX, 16), R(RCX));
+    movq(M(RAX, 24), R(R8));
+    movq(M(RAX, 32), R(R9));
+    xorl(R(RAX), R(RAX));
+    call_plt("fprintf");
+    incq(fp(printed));
+    movq(fp(ent), R(RAX));          /* main is the last frame shown */
+    leaq(RIPREL(cstr_label("main"), 0), R(RCX));
+    cmpq(R(RCX), M(RAX, 16));
+    jcc(CC_E, g_ret_label);
+    label(lcont);
+    incq(fp(i));
+    jmp(ltop);
+    end_function(BACKTRACE_SYM, false);
 }
 
 static bool body_escapes(Expr **body, int n) {
@@ -5854,7 +6004,8 @@ static void emit_function(FnSpec *f) {
     if (!done) emit_scope_defers(g_defer);
     defer_pop();
     if (f->is_main && !done) xorl(R(RAX), R(RAX));
-    end_function(f->sym, f->global);
+    int end = end_function(f->sym, f->global);
+    if (g_backtraces) trace_add(f->sym, end, f->disp, f->def);
 }
 
 /* ---- Lifted lambdas, instances, wrappers and trampolines ---- */
@@ -5881,6 +6032,8 @@ static void emit_lambda(Expr *lam) {
     f.body = lam->func.body;
     f.body_count = lam->func.body_count;
     f.lambda = lam;
+    f.disp = "<lambda>";
+    f.def = lam->loc;
     emit_function(&f);
 }
 
@@ -6611,7 +6764,7 @@ static void emit_global(Decl *d) {
  * globals in order), in its own frame: a global's slice literal backing or
  * interpolation buffer lives there for the whole program. Then it builds
  * the str[] arguments and calls fc_main. */
-static void emit_c_main(void) {
+static void emit_c_main(SrcLoc main_def) {
     begin_function();
     g_fn_ret = type_int32();
     g_tco_ok = false;
@@ -6660,7 +6813,9 @@ static void emit_c_main(void) {
     movq(fp(arr), R(RDI));
     movq(fp(argc), R(RSI));
     call_sym("fc_main");
-    end_function("main", true);
+    int end = end_function("main", true);
+    /* A failing initializer runs in it: shown as main. */
+    if (g_backtraces) trace_add("main", end, "main", main_def);
 }
 
 /* ================================================================
@@ -7439,7 +7594,8 @@ static bool is_generic(Decl *d) {
 
 void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
                  Arena *arena, InternTable *intern, SymbolTable *symtab,
-                 const char *const *include_dirs, int ninclude_dirs) {
+                 const char *const *include_dirs, int ninclude_dirs, bool backtraces) {
+    g_backtraces = backtraces;
     g_mono = mono;
     g_arena = arena;
     g_intern = intern;
@@ -7466,6 +7622,7 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
 
     /* Functions */
     bool has_main = false;
+    SrcLoc main_def = { 0 };
     ExprList lambdas = { 0 };
     for (int i = 0; i < n; i++) {
         Decl *d = all[i];
@@ -7478,11 +7635,14 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
         f.nparams = fn->func.param_count;
         f.body = fn->func.body;
         f.body_count = fn->func.body_count;
+        f.disp = d->let.name;
+        f.def = d->loc;
         if (!d->let.is_module_member && strcmp(d->let.name, "main") == 0) {
             f.sym = "fc_main";
             f.is_main = true;
             f.ret = type_int32();
             has_main = true;
+            main_def = d->loc;
         } else {
             f.sym = d->let.codegen_name ? d->let.codegen_name : d->let.name;
             f.ret = d->let.resolved_type->func.return_type;
@@ -7513,6 +7673,15 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
         f.has_ctx = true;
         f.body = fn->func.body;
         f.body_count = fn->func.body_count;
+        f.def = tmpl->loc;
+        if (g_backtraces) {     /* name<T1, T2> */
+            const char *disp = arena_sprintf(g_arena, "%s<", tmpl->let.name);
+            for (int j = 0; j < inst->type_param_count; j++) {
+                const char *tn = type_name(inst->type_args[j]);
+                disp = arena_sprintf(g_arena, "%s%s%s", disp, j ? ", " : "", tn ? tn : "?");
+            }
+            f.disp = arena_sprintf(g_arena, "%s>", disp);
+        }
         emit_function(&f);
         ExprList il = { 0 };
         for (int j = 0; j < fn->func.body_count; j++) collect_lambdas(fn->func.body[j], &il);
@@ -7521,7 +7690,7 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
         leave_instance();
     }
 
-    if (has_main) emit_c_main();
+    if (has_main) emit_c_main(main_def);
 
     /* Helpers requested along the way, which may request more. */
     int done_eq = 0, done_tr = 0, done_cw = 0;
@@ -7530,6 +7699,8 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
         while (done_tr < g_tramp_n) emit_trampoline(&g_tramps[done_tr++]);
         while (done_eq < g_eq_n) emit_eq_helper(&g_eqs[done_eq++]);
     }
+
+    if (g_backtraces) emit_backtrace_helper();
 
     int shim_len = 0;
     char *shim = build_shim(&shim_len);
@@ -7555,6 +7726,7 @@ done:
     free(g_tramps); g_tramps = NULL; g_tramp_n = g_tramp_cap = 0;
     free(g_cwraps); g_cwraps = NULL; g_cwrap_n = g_cwrap_cap = 0;
     free(g_runtime_globals); g_runtime_globals = NULL; g_rg_n = g_rg_cap = 0;
+    free(g_traces); g_traces = NULL; g_ntraces = g_traces_cap = 0;
     hmap_free(&g_shim_used);
     free_cenv();
     free(all);

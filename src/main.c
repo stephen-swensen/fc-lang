@@ -210,26 +210,22 @@ int main(int argc, char **argv) {
     }
 
     if (ca.native) {
-        if (backtraces) {
-            diag_error_simple("--backtraces is not supported by the native backend");
-        } else {
-            Obj obj;
-            obj_init(&obj);
-            x86gen_emit(prog, &obj, &mono, &arena, &intern_table, &symtab,
-                        (const char *const *)ca.include_dirs, ca.include_dir_count);
-            if (diag_error_count() == 0 && ca.compile_only) {
-                FILE *out = fopen(output_path, "wb");
-                if (!out) diag_fatal_simple("cannot open output '%s'", output_path);
-                bool ok = obj_write(&obj, out);
-                if (fclose(out) != 0 || !ok)
-                    diag_error_simple("cannot write the object file '%s'", output_path);
-            } else if (diag_error_count() == 0) {
-                LinkArgs link = { (const char *const *)ca.link_inputs, ca.link_count,
-                                  (const char *const *)ca.lib_dirs, ca.lib_dir_count };
-                elf_link(&obj, &link, output_path);
-            }
-            obj_free(&obj);
+        Obj obj;
+        obj_init(&obj);
+        x86gen_emit(prog, &obj, &mono, &arena, &intern_table, &symtab,
+                    (const char *const *)ca.include_dirs, ca.include_dir_count, backtraces);
+        if (diag_error_count() == 0 && ca.compile_only) {
+            FILE *out = fopen(output_path, "wb");
+            if (!out) diag_fatal_simple("cannot open output '%s'", output_path);
+            bool ok = obj_write(&obj, out);
+            if (fclose(out) != 0 || !ok)
+                diag_error_simple("cannot write the object file '%s'", output_path);
+        } else if (diag_error_count() == 0) {
+            LinkArgs link = { (const char *const *)ca.link_inputs, ca.link_count,
+                              (const char *const *)ca.lib_dirs, ca.lib_dir_count };
+            elf_link(&obj, &link, output_path);
         }
+        obj_free(&obj);
     } else {
         /* Opened for update: codegen writes the body, reads it back to choose
          * the preamble, then rewrites the file from its start. */

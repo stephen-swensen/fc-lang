@@ -296,8 +296,16 @@ when the declarations change, a header changes, or a header appears that the
 search would find first. A result is not cached when a file it read changed
 in the second or two before the compile, since the compiler may have seen it
 mid-edit. Entries are written to a temporary file and renamed into place, so
-parallel builds never read a partial one. `--backtraces` and a `--len-repr`
-other than 64 are not supported yet.
+parallel builds never read a partial one. A `--len-repr` other than 64 is not
+supported yet.
+
+With `--backtraces`, every function the backend emits gets an entry in a
+table of code ranges, names and definition sites. Before it aborts, each
+failure path calls a helper that walks the stack with the C library's
+`backtrace()`, which unwinds through the backend's `.eh_frame`, and prints
+the frames as the C backend does. A frame outside every range, such as the C
+library's under a callback, is printed as its address. Since tail calls are
+jumps, a trace has the frames a C build at `-O2` has.
 
 The linker (`elflink.c`) makes what `cc -pie -z now -z relro` makes of the
 same object, for glibc, with an entry point of its own (`_start`, which calls

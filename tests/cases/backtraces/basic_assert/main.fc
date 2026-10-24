@@ -3,5 +3,5 @@ let helper = (n: i32) ->
     n
 
 let main = (args: str[]) ->
-    let _r = helper(0)
-    0
+    let r = helper(0)
+    r + 1          // not just helper's result, so the call stays a call at -O2

@@ -1,0 +1,5 @@
+assertion failed: x != 3
+backtrace:
+# The callback, called by qsort
+cmp
+main                     defined at

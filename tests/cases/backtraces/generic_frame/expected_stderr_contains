@@ -1,4 +1,4 @@
 assertion failed
 backtrace:
 check<i32>
-main
+main                     defined at

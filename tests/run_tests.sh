@@ -43,6 +43,8 @@ esac
 # drives the skip_o2 / only_o2 markers below.
 IS_O2=""
 case "${CC_OPT:-}" in *-O2*) IS_O2=1 ;; esac
+# The native backend eliminates tail calls as the C compilers do at -O2.
+[ -n "${NATIVE:-}" ] && IS_O2=1
 
 # UCRT's abort() exits with status 3 (it calls _exit(3) after raising SIGABRT),
 # whereas POSIX reports 128+SIGABRT=134. Existing .expected_exit files hardcode

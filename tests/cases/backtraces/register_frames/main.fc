@@ -1,0 +1,23 @@
+// Frames whose functions keep locals in callee-saved registers walk like any
+// other: the unwinder finds where each one saved its caller's registers, so
+// no frame is lost between the failure and main.
+let leaf = (n: i64) ->
+    let a = n * 3
+    let b = a + n
+    assert(a + b < 0)
+    a + b
+
+let middle = (n: i64) ->
+    let x = n + 1
+    let y = x * 2
+    let r = leaf(x + y)
+    r + x + y
+
+let top = (n: i64) ->
+    let p = n * 7
+    let q = middle(p)
+    q + p
+
+let main = (args: str[]) ->
+    let _r = top(1)
+    0

@@ -5,4 +5,4 @@ backtrace:
 # --backtraces suppresses hot/cold splitting. Without the pragma, gcc -O2 drops
 # this frame and the test fails.
 probe
-main
+main                     defined at

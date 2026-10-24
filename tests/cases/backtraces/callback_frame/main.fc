@@ -1,0 +1,14 @@
+// A callback that fails under a C function (qsort) is named, and the walk
+// goes on through the C library's frames to main.
+module libc from "stdlib.h" =
+    extern qsort: (any*, usize, usize, (const any*, const any*) -> i32) -> void
+
+let cmp = (a: const any*, b: const any*) ->
+    let x = *((const i32*) a)
+    assert(x != 3)
+    0
+
+let main = (args: str[]) ->
+    let mut xs = i32[4] { 4, 3, 2, 1 }
+    libc.qsort((any*) xs.ptr, 4usize, 4usize, cmp)
+    0
