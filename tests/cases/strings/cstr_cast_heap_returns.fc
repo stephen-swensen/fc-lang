@@ -1,5 +1,5 @@
 // The heap home of a str→cstr conversion — alloc((cstr) s)! — is PROV_HEAP, so
-// (unlike the alloca and (cstr[N]) stack homes) it may be returned from the
+// (unlike the alloca and c"%.Ns{s}" stack homes) it may be returned from the
 // function that built it. The caller owns and frees it.
 module c from "string.h" =
     extern strlen: (const cstr) -> usize

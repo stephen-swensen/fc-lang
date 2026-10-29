@@ -1,1 +1,1 @@
-alloca(expr) requires an interpolated string, a slice literal or an unbounded (cstr) cast
+alloca(expr) requires an interpolated string, a slice literal or a (cstr) cast

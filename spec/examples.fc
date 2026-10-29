@@ -305,8 +305,8 @@ let main = (args: str[]) ->
         let w = unchecked (127i8 + 1i8)      // intentional wrap to -128 inside a checked region
         w + 0i8                              // a checked op keeps `checked` non-redundant
     assert(wrapped == -128i8)
-    // `checked` also governs the truncating string forms: (cstr[N]) and %.Ns
-    // clip silently by default, and abort under checked when the source is longer.
+    // `checked` also governs string truncation: a %.Ns segment clips silently
+    // by default, and aborts under checked when the source is longer.
     let word = "hello"
     let bounded = checked "%.5s{word}"       // fits (len == precision); would abort past 5
     assert(bounded == "hello")
@@ -881,10 +881,10 @@ let main = (args: str[]) ->
     assert(bounded == "hello world")
     assert(on_stack == "hello world")
 
-    // str → cstr conversion is likewise explicit: the (cstr) cast names the
-    // conversion, and the same three homes apply. A bare (cstr) cast is rejected;
-    // pick a home.
-    let cs = (cstr[16]) name                    // bounded: 16-byte stack buffer (truncating)
+    // str → cstr conversion is likewise explicit, with the same three homes. A
+    // bounded copy is a c"..." interpolation; the (cstr) cast names the
+    // unbounded conversion, and a bare one is rejected: pick a home.
+    let cs = c"%.15s{name}"                     // bounded: fixed stack buffer (truncates past 15)
     let cs_stack = alloca((cstr) name)          // alloca → dynamic stack (non-truncating)
     let cs_heap = alloc((cstr) name)!           // heap → caller frees
     defer free(cs_heap)

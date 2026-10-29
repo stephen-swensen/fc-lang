@@ -1,0 +1,7 @@
+// `checked` turns the c"%.Ns{s}" silent clip into an abort: a source longer
+// than N is defined data loss on the overflow axis, same as a lossy
+// narrowing cast. (The plain-copy emission of a lone segment, not snprintf.)
+let main = (args: str[]) ->
+    let s = "hello"
+    let _ = checked c"%.3s{s}"    // len 5 > max 3 -> abort
+    1   // not reached: the line above aborts

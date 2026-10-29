@@ -1,0 +1,8 @@
+// (cstr[N]) is not a cast, whatever its operand or size. A size with no
+// precision to suggest (0, or past the 32767 precision limit) gets the
+// general form of the error.
+let main = (args: str[]) ->
+    let p = default(i32*)
+    let q = (cstr[0]) p
+    let r = (cstr[40000]) p
+    0

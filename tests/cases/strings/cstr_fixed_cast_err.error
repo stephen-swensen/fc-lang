@@ -1,0 +1,1 @@
+(cstr[16]) is not a cast; copy a str into a bounded stack buffer with c"%.15s{...}" (at most 15 bytes, truncating)

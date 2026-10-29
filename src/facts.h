@@ -10,9 +10,8 @@
  * value-precondition guards: float-to-int saturation, the integer
  * divide/modulo zero check, and slice indexing and subslice bounds.
  * `checked` switches on the data-loss traps: integer `+ - *`, signed `/` (at
- * MIN / -1), signed negation, a lossy integer narrowing cast, and the two
- * truncating string forms (a `(cstr[N])` cast, a `%.Ns` interpolation
- * segment). pass2 rejects a marker whose body has none of the operations it
+ * MIN / -1), signed negation, a lossy integer narrowing cast, and the
+ * truncating string form (a `%.Ns` interpolation segment). pass2 rejects a marker whose body has none of the operations it
  * governs as redundant; codegen gates exactly these on the marker, so the two
  * cannot disagree.
  *
@@ -31,6 +30,14 @@ bool facts_overflow_governs(const Expr *e, Type *(*resolve)(Type *));
  * Defined as the negation of interp_const_buffer_size, which codegen uses to
  * size the buffer. */
 bool interp_is_runtime_sized(const Expr *e);
+
+/* The precision N when a cstr interpolation is only a bounded copy of a str,
+ * c"%.Ns{s}" in its bare stack home: one %s segment of a str with a precision
+ * and no flags or width, and no literal text. -1 for any other interpolation.
+ * Both backends emit it as the copy it is, min(len, N) bytes and a NUL into
+ * the hoisted buffer, rather than through snprintf; a cstr reader cannot tell
+ * the two apart. `resolve` as for interp_const_buffer_size. */
+int interp_bounded_copy_prec(const Expr *e, Type *(*resolve)(Type *));
 
 /* Explicit truncating precision of a `%s` format segment (>= 0), or -1 when the
  * segment is literal, not %s, or has no precision. A precision caps the

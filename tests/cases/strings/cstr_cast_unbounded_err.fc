@@ -1,5 +1,5 @@
-// Error: a bare (cstr) cast of a runtime-length str is unbounded; use (cstr[N]),
-// alloc((cstr) s)!, or alloca((cstr) s).
+// Error: a bare (cstr) cast of a runtime-length str is unbounded; use
+// c"%.Ns{s}", alloc((cstr) s)!, or alloca((cstr) s).
 let main = (args: str[]) ->
     let s = "hello"
     let cs = (cstr) s

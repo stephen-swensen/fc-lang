@@ -153,8 +153,8 @@ static bool g_guards_suppressed = false;
 /* Lexical overflow context, toggled by EXPR_GUARD on the overflow axis
  * (checked/unchecked). When true, integer `+ - *`, signed `/` at INT_MIN/-1,
  * signed negation, lossy integer narrowing casts, and the truncating string
- * forms (a `(cstr[N])` cast, a `%.Ns` interpolation segment) abort instead of
- * wrapping or truncating. Default false (unchecked: wrap, the FC default).
+ * form (a `%.Ns` interpolation segment) abort instead of wrapping or
+ * truncating. Default false (unchecked: wrap, the FC default).
  * Independent of g_guards_suppressed: the two axes are orthogonal. Saved and
  * restored around each marker's body; reset to false at function/lambda
  * boundaries so a marker never leaks across a call. */
@@ -206,8 +206,8 @@ static bool name_addressed(const char *codegen_name) {
 }
 
 /* Function-entry backing slots for stack temporaries of a known size: slice
- * literals, constant-size interpolation buffers, `(cstr[N])` cast buffers and
- * capturing closures' contexts. Each entry is the node; its slot is declared
+ * literals, constant-size interpolation buffers and capturing closures'
+ * contexts. Each entry is the node; its slot is declared
  * at function top and the use site references it by name (its
  * codegen_backing_name, or codegen_ctx_backing_name for a closure).  Unlike a per-evaluation alloca, the
  * slot is reused across loop iterations, so stack use stays bounded.  The
@@ -501,13 +501,6 @@ static void collect_hoisted_bindings(Expr *e) {
                       e->unary_prefix.operand->ident.codegen_name);
         }
         break;
-    case EXPR_CAST:
-        /* (cstr[N]) bounded str->cstr cast: the truncating copy lands in a fixed
-         * uint8[N] slot, reused across loop iterations, and the produced cstr
-         * keeps function-frame lifetime. */
-        if (e->cast.bounded)
-            add_fn_backing(e, &e->cast.codegen_backing_name);
-        break;
     case EXPR_ARRAY_LIT:
         /* The size N is a compile-time literal (enforced in pass2), so the array
          * gets a fixed slot reused per loop iteration. C has no zero-length
@@ -650,9 +643,6 @@ static void emit_fn_backing_decls(FILE *out) {
             fprintf(out, " %s[%" PRIu64 "];\n",
                     e->array_lit.codegen_backing_name,
                     e->array_lit.size_expr->int_lit.value);
-        } else if (e->kind == EXPR_CAST) { /* (cstr[N]) */
-            fprintf(out, "uint8_t %s[%lld];\n",
-                    e->cast.codegen_backing_name, (long long)e->cast.buffer_size);
         } else if (e->kind == EXPR_FUNC) { /* capturing-lambda context struct */
             fprintf(out, "_ctx_%s %s;\n",
                     lambda_c_name(e), e->func.codegen_ctx_backing_name);
@@ -2299,6 +2289,34 @@ static void emit_interp_string(Expr *e, FILE *out, Type *alloc_opt_type) {
     int tid = g_temp_counter++;
     int seg_count = e->interp_string.segment_count;
     InterpSegment *segs = e->interp_string.segments;
+
+    /* c"%.Ns{s}" alone in its hoisted buffer is a plain bounded copy
+     * (interp_bounded_copy_prec): min(len, N) bytes and a NUL, emitted as a
+     * memcpy rather than an snprintf. */
+    int copy_prec = (use_heap || !e->interp_string.codegen_backing_name)
+        ? -1 : interp_bounded_copy_prec(e, instance_type);
+    if (copy_prec >= 0) {
+        Expr *src = NULL;
+        for (int i = 0; i < seg_count && !src; i++)
+            if (!segs[i].is_literal) src = segs[i].expr;
+        const char *bk = e->interp_string.codegen_backing_name;
+        fprintf(out, "({ ");
+        emit_type(src->type, out);
+        fprintf(out, " _sg%d_0 = ", tid);
+        emit_expr(src, out);
+        fprintf(out, "; ");
+        if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
+            fprintf(out, "if (_sg%d_0.len > (int64_t)%d) fc_trunc(", tid, copy_prec);
+            emit_loc_args(src->loc, out);
+            fprintf(out, ", \"%%.%ds segment\", (long long)_sg%d_0.len, %d); ",
+                    copy_prec, tid, copy_prec);
+        }
+        fprintf(out, "int64_t _cn%d = _sg%d_0.len < %d ? _sg%d_0.len : %d; ",
+                tid, tid, copy_prec, tid, copy_prec);
+        fprintf(out, "memcpy(%s, _sg%d_0.ptr, fc_to_size(_cn%d)); ", bk, tid, tid);
+        fprintf(out, "%s[_cn%d] = '\\0'; (uint8_t*)%s; })", bk, tid, bk);
+        return;
+    }
 
     fprintf(out, "({ ");
 
@@ -3986,36 +4004,15 @@ static void emit_cast(Expr *e, FILE *out) {
     /* str -> cstr: stack copy with null terminator */
     if (e->cast.operand->type && is_str_type(e->cast.operand->type) &&
         is_cstr_type(e->cast.target)) {
+        /* Only alloca((cstr) s) reaches here (pass2 rejects the cast
+         * anywhere else, and alloc((cstr) s) is emitted by emit_alloc). A
+         * dynamic-stack copy with a terminator. */
         int tid = g_temp_counter++;
-        if (e->cast.bounded) {
-            /* (cstr[N]): truncating copy into a fixed N-byte backing array
-             * hoisted to function entry: bounded, loop-safe. Copy at most
-             * N-1 bytes, always NUL-terminate. */
-            long long n = e->cast.buffer_size;
-            const char *bk = e->cast.codegen_backing_name;
-            fprintf(out, "({ fc_str _sc%d = ", tid);
-            emit_expr(e->cast.operand, out);
-            if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
-                /* `checked`: the clip is data loss on the overflow axis, so
-                 * abort instead of truncating. */
-                fprintf(out, "; if (_sc%d.len > %lld) fc_trunc(", tid, n - 1);
-                emit_loc_args(e->loc, out);
-                fprintf(out, ", \"(cstr[%lld]) cast\", (long long)_sc%d.len, %lld)", n, tid, n - 1);
-            }
-            fprintf(out, "; int64_t _cn%d = _sc%d.len < %lld ? _sc%d.len : %lld",
-                    tid, tid, n - 1, tid, n - 1);
-            fprintf(out, "; memcpy(%s, _sc%d.ptr, fc_to_size(_cn%d))", bk, tid, tid);
-            fprintf(out, "; %s[_cn%d] = '\\0'; (uint8_t*)%s; })", bk, tid, bk);
-        } else {
-            /* Unbounded (cstr): only alloca((cstr) s) reaches here (pass2
-             * rejects the cast anywhere else, and alloc((cstr) s) is emitted
-             * by emit_alloc). A dynamic-stack copy with a terminator. */
-            fprintf(out, "({ fc_str _sc%d = ", tid);
-            emit_expr(e->cast.operand, out);
-            fprintf(out, "; uint8_t *_cb%d = (uint8_t*)__builtin_alloca(fc_to_size(_sc%d.len + 1))", tid, tid);
-            fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, fc_to_size(_sc%d.len))", tid, tid, tid);
-            fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (uint8_t*)_cb%d; })", tid, tid, tid);
-        }
+        fprintf(out, "({ fc_str _sc%d = ", tid);
+        emit_expr(e->cast.operand, out);
+        fprintf(out, "; uint8_t *_cb%d = (uint8_t*)__builtin_alloca(fc_to_size(_sc%d.len + 1))", tid, tid);
+        fprintf(out, "; memcpy(_cb%d, _sc%d.ptr, fc_to_size(_sc%d.len))", tid, tid, tid);
+        fprintf(out, "; _cb%d[_sc%d.len] = '\\0'; (uint8_t*)_cb%d; })", tid, tid, tid);
     /* cstr -> str: wrap pointer with strlen-computed length */
     } else if (e->cast.operand->type && is_cstr_type(e->cast.operand->type) &&
                is_str_type(e->cast.target)) {

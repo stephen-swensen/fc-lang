@@ -1,8 +1,8 @@
-// A checked (cstr[N]) truncation aborts inside a monomorphized generic body
+// A checked c"%.Ns{s}" truncation aborts inside a monomorphized generic body
 // exactly as in a plain function.
 let clip = (x: 'a) ->
     let label = "hello"
-    let cs = checked (cstr[4]) label   // len 5 > max 3 -> abort
+    let cs = checked c"%.3s{label}"    // len 5 > max 3 -> abort
     let _ = cs
     x
 

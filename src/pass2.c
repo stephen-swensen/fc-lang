@@ -487,9 +487,8 @@ static bool expr_may_yield_stack(const Pretaint *pt, Expr *e) {
     case EXPR_ALLOC:
         return e->alloc_expr.is_stack;   /* alloca; alloc is heap */
     case EXPR_CAST:
-        /* (cstr[N]) s copies into a stack buffer; other casts keep the
-         * operand's provenance. */
-        return e->cast.bounded || expr_may_yield_stack(pt, e->cast.operand);
+        /* A cast keeps the operand's provenance. */
+        return expr_may_yield_stack(pt, e->cast.operand);
 
     case EXPR_IDENT:
         return pretaint_has_name(pt, e->ident.name) ||
@@ -2810,7 +2809,7 @@ static bool check_float_literal_range(Type *type, bool out_of_range, bool underf
  * Without the copy, a stack value's PROV_STACK would become the arena-zeroed
  * default (PROV_UNKNOWN) and every escape sink reading the widened value
  * (return, global store, heap-field store, option payload, struct-literal
- * field) would miss it; e.g. assigning a stack `(cstr[N]) s` to a `const cstr`
+ * field) would miss it; e.g. assigning a stack `c"%.Ns{s}"` to a `const cstr`
  * global widens cstr to const cstr. */
 static Expr *wrap_widen(Arena *a, Expr *e, Type *target) {
     Expr *cast = arena_alloc(a, sizeof(Expr));
@@ -5665,8 +5664,7 @@ static Type *check_field(CheckCtx *ctx, Expr *e) {
 }
 
 /* alloca(...): a dynamic-stack buffer alloca(T, n) or alloca(T[] { len = n }), or a
- * stack copy of an interpolated string, slice literal or unbounded (cstr)
- * cast. */
+ * stack copy of an interpolated string, slice literal or (cstr) cast. */
 static Type *check_alloca(CheckCtx *ctx, Expr *e) {
     /* alloca(...): dynamic stack. Same shapes as alloc, but the result is
      * the value directly (no option, no failure sentinel) and is tagged
@@ -5727,7 +5725,7 @@ static Type *check_alloca(CheckCtx *ctx, Expr *e) {
     }
     diag_error(e->loc,
         "alloca(expr) requires an interpolated string, a slice literal "
-        "or an unbounded (cstr) cast; any other operand would be "
+        "or a (cstr) cast; any other operand would be "
         "aliased rather than copied; use alloca(T, n) or "
         "alloca(T[] { len = n }) for an uninitialized buffer");
     return poison(e);
@@ -5834,9 +5832,8 @@ static Type *check_alloc_value(CheckCtx *ctx, Expr *e) {
         return e->type;
     }
     /* alloc((cstr) str): cstr?, a heap copy of a str-to-cstr conversion
-     * (the heap form of an unbounded (cstr) cast). The bounded (cstr[N])
-     * form has its own storage, so only the unbounded cast qualifies. */
-    if (ie->kind == EXPR_CAST && !ie->cast.bounded && is_cstr_type(t)) {
+     * (the heap form of a (cstr) cast). */
+    if (ie->kind == EXPR_CAST && is_cstr_type(t)) {
         Type *rt = type_pointer(ctx->arena, type_uint8());
         e->type = type_option(ctx->arena, rt);
         e->prov = PROV_HEAP;
@@ -7223,35 +7220,21 @@ static Type *check_cast(CheckCtx *ctx, Expr *e) {
         diag_error(e->loc, "invalid cast from %s to %s", type_name(from), type_name(to));
         return poison(e);
     }
-    /* A (cstr[N]) buffer size is only meaningful for a str-to-cstr cast. */
-    if (e->cast.bounded && !str_to_cstr) {
-        diag_error(e->loc,
-            "[N] buffer size applies only to a (cstr) cast of a str");
-        return poison(e);
-    }
-    if (e->cast.bounded) {
-        char *msg = static_length_error("(cstr[N]) buffer size", e->cast.buffer_size, true);
-        if (msg) {
-            diag_error(e->loc, "%s", msg);
-            free(msg);
-            return poison(e);
-        }
-    }
     /* An unbounded str-to-cstr cast is rejected: its stack copy is
      * runtime-sized and would grow the frame per loop iteration. It needs
      * explicit storage, unless it is the direct operand of alloc(...) or
      * alloca(...), which provides it (the `licensed` flag, set by the
      * parser). */
-    if (str_to_cstr && !e->cast.bounded && !e->cast.licensed) {
+    if (str_to_cstr && !e->cast.licensed) {
         if (e->cast.operand->kind == EXPR_STRING_LIT)
             diag_error(e->loc,
                 "use a c\"...\" literal for a null-terminated string constant "
                 "instead of casting with (cstr)");
         else
             diag_error(e->loc,
-                "unbounded (cstr) cast of a runtime-length str; use (cstr[N]) for a "
-                "fixed N-byte stack buffer (truncating), alloc((cstr) ...)! for the "
-                "heap, or alloca((cstr) ...) for dynamic stack");
+                "unbounded (cstr) cast of a runtime-length str; use c\"%%.Ns{...}\" "
+                "for a fixed stack buffer (truncating past N bytes), "
+                "alloc((cstr) ...)! for the heap, or alloca((cstr) ...) for dynamic stack");
         return poison(e);
     }
     e->type = to;
@@ -7772,7 +7755,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
                     diag_error(e->loc,
                         "redundant '%s': no operation that can overflow or truncate "
                         "(+, -, *, signed /, signed negation, lossy narrowing cast, "
-                        "(cstr[N]) cast, or %%s segment with a precision) to %s",
+                        "or %%s segment with a precision) to %s",
                         e->guard.enable ? "checked" : "unchecked",
                         e->guard.enable ? "check" : "leave unchecked");
                 else

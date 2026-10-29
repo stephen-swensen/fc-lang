@@ -7,7 +7,7 @@ let main = (args: str[]) ->
     let s = "hello"
 
     // inline form
-    let c1 = checked (cstr[8]) s
+    let c1 = checked c"%.7s{s}"
     assert(((str) c1) == "hello")
 
     // block form: value is the last expression

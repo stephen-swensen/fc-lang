@@ -1,0 +1,7 @@
+// Error: returning a cstr from a bounded c"%.Ns{s}" copy (stack backing buffer)
+let bad = (s: str) ->
+    c"%.15s{s}"
+
+let main = (args: str[]) ->
+    let c = bad("hello")
+    0

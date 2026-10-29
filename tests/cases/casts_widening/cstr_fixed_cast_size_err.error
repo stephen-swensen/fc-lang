@@ -1,0 +1,1 @@
+(cstr[N]) is not a cast; copy a str into a bounded stack buffer with c"%.Ns{...}"

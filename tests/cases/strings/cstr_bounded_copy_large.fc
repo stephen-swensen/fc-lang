@@ -1,0 +1,7 @@
+// A large c"%.Ns{s}" buffer holds the whole string. (A cstr has no stored
+// length, so the size is the same under every --len-repr.)
+let main = (args: str[]) ->
+    let s = "hello"
+    let c = c"%.30000s{s}"
+    assert(((str) c).len == 5)
+    0

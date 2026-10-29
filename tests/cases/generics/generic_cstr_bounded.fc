@@ -1,4 +1,4 @@
-// A generic function body containing a concrete (cstr[N]) cast and an alloca
+// A generic function body containing a bounded c"%.Ns{s}" copy and an alloca
 // interpolation must emit its function-entry backing and stack temporaries
 // correctly in every monomorphized instance (one C function per concrete 'a).
 module c from "string.h" =
@@ -6,7 +6,7 @@ module c from "string.h" =
 
 let describe = (xs: 'a[]) ->
     let label = "len"
-    let cs = (cstr[8]) label          // hoisted backing, per monomorph
+    let cs = c"%.7s{label}"           // hoisted backing, per monomorph
     let msg = alloca("%s{label}=%d{(i32) xs.len}")
     (i64) c.strlen(cs) + (i64) msg.len
 

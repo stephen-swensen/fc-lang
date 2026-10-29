@@ -663,8 +663,8 @@ static const char *dotted_name_of(Parser *p, Expr *e) {
 
 static uint64_t parse_int_value(const char *start, int length, bool *out_of_range);
 
-/* The value of a size written as an integer literal: a fixed array's T[N] or
- * a (cstr[N]) buffer. A size is an i64 length, so a literal beyond i64 is
+/* The value of a size written as an integer literal: a fixed array's T[N].
+ * A size is an i64 length, so a literal beyond i64 is
  * reported here and read as 1. pass2 judges every other value with the other
  * lengths (positive, within --len-repr). */
 static int64_t parse_size_literal(Token *t) {
@@ -1951,7 +1951,7 @@ static Expr *parse_alloc(Parser *p, SrcLoc loc) {
     expect(p, TOK_RPAREN);
     if (init->kind == EXPR_INTERP_STRING)
         init->interp_string.wrapped = true;
-    else if (init->kind == EXPR_CAST && !init->cast.bounded)
+    else if (init->kind == EXPR_CAST)
         init->cast.licensed = true;
     return alloc_of_operand(p, init, is_stack, loc);
 }
@@ -2043,28 +2043,42 @@ static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
                         !type_from_name(peek_at(p, 1)->start, peek_at(p, 1)->length);
         advance_p(p); /* ( */
         Type *target = parse_type(p);
-        /* (cstr[N]): bounded str-to-cstr cast. cstr is u8*, and with
-         * allow_fixed_array off in expression context parse_type leaves the
-         * [N] for this code to claim. */
-        bool bounded = false;
-        int64_t buffer_size = 0;
+        /* (cstr[N]) is not a cast: cstr[N] is the fixed-array type, N cstr
+         * pointers, and a bounded str-to-cstr copy is the interpolation
+         * c"%.Ns{s}". With allow_fixed_array off in expression context
+         * parse_type leaves the [N] here, so claim it to say so. */
+        Token *fixed_size = NULL;
         if (is_cstr_type(target) && check(p, TOK_LBRACKET) &&
             peek_at(p, 1)->kind == TOK_INT_LIT && peek_at(p, 2)->kind == TOK_RBRACKET) {
             advance_p(p); /* [ */
-            buffer_size = parse_size_literal(current(p));
+            fixed_size = current(p);
             advance_p(p); /* N */
             advance_p(p); /* ] */
-            bounded = true;
         }
         if (check(p, TOK_RPAREN) && !name_suffix_only(target, name_led)) {
             diag_speculate_end(held, true);
+            if (fixed_size) {
+                bool oor = false;
+                uint64_t n = parse_int_value(fixed_size->start, fixed_size->length, &oor);
+                if (!oor && n >= 2 && n - 1 <= INTERP_MAX_FIELD)
+                    diag_error(loc, "(cstr[%llu]) is not a cast; copy a str into a "
+                               "bounded stack buffer with c\"%%.%llus{...}\" "
+                               "(at most %llu bytes, truncating)",
+                               (unsigned long long)n, (unsigned long long)(n - 1),
+                               (unsigned long long)(n - 1));
+                else
+                    diag_error(loc, "(cstr[N]) is not a cast; copy a str into a "
+                               "bounded stack buffer with c\"%%.Ns{...}\" "
+                               "(at most N bytes, truncating)");
+            }
             advance_p(p);
             Expr *operand = parse_expr(p, PREC_PREFIX);
             Expr *e = alloc_expr(p, EXPR_CAST, loc);
             e->cast.target = target;
             e->cast.operand = operand;
-            e->cast.bounded = bounded;
-            e->cast.buffer_size = buffer_size;
+            /* Reported above; read on as a homed (cstr) cast so the
+             * unbounded-cast error does not follow. */
+            e->cast.licensed = fixed_size != NULL;
             return e;
         }
         /* Not a cast: backtrack */

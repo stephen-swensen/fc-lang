@@ -1,0 +1,1 @@
+(cstr[8]) is not a cast; copy a str into a bounded stack buffer with c"%.7s{...}"

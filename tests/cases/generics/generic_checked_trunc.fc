@@ -6,7 +6,7 @@ module c from "string.h" =
 
 let describe = (xs: 'a[]) ->
     let label = "len"
-    let cs = checked (cstr[8]) label                   // fits: 3 <= 7
+    let cs = checked c"%.7s{label}"                    // fits: 3 <= 7
     let msg = checked "%.3s{label}=%d{(i32) xs.len}"   // boundary: len == prec
     (i64) c.strlen(cs) + (i64) msg.len
 

@@ -291,6 +291,26 @@ bool interp_is_runtime_sized(const Expr *e) {
     return !interp_const_buffer_size((Expr *)e, NULL, &dummy);
 }
 
+int interp_bounded_copy_prec(const Expr *e, Type *(*resolve)(Type *)) {
+    if (!e->interp_string.is_cstr || e->interp_string.wrapped) return -1;
+    const InterpSegment *only = NULL;
+    for (int i = 0; i < e->interp_string.segment_count; i++) {
+        const InterpSegment *seg = &e->interp_string.segments[i];
+        if (seg->is_literal && seg->text_length == 0) continue;
+        if (only) return -1;
+        only = seg;
+    }
+    if (!only || only->is_literal || only->conversion != 's') return -1;
+    Type *t = only->expr->type;
+    if (t && resolve) t = resolve(t);
+    if (!t || !is_str_type(t)) return -1;
+    InterpSpec sp;
+    interp_seg_spec(only, &sp);
+    if (sp.minus || sp.plus || sp.space || sp.hash || sp.zero || sp.width != 0)
+        return -1;
+    return (int)sp.precision;
+}
+
 /* A node's type in the governing context (see facts_guard_governs). */
 static Type *gov_type(Type *t, Type *(*resolve)(Type *)) {
     return t && resolve ? resolve(t) : t;
@@ -346,7 +366,6 @@ bool facts_overflow_governs(const Expr *e, Type *(*resolve)(Type *)) {
         return e->unary_prefix.op == TOK_MINUS &&
                maybe_signed(gov_type(e->type, resolve));
     case EXPR_CAST: {
-        if (e->cast.bounded) return true;   /* (cstr[N]): clips past N-1 */
         /* A lossy integer narrowing (an enum narrows as its repr). float-to-int
          * is not here: its saturation is on the guard axis, because the C
          * conversion is undefined out of range. */

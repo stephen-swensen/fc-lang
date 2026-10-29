@@ -1,0 +1,7 @@
+// (cstr[N]) is not a cast: cstr[N] is the fixed-array type, N cstr pointers.
+// The error names the bounded copy that replaces it, c"%.Ns{...}", with N
+// counting the bytes copied (one less than the old buffer size).
+let main = (args: str[]) ->
+    let s = "hi"
+    let c = (cstr[16]) s
+    0

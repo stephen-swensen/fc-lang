@@ -1,0 +1,8 @@
+// (cstr[N]) is not a cast inside alloca either: the error is the parser's,
+// not alloca's operand rule, and the bounded copy it names already has its
+// own hoisted buffer.
+let main = (args: str[]) ->
+    let s = "hello"
+    let cs = alloca((cstr[8]) s)
+    assert(cs[0i64] == 104u8)
+    0

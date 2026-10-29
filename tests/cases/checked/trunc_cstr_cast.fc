@@ -1,7 +1,0 @@
-// `checked` turns the (cstr[N]) silent clip into an abort: a source longer
-// than the N-1 payload capacity is defined data loss on the overflow axis,
-// same as a lossy narrowing cast.
-let main = (args: str[]) ->
-    let s = "hello"
-    let _ = checked (cstr[4]) s   // len 5 > max 3 -> abort
-    1   // not reached: the line above aborts

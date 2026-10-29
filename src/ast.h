@@ -249,12 +249,8 @@ struct Expr {
         struct {
             Type *target;
             Expr *operand;
-            bool bounded;     /* (cstr[N]): a bounded str-to-cstr cast, which copies
-                                 min(len, N-1) bytes + NUL into a hoisted uint8[N] */
-            int64_t buffer_size;  /* its N, as written (pass2 judges it) */
-            const char *codegen_backing_name;  /* hoisted backing array name (set in codegen) */
             bool licensed;    /* true when this is the direct init of alloc(...)/alloca(...).
-                                 That allows an otherwise illegal unbounded (cstr) str-to-cstr
+                                 That allows an otherwise illegal (cstr) str-to-cstr
                                  cast, since the wrapping alloc/alloca gives it a home (heap or
                                  dynamic stack). */
         } cast;
@@ -264,7 +260,7 @@ struct Expr {
              (float-to-int saturation, integer divide/modulo zero check, slice bounds).
            - overflow axis (checked/unchecked): integer-overflow detection on
              `+ - *`, signed `/` at INT_MIN/-1, and lossy integer narrowing casts,
-             plus string truncation by a (cstr[N]) cast or a `%.Ns` precision.
+             plus string truncation by a `%.Ns` precision.
            is_overflow_axis selects which axis; enable is the polarity within it
            (guard axis: true=guarded; overflow axis: true=checked). */
         struct { Expr *body; bool is_overflow_axis; bool enable; } guard;

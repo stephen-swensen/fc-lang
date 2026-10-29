@@ -1,7 +1,7 @@
-// A (cstr[N]) cast inside a loop must reuse one backing slot hoisted to
+// A c"%.Ns{s}" copy inside a loop must reuse one backing slot hoisted to
 // function entry, not extend the frame every iteration. 200_000 iterations
-// of a bare unbounded (cstr) would have grown the stack until return; the
-// bounded form keeps it constant. The accumulated value is exact.
+// of alloca((cstr) s) would have grown the stack until return; the bounded
+// form keeps it constant. The accumulated value is exact.
 module c from "string.h" =
     extern strlen: (const cstr) -> usize
 
@@ -9,7 +9,7 @@ let main = (args: str[]) ->
     let s = "abcdef"
     let mut acc = 0i64
     for i in 0..200000 do
-        let cs = (cstr[8]) s
+        let cs = c"%.7s{s}"
         acc = acc + (i64) c.strlen(cs)
     assert(acc == 200000i64 * 6i64)
     0

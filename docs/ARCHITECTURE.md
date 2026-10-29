@@ -406,8 +406,8 @@ emitted C apart:
   `_<temp><n>` for codegen temporaries. Compiler-made helpers share the `_`
   prefix: a lifted lambda `_fn_<n>` (suffixed `__<instance>` inside a
   generic instance) and its context struct `_ctx_<lambda>`, a function-entry
-  backing slot `_fc_back_<n>` (for a slice literal, an interpolation buffer, a
-  `(cstr[N])` buffer or a closure's context), and a constant's backing array
+  backing slot `_fc_back_<n>` (for a slice literal, an interpolation buffer
+  or a closure's context), and a constant's backing array
   `_fc_const_backing_<n>`. Source names never reach C directly, so a local
   can be named after a libc function or a C keyword.
 

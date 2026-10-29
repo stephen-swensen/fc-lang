@@ -1,8 +1,8 @@
-// A mut `const cstr` reassigned from a stack (cstr[N]) cast carries the stack
+// A mut `const cstr` reassigned from a stack c"%.Ns{s}" copy carries the stack
 // taint through the widen; returning it must be rejected.
 let bad = (p: const str) ->
     let mut c = c"xxxxxxxx"
-    c = (cstr[8]) p
+    c = c"%.7s{p}"
     c
 
 let main = (args: str[]) ->

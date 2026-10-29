@@ -3361,53 +3361,23 @@ static void gen_cast(Expr *e) {
     Expr *op = e->cast.operand;
     Type *from = conc(op->type), *to = conc(e->cast.target);
     if (is_str_type(from) && is_cstr_type(to)) {
+        /* (cstr) under alloca: a dynamic stack copy. */
         gen_expr(op);
-        if (e->cast.bounded) {
-            int64_t n = e->cast.buffer_size;
-            int32_t back = slot_alloc(align_up(n, 8), 8);
-            movq(M(RAX, 0), R(RSI));
-            load_len_to(M(RAX, 8), RDX);
-            if (g_overflow_checked && facts_overflow_governs(e, subst_resolve)) {
-                char *rest = str_sprintf("string truncation in (cstr[%lld]) cast: len=%%lld max=%%lld\n", (long long)n);
-                int m = msg_label(e->loc, rest);
-                free(rest);
-                int l = fail_begin();
-                movq(IMM((n - 1)), R(RCX));
-                fail_end(m);
-                cmpq(IMM((n - 1)), R(RDX));
-                jcc(CC_G, l);
-            }
-            int lle = new_label();
-            cmpq(IMM((n - 1)), R(RDX));
-            jcc(CC_LE, lle);
-            movq(IMM((n - 1)), R(RDX));
-            label(lle);
-            int32_t cn = spill_push();
-            movq(R(RDX), fp(cn));
-            leaq(fp(back), R(RDI));
-            call_c("memcpy");
-            movq(fp(cn), R(RCX));
-            spill_pop();
-            leaq(fp(back), R(RAX));
-            movb(IMM(0), MI(RAX, RCX, 1, 0));
-        } else {
-            /* (cstr) under alloca: a dynamic stack copy. */
-            int32_t sp = spill_push();
-            movq(R(RAX), fp(sp));
-            load_len_to(M(RAX, 8), RAX);
-            leaq(M(RAX, 16), R(RAX));
-            andq(IMM(-16), R(RAX));
-            subq(R(RAX), R(RSP));
-            movq(fp(sp), R(RAX));
-            movq(R(RSP), R(RDI));
-            movq(M(RAX, 0), R(RSI));
-            load_len_to(M(RAX, 8), RDX);
-            call_c("memcpy");
-            movq(fp(sp), R(RCX));
-            load_len_to(M(RCX, 8), RCX);
-            movb(IMM(0), MI(RAX, RCX, 1, 0));
-            spill_pop();
-        }
+        int32_t sp = spill_push();
+        movq(R(RAX), fp(sp));
+        load_len_to(M(RAX, 8), RAX);
+        leaq(M(RAX, 16), R(RAX));
+        andq(IMM(-16), R(RAX));
+        subq(R(RAX), R(RSP));
+        movq(fp(sp), R(RAX));
+        movq(R(RSP), R(RDI));
+        movq(M(RAX, 0), R(RSI));
+        load_len_to(M(RAX, 8), RDX);
+        call_c("memcpy");
+        movq(fp(sp), R(RCX));
+        load_len_to(M(RCX, 8), RCX);
+        movb(IMM(0), MI(RAX, RCX, 1, 0));
+        spill_pop();
         return;
     }
     if (is_cstr_type(from) && is_str_type(to)) {
@@ -4055,6 +4025,34 @@ static void gen_interp(Expr *e, Type *alloc_opt) {
                 label(lok);
             }
         }
+    }
+
+    /* c"%.Ns{s}" alone is a plain bounded copy (interp_bounded_copy_prec):
+     * min(len, N) bytes and a NUL into a fixed slot, by memcpy rather than
+     * snprintf. */
+    int copy_prec = heap ? -1 : interp_bounded_copy_prec(e, instance_type);
+    if (copy_prec >= 0) {
+        int si = 0;
+        while (segs[si].is_literal) si++;
+        int32_t back = slot_alloc(align_up(copy_prec + 1, 8), 8);
+        movq(fp(sslot[si]), R(RSI));
+        load_len_to(fp(sslot[si] + 8), RDX);
+        int lle = new_label();
+        cmpq(IMM(copy_prec), R(RDX));
+        jcc(CC_LE, lle);
+        movq(IMM(copy_prec), R(RDX));
+        label(lle);
+        int32_t cn = spill_push();
+        movq(R(RDX), fp(cn));
+        leaq(fp(back), R(RDI));
+        call_c("memcpy");
+        movq(fp(cn), R(RCX));
+        spill_pop();
+        leaq(fp(back), R(RAX));
+        movb(IMM(0), MI(RAX, RCX, 1, 0));
+        free(sslot);
+        free(stype);
+        return;
     }
 
     /* The byte budget. */

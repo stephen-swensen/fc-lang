@@ -1,0 +1,31 @@
+// cstr[N] means what T[N] means for every T: N inline elements, here N cstr
+// pointers. (A fixed array is never a cast target, so (cstr[N]) s does not
+// give it a second meaning.)
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+struct argv4 =
+    items: cstr[4]
+    count: i32
+
+let main = (args: str[]) ->
+    assert(sizeof(cstr[4]) == 4 * sizeof(cstr))
+    assert(sizeof(argv4) >= 4 * sizeof(cstr))
+    let a = argv4 { count = 2 }
+    assert(a.items.len == 4)
+    assert(a.items[3] == default(cstr))
+
+    // each element holds its own pointer
+    let w1 = "ls"
+    let w2 = "-l"
+    let b1 = c"%.7s{w1}"
+    let b2 = c"%.7s{w2}"
+    a.items[0] = b1
+    a.items[1] = b2
+    assert(c.strlen(a.items[0]) == 2usize)
+    assert(((str) a.items[1]) == "-l")
+
+    // and the pointee stays writable through the element
+    a.items[0][0] = 76u8
+    assert(((str) b1) == "Ls")
+    0

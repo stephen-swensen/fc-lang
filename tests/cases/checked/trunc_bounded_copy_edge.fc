@@ -1,0 +1,6 @@
+// Boundary: len == N+1 is the smallest c"%.Ns{s}" overflow -> aborts under
+// checked.
+let main = (args: str[]) ->
+    let s = "hell"
+    let _ = checked c"%.3s{s}"    // len 4 > max 3 -> abort
+    1   // not reached

@@ -1,0 +1,53 @@
+// c"%.Ns{s}" is the bounded str->cstr copy: at most N bytes into a fixed
+// N+1-byte stack buffer, always NUL-terminated. Fits unchanged; over-long
+// input truncates rather than overrunning. Alone, the segment is emitted as a
+// plain copy; the neighbours below (text, width, flags) keep the formatter,
+// and must agree with it.
+module c from "string.h" =
+    extern strlen: (const cstr) -> usize
+
+let main = (args: str[]) ->
+    let s = "hello"
+
+    // fits: 5 chars under a precision of 15, full round-trip
+    let c1 = c"%.15s{s}"
+    assert(c.strlen(c1) == 5usize)
+    assert(((str) c1) == "hello")
+
+    // truncates: 3 chars -> "hel"
+    let c2 = c"%.3s{s}"
+    assert(c.strlen(c2) == 3usize)
+    assert(((str) c2) == "hel")
+
+    // exact fit: N == len
+    let c3 = c"%.5s{s}"
+    assert(((str) c3) == "hello")
+
+    // empty source -> empty, NUL only
+    let e = ""
+    let c4 = c"%.7s{e}"
+    assert(c.strlen(c4) == 0usize)
+
+    // %.0s copies nothing
+    let c5 = c"%.0s{s}"
+    assert(c.strlen(c5) == 0usize)
+
+    // a NUL inside the str ends the cstr there
+    let z = "ab\0cd"
+    let c6 = c"%.15s{z}"
+    assert(c.strlen(c6) == 2usize)
+    assert(((str) c6) == "ab")
+
+    // not a plain copy: literal text, a width, a flag
+    let d1 = c"[%.3s{s}]"
+    assert(((str) d1) == "[hel]")
+    let d2 = c"%5.3s{s}"
+    assert(((str) d2) == "  hel")
+    let d3 = c"%-5.3s{s}"
+    assert(((str) d3) == "hel  ")
+
+    // the str form keeps its length
+    let t = "%.3s{s}"
+    assert(t == "hel")
+    assert(t.len == 3)
+    0

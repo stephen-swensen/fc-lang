@@ -1,11 +1,11 @@
 // A heap struct literal whose `const cstr` field is initialized from a stack
-// (cstr[N]) cast: the field-init widen must keep PROV_STACK so the heap-struct
+// c"%.Ns{s}" copy: the field-init widen must keep PROV_STACK so the heap-struct
 // escape check fires.
 struct holder =
     name: const cstr
 
 let leak = (p: const str) ->
-    let h = alloc(holder { name = (cstr[8]) p })!
+    let h = alloc(holder { name = c"%.7s{p}" })!
     free(h)
 
 let main = (args: str[]) ->

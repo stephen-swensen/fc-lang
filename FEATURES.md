@@ -58,7 +58,7 @@ A complete inventory of the language and its tooling. For the rationale behind a
 ## Memory & runtime safety
 
 - **Manual memory** — `alloc` returns an option, `free` releases; no GC, no borrow checker, no hidden allocation
-- **Explicit stack allocation** — `alloca` and bounded forms like `(cstr[N])` make stack cost visible at the call site
+- **Explicit stack allocation** — `alloca` and bounded forms like `c"%.Ns{s}"` make stack cost visible at the call site
 - **Escape analysis** — returning a stack pointer, freeing non-heap memory, or storing a stack pointer into the heap are compile errors
 - **Defined behavior by default** — bounds-checked slice access, divide-by-zero checks, float→int saturation, wrapping signed overflow, masked shift amounts, deterministic left-to-right evaluation
 - **Two orthogonal opt-out axes** — `unguarded`/`guarded` toggles precondition checks; `checked`/`unchecked` toggles overflow detection. A marker that would change nothing is a compile error
