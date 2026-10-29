@@ -1,7 +1,7 @@
 // A C caller may leave junk in the register above a narrow argument, which
 // the System V ABI leaves undefined: an FC callback reads only the argument.
 // (The native backend extends such a parameter as it moves it into a
-// register local.)
+// register local.) Bits 8 to 31 of a u8 are not junk in practice; see wide.h.
 module wide from "wide.h" =
     extern call_i32_junk: ((i32) -> i64) -> i64
     extern call_i32_neg: ((i32) -> i64) -> i64

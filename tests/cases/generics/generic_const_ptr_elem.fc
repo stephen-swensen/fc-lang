@@ -1,0 +1,48 @@
+// A generic body whose 'a is bound to a read-only pointer stores into,
+// loads from and points into slice storage as its concrete twin does.
+let first = (xs: 'a[]) -> xs[0]
+let put = (xs: 'a[], v: 'a) -> xs[1] = v
+let addr = (xs: 'a[], i: i64) -> &xs[i]
+let base = (xs: 'a[]) -> xs.ptr
+let second_of_pair = (v: 'a, w: 'a) ->
+    let xs = 'a[] { v, w }
+    xs[1]
+
+struct boxed =
+    slots: 'a[2]
+
+let put_box = (b: boxed<'a>*, v: 'a) -> b.slots[0] = v
+let get_box = (b: boxed<'a>) -> b.slots[1]
+
+let mut calls = 0
+let next = () ->
+    calls = calls + 1
+    calls
+
+let put_next = (xs: 'a[], v: 'a) -> xs[next()] = v
+
+let main = (args: str[]) ->
+    let n = 7
+    let m = 9
+    let s = (const i32*)[] { &n, &n }
+    put(s, &m)
+    assert(first(s)[0] == 7)
+    assert(s[1][0] == 9)
+    assert(addr(s, 1)[0][0] == 9)
+    assert(base(s)[0][0] == 7)
+    assert(second_of_pair(&n, &m)[0] == 9)
+
+    let t = (const i32*)[] { &m, &m }
+    put_next(t, &n)
+    assert(t[1][0] == 7)
+
+    let mut b = boxed { slots = (const i32*)[] { &n, &n } }
+    put_box(&b, &m)
+    assert(b.slots[0][0] == 9)
+    assert(get_box(b)[0] == 7)
+
+    let words = (const cstr)[] { c"a", c"b" }
+    put(words, c"z")
+    assert(first(words)[0] == 'a')
+    assert(addr(words, 1)[0][0] == 'z')
+    0

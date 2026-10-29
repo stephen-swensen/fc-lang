@@ -1,0 +1,28 @@
+// A pointer into a slice of read-only pointers keeps the element's const:
+// `&s[i]` is `(const T*)*` and `s.ptr` is too, for every pointer element.
+let main = (args: str[]) ->
+    let n = 7
+    let m = 9
+    let s = (const i32*)[] { &n, &m }
+    let at = &s[1]
+    assert(at[0][0] == 9)
+    assert(s.ptr[0][0] == 7)
+
+    let mut words = (const cstr)[] { c"a", c"b" }
+    let w = &words[1]
+    w[0] = c"z"
+    assert(words[1][0] == 'z')
+    assert(words.ptr[1][0] == 'z')
+
+    let raw = (const any*)[] { (const any*) &n }
+    let r = &raw[0]
+    assert(r[0] == (const any*) &n)
+    assert(raw.ptr[0] == (const any*) &n)
+
+    // const two pointer levels down
+    let pn = &n
+    let nested = (const (const i32*)*)[] { &pn }
+    let np = &nested[0]
+    assert(np[0][0][0] == 7)
+    assert(nested.ptr[0][0][0] == 7)
+    0

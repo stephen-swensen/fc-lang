@@ -992,6 +992,7 @@ static bool cast_is_const_only_noop(Type *to, Type *from) {
  * fc_str. A value of such a type needs an explicit strip when it is stored
  * into slice storage, which is spelled modulo const. */
 static bool elem_const_shows_in_c(Type *t) {
+    t = subst_resolve(t);
     return t && t->is_const && (t->kind == TYPE_POINTER || t->kind == TYPE_ANY_PTR);
 }
 
@@ -1003,9 +1004,25 @@ static void emit_elem_store_cast(Type *elem_type, FILE *out) {
     fprintf(out, ")");
 }
 
+/* The other direction: a pointer into slice storage (`s.ptr`, `&s[i]`) has
+ * C type `elem*` with the element spelled modulo const, which for such an
+ * element is not the C spelling of its FC type `(const T*)*`. Opens the cast
+ * to the FC type and returns true when one is needed; the caller closes it
+ * with "))". */
+static bool emit_storage_ptr_cast_open(Type *ptr_type, FILE *out) {
+    Type *t = subst_resolve(ptr_type);
+    if (!t || t->kind != TYPE_POINTER || !elem_const_shows_in_c(t->pointer.pointee))
+        return false;
+    fprintf(out, "((");
+    emit_type(t, out);
+    fprintf(out, ")(");
+    return true;
+}
+
 static void emit_elem_type(Type *t, FILE *out) {
-    if (t && t->is_const) {
-        Type bare = *t;
+    Type *r = subst_resolve(t);
+    if (r && r->is_const) {
+        Type bare = *r;
         bare.is_const = false;
         emit_type(&bare, out);
         return;
@@ -3776,8 +3793,9 @@ static void emit_call(Expr *e, FILE *out) {
 
 /* A fixed-array field read as the slice that views it (`s.data` is a
  * `T[]` over the field's storage). `access` is "." for a struct value and
- * "->" through a pointer. The emitted slice type drops const; FC enforces
- * const itself. */
+ * "->" through a pointer. The emitted slice type drops const, the
+ * element's included (emit_elem_type, as slice storage is spelled); FC
+ * enforces const itself. */
 static void emit_fixed_array_view(Expr *e, const char *access, FILE *out) {
     Type *fat = e->field.fixed_array_type;
     Type *slice_type = e->type;
@@ -3785,7 +3803,7 @@ static void emit_fixed_array_view(Expr *e, const char *access, FILE *out) {
     fprintf(out, "(");
     emit_type(slice_type, out);
     fprintf(out, "){ .ptr = (");
-    emit_type(fat->fixed_array.elem, out);
+    emit_elem_type(fat->fixed_array.elem, out);
     fprintf(out, "*)");
     emit_expr(e->field.object, out);
     fprintf(out, "%s%s, .len = %lld }", access, c_safe_ident(g_intern, e->field.name),
@@ -3894,8 +3912,12 @@ static void emit_field(Expr *e, FILE *out) {
         fprintf(out, ".len)");
         return;
     }
+    /* Slice .ptr (never assigned): typed as its storage, so maybe cast. */
+    bool cast = e->field.object->type && e->field.object->type->kind == TYPE_SLICE &&
+                emit_storage_ptr_cast_open(e->type, out);
     emit_expr(e->field.object, out);
     fprintf(out, ".%s", c_safe_ident(g_intern, e->field.name));
+    if (cast) fprintf(out, "))");
 }
 
 /* A postfix `!` (unwrap, aborting on none or err) or `?` (propagate a
@@ -4403,9 +4425,15 @@ static void emit_unary_prefix(Expr *e, FILE *out) {
                        token_kind_name(e->unary_prefix.op));
         return;
     }
+    /* &s[i] points into slice storage: as for .ptr, maybe cast. */
+    Expr *opnd = e->unary_prefix.operand;
+    bool cast = e->unary_prefix.op == TOK_AMP && opnd->kind == EXPR_INDEX &&
+                opnd->index.object->type && opnd->index.object->type->kind == TYPE_SLICE &&
+                emit_storage_ptr_cast_open(rt, out);
     fprintf(out, "(%s", op_str);
-    emit_expr(e->unary_prefix.operand, out);
+    emit_expr(opnd, out);
     fprintf(out, ")");
+    if (cast) fprintf(out, "))");
 }
 
 static void emit_expr(Expr *e, FILE *out) {
