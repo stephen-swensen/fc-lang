@@ -50,6 +50,7 @@ bool elf_link(Obj *o, const LinkArgs *a, const char *path) {
 
 #else /* Linux x86-64: the linker */
 
+#include "platform.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -1765,8 +1766,9 @@ static void put_phdr(unsigned char *p, uint32_t type, uint32_t flags, uint64_t o
 }
 
 static bool write_file(const char *path, const unsigned char *img, size_t n) {
-    /* A new file, not the old one rewritten: the old one may be running. */
-    unlink(path);
+    /* A new file, not the old one rewritten: the old one may be running. A
+     * device such as /dev/null is written in place. */
+    platform_remove_if_ordinary(path);
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0777);
     if (fd < 0) {
         diag_error_simple("cannot create '%s': %s", path, strerror(errno));

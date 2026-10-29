@@ -34,7 +34,7 @@ exit code.
 | `make check-ascii`, `check-warnings`, `check-keywords`, `check-examples` | The source checks: `src/` is ASCII; the compiler builds warning-free under gcc and clang; every hand-kept keyword list (token names, the spec, both editor grammars) matches the lexer's table, and every built-in operator has hover text (`tools/check-keywords.py`); `spec/examples.fc` compiles and runs. |
 | `make test-all` | The suite under gcc and clang, in parallel. |
 | `make test-gcc` / `make test-clang` | One compiler. |
-| `make test-native` | The suite through the native x86-64 backend (`--native`, experimental; Linux x86-64), which links each test itself, then `tests/run_link_tests.sh`: its linker on C objects, archives and the inputs it refuses, and its C header search (`-I`, `CPATH`); then `test-x86asm`. Not part of `make check`. |
+| `make test-native` | The suite through the native x86-64 backend (`--native`, experimental; Linux x86-64), which links each test itself, then `tests/run_link_tests.sh`: its linker on C objects, archives, the inputs it refuses and outputs that are not regular files, and its C header search (`-I`, `CPATH`); then `test-x86asm`. Not part of `make check`. |
 | `make test-native-cc` | The same suite with `cc` linking the backend's objects (`--native -c`), the check on fcc's linker. |
 | `make test-native-len16` | The native suite with `--len-repr 16`. Keep it green when touching the backend's slice code. |
 | `make test-x86asm` | The native backend's instruction encoder against GNU `as`: every form it offers, encoded both ways and compared byte for byte (`tests/x86asm_test.c`). `make test-native` runs it too. |

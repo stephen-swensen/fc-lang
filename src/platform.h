@@ -33,3 +33,9 @@ const char *platform_get_env(void);
  * truncate its pointer return to int. The result uses forward slashes on both
  * platforms, so callers can keep their `/`-based path handling. */
 char *platform_realpath(const char *path);
+
+/* Remove `path` if it is a regular file or a symbolic link, as GNU ld removes
+ * its output (libiberty's unlink_if_ordinary). A device, FIFO or directory is
+ * left alone, so an output of /dev/null is never deleted, even by root. On
+ * Windows, which has no /dev to unlink from, it is plain remove(). */
+void platform_remove_if_ordinary(const char *path);

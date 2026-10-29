@@ -34,16 +34,17 @@ static void print_usage(FILE *f) {
           "       fcc --lsp\n"
           "\n"
           "options:\n"
-          "  -o <file>              write the C to <file> (default: the first input\n"
-          "                         with a .c extension)\n"
+          "  -o <file>              write the output to <file>: the C (default: the\n"
+          "                         first input with a .c extension), or with --native\n"
+          "                         the executable (default: the first input without\n"
+          "                         its extension) or, with -c, the object (.o)\n"
           "  @<file>                read more arguments from a response file\n"
           "  --flag <name[=value]>  set a conditional-compilation flag\n"
           "  --no-auto-detect       don't set the host's os/arch/env flags\n"
           "  --backtraces           print an FC backtrace when the program aborts\n"
           "  --len-repr <16|32|64>  stored width of slice lengths (default 64)\n"
           "  --native               compile to x86-64 machine code and link an\n"
-          "                         executable (default: the first input without its\n"
-          "                         extension), for a fast build (experimental;\n"
+          "                         executable, for a fast build (experimental;\n"
           "                         Linux x86-64 only)\n"
           "  -c                     with --native, write an object file (.o) to link\n"
           "                         with cc instead\n"
@@ -240,7 +241,8 @@ int main(int argc, char **argv) {
 
     if (diag_error_count() > 0) {
         fprintf(stderr, "%d error(s)\n", diag_error_count());
-        remove(output_path);
+        /* The partial output goes, but never a device such as /dev/null. */
+        platform_remove_if_ordinary(output_path);
         /* Keep the error-code map in step with the .c it describes. */
         if (!output_is_null_device(output_path)) {
             char *stale_map = change_extension(output_path, ".errcodes");

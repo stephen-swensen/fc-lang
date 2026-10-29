@@ -3415,7 +3415,7 @@ Assignment is deterministic: fully-qualified declared names are sorted and numbe
 
 - **`error_name(e)`** — an intrinsic yielding `const str?`: `some` of the fully-qualified name (`"file_io.not_found"`) for a declared code, `none` for reserved-range and negative codes (format the number yourself — returning a formatted string would hide an allocation). The payload is `const str` for the same reason a string literal is: the name lives in a static table, emitted **only when `error_name` is used** — a lean binary that never asks pays nothing.
 - **`--backtraces` aborts** — the flag's existing contract is "pay static data for readable failures", so with it on, the name table is emitted unconditionally and the `x!` abort prints the qualified name alongside the code. Lean builds keep numbers. No dedicated flag: one diagnostic-fidelity-vs-size axis, one knob.
-- **The `.errcodes` map** — the "strip the binary, keep the map" channel (the linker-map school): every successful compile that declares errors automatically writes `<output>.errcodes` next to the C output (`out.c` → `out.errcodes`), one `code<TAB>qualified_name<TAB>file:line` line per declared error. It is not opt-in *because* codes are not build-stable: the map is the durable record, and an opt-in flag's only failure mode is discovering you needed it after the incident, when the map for the shipped build doesn't exist. Zero binary cost; deterministic and diffable, so CI can see exactly which codes shifted when a declaration was added. A build that declares no errors removes any stale map, so the map next to a `.c` always describes that build.
+- **The `.errcodes` map** — the "strip the binary, keep the map" channel (the linker-map school): every successful compile that declares errors automatically writes `<output>.errcodes` next to the build's output (`out.c` → `out.errcodes`; under `--native`, `out` → `out.errcodes`), one `code<TAB>qualified_name<TAB>file:line` line per declared error. It is not opt-in *because* codes are not build-stable: the map is the durable record, and an opt-in flag's only failure mode is discovering you needed it after the incident, when the map for the shipped build doesn't exist. Zero binary cost; deterministic and diffable, so CI can see exactly which codes shifted when a declaration was added. A build that declares no errors removes any stale map, so the map next to an output always describes that build.
 
 > **Transpilation**
 > Each declared constant is an ordinary `int32_t` global (`file_io__not_found = 65537`), so the emitted C reads as named codes; pattern arms compare against the resolved value like any integer literal. The name table, when present, is one static array of `{ const char *name; int32_t len; }` indexed directly by `code - 65536` (codes are contiguous), plus an O(1) bounds-checked lookup helper shared by `error_name` and the `--backtraces` abort path.
@@ -4427,12 +4427,14 @@ The following are **not** supported on type variables:
 
 ## The FC Compiler
 
-FC programs are compiled by the `fcc` command-line tool, which transpiles FC source files into a single C source file. The generated C requires a GCC-compatible C11 compiler (GCC, Clang, or a GCC-based cross-compiler — see §Why C as a target for details).
+FC programs are compiled by the `fcc` command-line tool, which transpiles FC source files into a single C source file. The generated C requires a GCC-compatible C11 compiler (GCC, Clang, or a GCC-based cross-compiler — see §Why C as a target for details). With `--native`, fcc instead compiles the same program to x86-64 machine code and links the executable itself, for a fast edit-build-run loop on Linux x86-64 (see §Native backend).
 
 ### Usage
 
 ```
-fcc <input.fc> [input2.fc ...] [-o output.c]
+fcc [options] <input.fc>... [-o <output.c>]
+fcc --native [options] <input.fc>... [<file.o>|<lib.a>|<lib.so>]... [-o <program>]
+fcc --lsp
 ```
 
 One or more `.fc` source files are passed as arguments. If `-o` is not specified, the output filename is derived from the first input file by replacing its extension with `.c`.
@@ -4448,6 +4450,83 @@ All source files are compiled together as a single translation unit — there is
 ```
 cc -std=c11 -o myapp main.c
 ```
+
+### Outputs
+
+`-o` names the one file an invocation writes. What that file is depends on the backend:
+
+| Invocation | Writes | Default name |
+|---|---|---|
+| `fcc x.fc` | C source | `x.c` |
+| `fcc --native x.fc` | an executable | `x` (a first input with no extension to drop needs `-o`) |
+| `fcc --native -c x.fc` | an object file, for `cc` to link | `x.o` |
+| `fcc --lsp` | nothing: a language server on stdin/stdout (see §Language server) | |
+| `fcc --help`, `fcc --version` | nothing: prints to stdout | |
+
+**Check-only builds.** An output of `/dev/null` (`NUL` on Windows) checks and builds the program without leaving a file, and writes no error-code map.
+
+**The error-code map.** A build that writes a file and declares errors also writes `<output>.errcodes` beside it, the output's extension replaced: `main.c` → `main.errcodes`, and under `--native`, `app` → `app.errcodes`. A build that declares none removes a stale map. See §Named error codes.
+
+### Options
+
+| Option | Effect |
+|---|---|
+| `-o <file>` | the output file (see §Outputs) |
+| `@<file>` | read more arguments from a response file (see §Response files) |
+| `--flag <name[=value]>` | set a conditional-compilation flag (see §Flags) |
+| `--no-auto-detect` | don't set the host's `os`/`arch`/`env` flags (see §Built-in flags) |
+| `--backtraces` | print an FC backtrace when the program aborts (see §Backtraces) |
+| `--len-repr <16\|32\|64>` | the stored width of slice lengths, default 64 (see §Length representation) |
+| `--native` | compile to x86-64 machine code and link an executable (see §Native backend) |
+| `-c` | with `--native`, write an object file instead of an executable |
+| `-I <dir>` | with `--native`, search `<dir>` for the C headers that extern declarations name |
+| `-l <name>` | with `--native`, link `lib<name>.so` (or `lib<name>.a`) |
+| `-L <dir>` | with `--native`, search `<dir>` for `-l` libraries |
+| `--lsp` | run as a language server (see §Language server) |
+| `-V`, `--version` | print version and build information (see §Version) |
+| `-h`, `--help` | print a summary of the options |
+
+Options and inputs may appear in any order. `-I`, `-l` and `-L` take their value attached or as the next argument (`-lSDL2` or `-l SDL2`). A later `--flag` replaces an earlier one of the same name, and a later `-o` replaces an earlier `-o`. Any other argument beginning with `-` is an error, as is a command line with no `.fc` input. `--help`, `--version` and `--lsp` ignore every other argument.
+
+### Response files
+
+An argument `@<file>` is replaced in place by the arguments read from `<file>`, as GCC and Clang do. The file holds whitespace-separated arguments (a newline counts as whitespace). A double-quoted argument may contain spaces, with no escapes. `#` and `//` begin a comment that runs to the end of the line. An `@<other>` inside a response file reads another one, relative to the first, and a cycle is an error.
+
+No shell reads a response file, so fcc does for its arguments two things a shell would otherwise do:
+
+- **Paths are relative to the response file.** An input, or the value of `-o`, `-I` or `-L`, written as a relative path in a response file resolves against that file's directory, not the current directory, so a response file describes its project from wherever fcc runs. Other option values, such as a `--flag` name or an `-l` library name, are taken as written. An `@<file>` typed on the command line is relative to the current directory.
+- **Inputs are glob patterns.** An input in a response file may use `*`, `?` and `[...]`, which fcc expands. A pattern that matches no file is passed through unchanged, so it is reported as a file that cannot be opened.
+
+```
+# app.rsp
+--flag debug
+src/*.fc
+../vendor/acme/*.fc
+-o ../build/app.c
+```
+
+`fcc @app.rsp` builds the same program from any directory. The language server finds a program's files the same way (see §Language server).
+
+### Native backend
+
+`fcc --native` compiles the program to x86-64 machine code and links it itself: no C compiler, assembler or linker runs over the FC code, so a build takes a fraction of a second where the C route takes a full C compile. The backend is experimental and exists only when fcc itself runs on Linux x86-64; elsewhere fcc rejects `--native`. Its output is always a Linux x86-64 program for glibc. `--flag` decides only what `#if` sees, so overriding `os` or `arch` does not make `--native` cross-compile.
+
+**Same program, same meaning.** A program built with `--native` means exactly what its C output means, including every runtime check and abort message, `--backtraces` traces and `--len-repr` capacity checks. Only speed differs: the code is not optimized, and runs between the speed of a C compiler's `-O0` and `-O1` output. A release build, or a build for any other target, goes through C.
+
+**Executables and objects.** By default fcc links a position-independent executable for glibc, as `cc -pie` would. Inputs on the command line ending in `.o`, `.a` or `.so` (or a versioned `.so.N`) are linked into it, and so are `-l` libraries, which are looked up in the `-L` directories, then `LIBRARY_PATH`, then the system directories GNU ld searches. libc and libm are always linked. Archive members are pulled in while any of them defines a symbol that is still undefined, whatever the order of the archives, and a shared library becomes a dependency of the executable only if it supplied a symbol. Some inputs are beyond fcc's linker: thread-local storage, IFUNC symbols, LTO objects, the large code model, code compiled without `-fPIC` or `-fPIE`, thin archives, and linker-script commands other than `GROUP`, `INPUT` and `AS_NEEDED`. Each is an error naming the input. For those programs, `-c` writes an object file instead, which `cc` links:
+
+```
+fcc --native -c main.fc -o main.o
+cc main.o -o app -lfoo -lm
+```
+
+Link inputs, `-l` and `-L` apply only when fcc writes the executable. With `-c`, or without `--native`, they are an error.
+
+**C headers.** The C backend leaves headers to the C compiler: it emits `#include` lines, and include directories go on the C compiler's command line. The native backend has no C front end, so it learns what only a header knows (the value of an extern constant, the layout of an extern struct's fields) by running the C compiler (`$CC`, else `cc`) over a small generated C program. A function defined in a header beside the sources is compiled by the C compiler into the output, and a header found any other way belongs to a library, whose functions the link supplies. Headers are searched for in the sources' directories, then the `-I` directories, then the C compiler's own (`CPATH`, `C_INCLUDE_PATH`, the system's). Results are cached in `$XDG_CACHE_HOME/fcc` (else `~/.cache/fcc`) and reused while every header they read is unchanged and no new header would be found ahead of one, so the C compiler runs again only when a declaration or a header changes. `-I` is accepted only with `--native`, with or without `-c`.
+
+### Language server
+
+`fcc --lsp` runs a Language Server Protocol server on stdin/stdout for editors, and ignores every other argument. It reports the compiler's errors as files are edited (nothing else; see §Diagnostics) and answers hover, go-to-definition and completion requests, with inlay hints and code lenses. An open file's program is described by the nearest `lsp.rsp` in the file's directory or an ancestor, read exactly as `fcc @lsp.rsp` would read it. A file that no `lsp.rsp` lists is analyzed with the `.fc` files in its own directory and the standard library (from `FCC_STDLIB_DIR`, else the installed copy). `lsp.rsp` discovery is not available on Windows.
 
 ### Version
 
@@ -4498,7 +4577,7 @@ After all errors are reported, the compiler prints a summary:
 | Code | Meaning |
 |------|---------|
 | 0 | Compilation succeeded |
-| 1 | One or more errors occurred |
+| 1 | One or more errors occurred, including an error in the command line |
 
 ### Compilation pipeline
 
@@ -4508,9 +4587,9 @@ The compiler processes source in five stages:
 2. **Pass 1 (declaration collection)** — all files are scanned to collect top-level names, struct/union layouts, function signatures, module and namespace declarations. This enables forward references and cross-file module access regardless of file order.
 3. **Pass 2 (type checking)** — expressions are type-checked bottom-up with scope tracking. Type errors are accumulated, not fatal. Generic function and type instantiations are registered as they are encountered.
 4. **Monomorphization** — transitive generic instantiations are discovered (generic functions calling other generic functions), concrete types are built for all instantiations, and type dependencies are topologically sorted so by-value struct/union dependencies are emitted before their dependents.
-5. **Code generation** — the typed AST is emitted as C11 source containing only concrete, fully-typed code. No type variables or generic machinery appear in the output. Because the whole program is a single translation unit, every emitted function is marked `static __attribute__((unused))` with only the program entry point as the exception — this gives the C compiler freedom to inline and dead-code-eliminate unreferenced helpers (common with imported-but-partially-used library modules), keeps generated symbol tables clean, and suppresses `-Wunused-function` when `-Wall -Werror` is in effect without disabling the warning globally.
+5. **Code generation** — the typed AST is emitted as C11 source containing only concrete, fully-typed code. No type variables or generic machinery appear in the output. Because the whole program is a single translation unit, every emitted function is marked `static __attribute__((unused))` with only the program entry point as the exception — this gives the C compiler freedom to inline and dead-code-eliminate unreferenced helpers (common with imported-but-partially-used library modules), keeps generated symbol tables clean, and suppresses `-Wunused-function` when `-Wall -Werror` is in effect without disabling the warning globally. Under `--native`, the same typed AST is compiled to x86-64 machine code instead and, unless `-c` is given, linked (see §Native backend).
 
-If any errors are accumulated during passes 1 or 2, later stages are skipped and the compiler exits with code 1. A few diagnostics also surface during code generation — for example, a type property requested on a concrete type that does not support it (reached only through a monomorphized instantiation) or a conflicting C `#define` across two modules sharing a header. If any errors are accumulated during code generation, the partially-written output file is removed and the compiler likewise exits with code 1.
+If any errors are accumulated during passes 1 or 2, later stages are skipped and the compiler exits with code 1. A few diagnostics also surface during code generation — for example, a type property requested on a concrete type that does not support it (reached only through a monomorphized instantiation) or a conflicting C `#define` across two modules sharing a header — and, under `--native`, during linking (an undefined symbol, an input the linker does not support). If any errors are accumulated during code generation or linking, the partially-written output file and its error-code map are removed and the compiler likewise exits with code 1.
 
 ---
 

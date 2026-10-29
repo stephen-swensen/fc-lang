@@ -1,9 +1,9 @@
 #!/bin/bash
 # The native backend's linker (src/elflink.c) on what the suite's programs
-# never give it: C objects, archives, constructors, copy relocations, and the
-# inputs it refuses. Each program in tests/link/<name>/ is linked by fcc and,
-# from `fcc --native -c`, by cc; both executables must print the case's
-# `expected` file. The C files are compiled with $CC -fPIE, as a C compiler
+# never give it: C objects, archives, constructors, copy relocations, the
+# inputs it refuses, and outputs that are not regular files. Each program in
+# tests/link/<name>/ is linked by fcc and, from `fcc --native -c`, by cc; both
+# executables must print the case's `expected` file. The C files are compiled with $CC -fPIE, as a C compiler
 # compiles them by default for a position-independent executable. Then the
 # backend's C header search (tests/link/headers): -I, CPATH and
 # C_INCLUDE_PATH, through one header cache, which a header created where the
@@ -99,6 +99,31 @@ if "$CC" -flto -O1 -c $LINK/archive/chain_second.c -o "$W/lto.o" 2>/dev/null &&
    [ "$(head -c 4 "$W/lto.o" | od -An -c | tr -d ' ')" = '177ELF' ] &&
    grep -q gnu.lto_ "$W/lto.o"; then
     refuses lto "lto.o: an LTO object" $LINK/archive/main.fc $IO "$W/chain_first.o" "$W/lto.o"
+fi
+
+# An output that is not a regular file is written in place, and neither
+# replaced nor removed when the build fails: run as root, `-o /dev/null` must
+# not delete the device. A FIFO stands in for it, as only root could remove
+# /dev/null.
+mkfifo "$W/fifo_out" "$W/fifo_failed"
+timeout 10 cat "$W/fifo_out" >"$W/fifo_out.got" &
+reader=$!
+if ! $FCC --native $LINK/objects/main.fc $IO "$W/clib.o" "$W/strong.o" -o "$W/fifo_out" \
+        2>"$W/fifo_out.log"; then
+    fail fifo_out "fcc did not link it" "$W/fifo_out.log"
+elif ! wait $reader || [ ! -p "$W/fifo_out" ]; then
+    fail fifo_out "fcc replaced the FIFO instead of writing to it"
+elif ! cmp -s "$W/fifo_out.got" "$W/objects.fcc"; then
+    fail fifo_out "the FIFO's reader got something other than the executable"
+else
+    pass fifo_out
+fi
+if $FCC --native $LINK/objects/main.fc $IO -o "$W/fifo_failed" 2>"$W/fifo_failed.log"; then
+    fail fifo_failed "fcc linked it"
+elif [ ! -p "$W/fifo_failed" ]; then
+    fail fifo_failed "the failed build removed the FIFO it was to write"
+else
+    pass fifo_failed
 fi
 
 # reads NAME WANT [VAR=VALUE] FCC_ARGS...: the program fcc builds, with the

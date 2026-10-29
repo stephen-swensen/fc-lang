@@ -294,6 +294,46 @@ three are open design questions; lay out the C/Rust/Zig precedents before decidi
 
 ---
 
+## `fcc` command line: `--emit` for the output kind
+
+A proposal, deferred 2026-10-29 with the command line left as it is. `-o` always names what
+the invocation writes, but `--native` both picks the backend and moves the build's end
+point: `fcc x.fc -o out` writes C source, `fcc --native x.fc -o out` a linked executable,
+and `--native -c` an object file. `-c` (cc's "don't link", POSIX `c99`/`c17`) arrived with
+fcc's own linker (71688ec3), when `--native` stopped writing only a `.o`; it is rejected
+without `--native`.
+
+Precedents: gcc/clang stop a pipeline early (`-E`/`-S`/`-c`), which doesn't fit, since
+fcc's C and native outputs are two routes, not stages of one; rustc keeps the code
+generator (`-Zcodegen-backend`) apart from the output kind (`--emit`), as Zig does
+(`-fno-llvm` vs `build-exe`/`build-obj`, `-ofmt=c`); Odin has `-build-mode:exe|obj`; V
+infers C output from the `-o` extension (too implicit).
+
+The proposal keeps `--native` as the backend choice, since a future fcc might run `cc` on
+its C to make an executable and `--emit exe` must not hide which generator runs, and
+adds `--emit c|obj|exe` for the output kind, which `-o` then always names:
+
+| | `--emit c` | `--emit obj` | `--emit exe` |
+|---|---|---|---|
+| C backend | **default**, `x.c` | error for now: fcc doesn't run a C compiler | error for now |
+| `--native` | error: the native backend writes no C | `x.o` | **default**, `x` |
+
+- Each backend's default is the furthest artifact fcc makes without an outside tool, so
+  every command line accepted today keeps its meaning, and the two cells that would drive
+  `cc` can be filled later without changing any of them.
+- `-c` stays as the short form of `--emit obj`, like `-h`/`--help` and `-V`/`--version`;
+  `-c` with a different `--emit` is an error.
+- `-l`, `-L` and `.o`/`.a`/`.so` inputs belong to `--emit exe` whatever the backend;
+  `-I` stays native-only until `cc` is driven, when it would be passed on as well.
+- The spec's §Outputs table (today's three outputs, plus the invocations that write
+  nothing) would become the grid above, and §Options would gain `--emit`.
+
+Touches `src/args.c`, `src/main.c` (usage), `tests/run_tests.sh`,
+`tests/run_link_tests.sh`, `Makefile`, `CONTRIBUTING.md` and `docs/ARCHITECTURE.md`;
+wolf-fc's command lines and docs stay as they are.
+
+---
+
 ## Editor / LSP server (`fcc --lsp`)
 
 The server's architecture is described in `docs/ARCHITECTURE.md` → "Language server";

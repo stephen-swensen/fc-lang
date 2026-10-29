@@ -6,8 +6,12 @@
 #include "common.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #if defined(_WIN32)
 #include <windows.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 static bool has_axis(const Flag *flags, int count, const char *axis) {
@@ -104,5 +108,14 @@ char *platform_realpath(const char *path) {
     return buf;
 #else
     return realpath(path, NULL);
+#endif
+}
+
+void platform_remove_if_ordinary(const char *path) {
+#if defined(_WIN32)
+    remove(path);
+#else
+    struct stat st;
+    if (lstat(path, &st) == 0 && (S_ISREG(st.st_mode) || S_ISLNK(st.st_mode))) unlink(path);
 #endif
 }
