@@ -1,0 +1,1 @@
+a slice literal's length goes inside its braces ('i32[3]' is the fixed-array type)

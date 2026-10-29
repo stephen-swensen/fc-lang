@@ -41,7 +41,7 @@ struct track =
     n: i64
 
 let track_new = () ->
-    track { evs = alloc(ev[4096] {})!, n = 0i64 }
+    track { evs = alloc(ev[] { len = 4096 })!, n = 0i64 }
 
 let emit = (t: track*, tick: i32, status: i32, d1: i32, d2: i32, size: i32) ->
     assert(t.n < t.evs.len)
@@ -86,7 +86,7 @@ struct writer =
     n: i64
 
 let writer_new = (cap: i64) ->
-    writer { b = alloc(u8[cap] {})!, n = 0i64 }
+    writer { b = alloc(u8[] { len = cap })!, n = 0i64 }
 
 let put8 = (w: writer*, v: i32) ->
     assert(w.n < w.b.len)
@@ -227,7 +227,7 @@ module scamper =
     let ticks = 24 * 1920
 
     // Melody, section A (8 bars).
-    let mel_a = i32[98] {
+    let mel_a = i32[] { len = 98,
         67,240, 72,240, 76,240, 79,240, 76,480, -1,480,           // 1
         69,240, 74,240, 77,240, 81,240, 77,480, -1,480,           // 2
         67,240, 72,240, 76,240, 79,240, 81,240, 79,240, 76,240, 74,240,  // 3
@@ -238,7 +238,7 @@ module scamper =
         79,480, 72,480, -1,240, 72,240, -1,480 }                  // 8
 
     // Section A': the same phrase, cadencing home.
-    let mel_a2 = i32[96] {
+    let mel_a2 = i32[] { len = 96,
         67,240, 72,240, 76,240, 79,240, 76,480, -1,480,
         69,240, 74,240, 77,240, 81,240, 77,480, -1,480,
         67,240, 72,240, 76,240, 79,240, 81,240, 79,240, 76,240, 74,240,
@@ -249,7 +249,7 @@ module scamper =
         72,720, -1,240, 72,240, -1,720 }
 
     // Section B: brighter, higher, and a long landing.
-    let mel_b = i32[88] {
+    let mel_b = i32[] { len = 88,
         81,480, 77,480, 74,240, 77,240, 81,480,                   // 9
         83,480, 79,480, 74,240, 79,240, 83,480,                   // 10
         84,240, 83,240, 81,240, 79,240, 77,240, 76,240, 74,240, 72,240,  // 11
@@ -261,7 +261,7 @@ module scamper =
 
     // One chord root per bar, all 24. (The comp plays root+octave+fifth,
     // so minor bars need no different handling.)
-    let roots = i32[24] {
+    let roots = i32[] { len = 24,
         48, 50, 48, 48, 48, 53, 55, 48,
         48, 50, 48, 48, 48, 53, 55, 48,
         53, 55, 50, 50, 48, 50, 55, 48 }
@@ -338,7 +338,7 @@ module cellar =
     let ticks = 12 * 1920
 
     // The call, with a bar of rest after each phrase for the echo to live in.
-    let line = i32[104] {
+    let line = i32[] { len = 104,
         48,240, -1,240, 51,240, -1,240, 53,240, -1,240, 48,240, -1,240,  // 1
         -1,1920,                                                          // 2
         46,240, -1,240, 48,240, -1,240, 51,240, -1,240, 46,240, -1,240,  // 3
@@ -397,11 +397,11 @@ module tidepool =
     let bars = 16
     let ticks = 16 * 1440
 
-    let roots = i32[16] {
+    let roots = i32[] { len = 16,
         53, 53, 58, 58, 53, 53, 60, 60,
         50, 50, 58, 58, 53, 60, 53, 53 }
 
-    let melody = i32[82] {
+    let melody = i32[] { len = 82,
         69,480, 72,480, 77,480,          // 1
         76,480, 74,480, 72,480,          // 2
         74,480, 70,960,                  // 3
@@ -477,16 +477,16 @@ module keep =
     let ticks = 16 * 1920
 
     // Which section each bar belongs to: 0 = C, 1 = F, 2 = Ab, 3 = G.
-    let section = i32[16] { 0, 0, 0, 0, 1, 1, 0, 0, 2, 2, 3, 3, 0, 0, 3, 0 }
+    let section = i32[] { 0, 0, 0, 0, 1, 1, 0, 0, 2, 2, 3, 3, 0, 0, 3, 0 }
 
     // The ostinato, one bar, rooted on C; other sections transpose it.
-    let riff = i32[16] { 48,240, 48,240, 55,240, 56,240, 48,240, 48,240, 47,240, 55,240 }
+    let riff = i32[] { 48,240, 48,240, 55,240, 56,240, 48,240, 48,240, 47,240, 55,240 }
 
     let sec_shift = (s: i32) ->
         if s == 1 then 5 else if s == 2 then -4 else if s == 3 then -5 else 0
 
     // The horn.
-    let horn = i32[52] {
+    let horn = i32[] { len = 52,
         72,1440, 74,480,                 // 1
         75,960, 74,960,                  // 2
         72,1920,                         // 3

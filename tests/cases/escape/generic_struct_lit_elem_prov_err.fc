@@ -6,7 +6,7 @@ struct gbox =
 
 let leak = () ->
     let mut x = 42
-    let ptrs = i32*[1] { &x }
+    let ptrs = i32*[] { &x }
     let b = gbox { v = ptrs, n = 1 }
     b.v[0]
 

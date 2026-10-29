@@ -1,5 +1,5 @@
 let short_lit = <'n>() ->
-    let b = i32['n] { 1, 2 }
+    let b = i32[] { len = 'n, 1, 2 }
     b.len
 
 let main = (args: str[]) ->

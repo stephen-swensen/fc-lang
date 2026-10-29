@@ -2,7 +2,7 @@
 let pick = (x: i32) -> x + 1
 
 module bad =
-    let arr = i32[1] { pick(5) }
+    let arr = i32[] { pick(5) }
 
 let main = (args: str[]) ->
     0

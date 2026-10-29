@@ -5,7 +5,7 @@ struct point =
 module state =
     let mut origin = point { x = 1, y = 2 }
     let mut counter = 0
-    let mut buf = i32[3] { 0, 0, 0 }
+    let mut buf = i32[] { 0, 0, 0 }
 
 let main = (args: str[]) ->
     state.origin.x = 30

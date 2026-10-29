@@ -20,7 +20,7 @@ let takes_any = (p: any*) -> if p == default(any*) then 0i64 else 1i64
 let takes_opt = (o: const str?) -> if o.is_some then 1i64 else 0i64
 
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[4] { 65u8, 66u8, 67u8, 68u8 })!
+    let mut buf = alloc(u8[] { 65u8, 66u8, 67u8, 68u8 })!
     let small = 2i32
 
     // binary expressions and comparisons
@@ -56,7 +56,7 @@ let main = (args: str[]) ->
     | empty -> assert(false)
 
     // slice-literal elements
-    let xs = i64[3] { 1, 2, 3 }
+    let xs = i64[] { 1, 2, 3 }
     assert(xs[1] == 2i64)
 
     // assignment — variable, struct field, slice element, deref target
@@ -66,7 +66,7 @@ let main = (args: str[]) ->
     let mut mb = box { n = 0i64, s = "" }
     mb.n = small
     assert(mb.n == 2i64)
-    let mut ys = i64[2] { 0i64, 0i64 }
+    let mut ys = i64[] { 0i64, 0i64 }
     ys[0] = small
     assert(ys[0] == 2i64)
     let pacc = &acc
@@ -90,7 +90,7 @@ let main = (args: str[]) ->
     assert(atomic_load_acquire(&flag) == 2i64)
 
     // extern variadic argument
-    let mut out = alloc(u8[16] { })!
+    let mut out = alloc(u8[] { len = 16 })!
     assert(c.snprintf(out.ptr, 16usize, c"%d", small) == 1)
 
     free(buf)

@@ -11,7 +11,7 @@ module m =
         count: i32
 
     let make = <'a, 'b>(cap: i64) ->
-        table { buckets = alloc(entry<'a, 'b>[cap] { })!, count = 0 }
+        table { buckets = alloc(entry<'a, 'b>[] { len = cap })!, count = 0 }
 
     let set_entry = (t: table<'a, 'b>*, idx: i64, k: 'a, v: 'b) ->
         t.buckets[idx] = entry { key = k, value = v, state = 1 }

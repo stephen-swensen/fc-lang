@@ -1,1 +1,1 @@
-slice literal has 2 elements but declared length is 3
+slice literal has 2 elements but its len is 3

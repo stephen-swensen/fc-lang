@@ -1,5 +1,5 @@
 // Not str-specific: the same two types, and the same widen, over a pointer
-// element. `const i32*[N] { ... }` fills slots with read-only views.
+// element. `(const i32*)[] { ... }` fills slots with read-only views.
 let read_only = (s: const i32*[]) ->
     (i32) s.len
 
@@ -10,7 +10,7 @@ let main = (args: str[]) ->
     let mut x = 4
     let mut y = 9
     let cx = (const i32*) &x
-    let mut ps = const i32*[2] { cx, cx }
+    let mut ps = (const i32*)[] { cx, cx }
 
     assert(elem_const(ps) == 4)
 

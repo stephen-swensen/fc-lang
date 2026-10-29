@@ -1,6 +1,6 @@
 // Heap allocation sized by a const param.
 let make_heap = <'n>() ->
-    match alloc(u32['n] { }) with
+    match alloc(u32[] { len = 'n }) with
     | some(s) -> s
     | none -> u32[] { ptr = default(u32*), len = 0 }
 

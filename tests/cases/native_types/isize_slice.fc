@@ -1,9 +1,9 @@
 let main = (args: str[]) ->
-    let mut a = alloc(isize[3] { })!
+    let mut a = alloc(isize[] { len = 3 })!
     a[0] = 10isize
     a[1] = 20isize
     a[2] = 30isize
-    let mut b = alloc(usize[2] { })!
+    let mut b = alloc(usize[] { len = 2 })!
     b[0] = 5usize
     b[1] = 7usize
     let r1 = (i32) a[0] + (i32) a[1] + (i32) a[2]

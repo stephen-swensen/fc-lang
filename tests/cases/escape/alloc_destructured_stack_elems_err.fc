@@ -2,7 +2,7 @@
 // of stack pointers stays one, so heap-copying it is an error.
 let bad = () ->
     let mut x = 42
-    let ptrs = i32*[1] { &x }
+    let ptrs = i32*[] { &x }
     let t = { ptrs, 1 }
     let { s, n } = t
     alloc(s)!

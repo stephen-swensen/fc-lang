@@ -122,13 +122,13 @@ module game =
 
     // The four words the rifle answers to. The better a shot you claimed
     // to be, the sooner after the word appears you must have typed it.
-    private let words = (const str)[4] { "BANG", "BOOM", "CRACK", "POW" }
+    private let words = (const str)[] { "BANG", "BOOM", "CRACK", "POW" }
 
-    private let months = (const str)[12] {
+    private let months = (const str)[] { len = 12,
         "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY",
         "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER" }
-    private let month_days = i32[12] { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
-    private let weekdays = (const str)[7] {
+    private let month_days = i32[] { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
+    private let weekdays = (const str)[] { len = 7,
         "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY" }
 
     // ============================================================
@@ -423,7 +423,7 @@ module game =
 
     // Cumulative odds out of 100 for the first fifteen events; past the
     // last is the sixteenth.
-    private let odds = f64[15] { 6.0, 11.0, 13.0, 15.0, 17.0, 22.0, 32.0, 35.0,
+    private let odds = f64[] { len = 15, 6.0, 11.0, 13.0, 15.0, 17.0, 22.0, 32.0, 35.0,
                                  37.0, 42.0, 44.0, 54.0, 64.0, 69.0, 95.0 }
 
     private let misfortune = (g: trail*, p: printout*) ->

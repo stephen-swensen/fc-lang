@@ -64,15 +64,15 @@ module hunt =
     let top = 14            // the status bar above the field
     let length = 30.0       // seconds of daylight for the hunt
 
-    private let speeds = f64[6] { 58.0, 66.0, 42.0, 34.0, 20.0, 24.0 }
-    private let meats = i32[6] { 2, 3, 55, 180, 420, 130 }
+    private let speeds = f64[] { 58.0, 66.0, 42.0, 34.0, 20.0, 24.0 }
+    private let meats = i32[] { 2, 3, 55, 180, 420, 130 }
     // Half-sizes of each animal's body, for hits and for art.
-    let half_w = i32[6] { 3, 4, 8, 9, 11, 9 }
-    let half_h = i32[6] { 2, 3, 6, 7, 8, 6 }
+    let half_w = i32[] { 3, 4, 8, 9, 11, 9 }
+    let half_h = i32[] { 2, 3, 6, 7, 8, 6 }
 
     // Where each thing lives, as weights over the six kinds: plains, high
     // plains, mountains, far west.
-    private let habitat = i32[24] {
+    private let habitat = i32[] { len = 24,
         20, 30, 25, 0, 25, 0,
         15, 25, 25, 10, 20, 5,
         20, 20, 25, 20, 0, 15,

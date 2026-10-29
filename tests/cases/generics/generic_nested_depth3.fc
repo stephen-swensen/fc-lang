@@ -25,12 +25,12 @@ module a =
                 c.try_first(s)!
 
 let main = (args: str[]) ->
-    let s = i32[4] { 10, 20, 30, 40 }
+    let s = i32[] { 10, 20, 30, 40 }
     assert(a.b.c.first(s) == 10)
     assert(a.b.c.reduce(s, (x: i32, y: i32) -> x + y) == 100)
 
     // Multiple instantiations at different types
-    let bools = bool[3] { true, false, true }
+    let bools = bool[] { true, false, true }
     assert(a.b.c.first(bools))
     assert(a.b.c.reduce(bools, (x: bool, y: bool) -> x && y) == false)
     0

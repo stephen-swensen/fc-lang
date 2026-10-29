@@ -1,0 +1,6 @@
+// A writable view cannot be built over read-only memory: a const T* needs the
+// read-only head `const T[]`.
+let main = (args: str[]) ->
+    let s = "abc"
+    let v = u8[] { ptr = s.ptr, len = 3 }
+    (i32) v.len

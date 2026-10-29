@@ -1,0 +1,5 @@
+// A view lists no elements of its own.
+let main = (args: str[]) ->
+    let mut backing = u8[] { 1u8, 2u8 }
+    let v = u8[] { ptr = backing.ptr, len = 2, 3u8 }
+    (i32) v.len

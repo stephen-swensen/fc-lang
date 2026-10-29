@@ -37,7 +37,7 @@ let main = (args: str[]) ->
     assert(p_const(a) == 42)               // i32*? -> const i32*?
     assert(p_any(a) == 1)                  // i32*? -> any*?
 
-    let mut buf = i32[4] { }
+    let mut buf = i32[] { len = 4 }
     let sl = some(buf[0..4])               // i32[]?
     assert(s_const(sl) == 4)               // i32[]? -> const i32[]?
 

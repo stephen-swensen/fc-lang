@@ -7,7 +7,7 @@ struct box =
     maybe: holder?
 
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[2] { })!
-    let ro = (const box[]) box[1] { box { maybe = some(holder { s = buf }) } }
+    let mut buf = alloc(u8[] { len = 2 })!
+    let ro = (const box[]) box[] { box { maybe = some(holder { s = buf }) } }
     let o = ro[0].maybe
     (i32) o.is_some

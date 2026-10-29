@@ -48,7 +48,7 @@ let main = (args: str[]) ->
     buf[3].x = 7
     assert(buf[3].x == 7)
 
-    let arr = alloc(shapes.point[3] { })!
+    let arr = alloc(shapes.point[] { len = 3 })!
     defer free(arr)
     assert(arr.len == 3)
     assert(arr[0].x == 0)
@@ -59,6 +59,6 @@ let main = (args: str[]) ->
     sbuf[0].x = 1
     assert(sbuf[0].x == 1)
 
-    let sarr = alloca(shapes.point[n] { })
+    let sarr = alloca(shapes.point[] { len = n })
     assert(sarr.len == 2)
     0

@@ -105,7 +105,7 @@ let main = (args: str[]) ->
 
     for seq in 0..count do
 
-        let mut pkt = u8[64] {}
+        let mut pkt = u8[] { len = 64 }
         build_echo_request(pkt, id, (u16) seq)
 
         let start = now_usec()
@@ -113,7 +113,7 @@ let main = (args: str[]) ->
             io.write("send failed for icmp_seq=%d{seq}\n", stderr)
         else
             sent = sent + 1
-            let mut reply = u8[128] {}
+            let mut reply = u8[] { len = 128 }
             // The receive window expiring is the expected miss — it arrives as
             // the named condition conn.would_block and counts as a lost reply.
             // Anything else is a real receive failure, reported by name or code.

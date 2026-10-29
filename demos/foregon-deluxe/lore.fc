@@ -50,7 +50,7 @@ module lore =
     let the_dalles   = 16
     let willamette   = 17
 
-    let places = place[18] {
+    let places = place[] { len = 18,
         place { name = "Independence", kind = place_kind.town, next = 1, dist = 102, alt = -1,
                 sprite = 0, region = 0 },
         place { name = "the Kansas River crossing", kind = place_kind.river, next = 2, dist = 83, alt = -1,
@@ -90,7 +90,7 @@ module lore =
     }
 
     // A short name for the map and the status line.
-    let short_names = (const str)[18] {
+    let short_names = (const str)[] { len = 18,
         "Independence", "Kansas River", "Big Blue River", "Fort Kearny",
         "Chimney Rock", "Fort Laramie", "Independence Rock", "South Pass",
         "Green River", "Fort Bridger", "Soda Springs", "Fort Hall",
@@ -99,13 +99,13 @@ module lore =
 
     // Where each landmark sits on the map screen (320x180 logical pixels):
     // the trail runs east (right) to west (left).
-    let map_xy = i32[36] {
+    let map_xy = i32[] { len = 36,
         292, 96,   272, 92,   258, 86,   236, 90,   200, 86,   176, 80,
         150, 78,   128, 76,   112, 82,   110, 70,   96, 74,    84, 70,
         66, 78,    52, 70,    40, 58,    30, 48,    24, 62,    10, 70 }
 
     // What the people at each landmark have to say: two voices a place.
-    let talk = (const str)[36] {
+    let talk = (const str)[] { len = 36,
         // Independence
         "A clerk at the outfitters: \"Folks buy flour as if it were gold and bullets as if they were free. Get that backwards and you'll not see the mountains.\"",
         "A woman loading her wagon: \"My brother went out in '46. His letter said the river crossings are the worst of it. Don't rush a river.\"",
@@ -162,7 +162,7 @@ module lore =
         "" }
 
     // "Learn about the trail": the instructions, a page at a time.
-    let learn_pages = (const str)[5] {
+    let learn_pages = (const str)[] { len = 5,
         "The year is 1848. You are taking your family 2000 miles by covered wagon, from Independence, Missouri, to the Willamette Valley in Oregon Country. The trip takes five months or more. Leave too early and the grass isn't up for the oxen. Leave too late and you meet the snow in the mountains.",
         "Before you leave, buy supplies. Oxen pull the wagon, and more of them pull it faster. Food is counted in pounds. Each person needs at least two sets of clothing for the cold. Bullets are for hunting. Spare wheels, axles and tongues mend a broken wagon when there's no blacksmith.",
         "On the trail you choose your pace and your rations. A fast pace and short rations save time and food but wear your family down. Watch their health. Rest when they need it, and see that illness doesn't find them weak.",
@@ -170,41 +170,41 @@ module lore =
         "When food runs low, hunt: aim with the arrow keys and fire with the space bar. You can carry only 100 pounds of meat back to the wagon. Score comes from the family that arrives, and the supplies they bring. A farmer who makes it scores three times what a banker does." }
 
     // The professions: where from, what they bring, what it's worth.
-    let professions = (const str)[3] { "a banker from Boston", "a carpenter from Ohio", "a farmer from Illinois" }
-    let profession_cash = f64[3] { 1600.0, 800.0, 400.0 }
-    let profession_bonus = i32[3] { 1, 2, 3 }
-    let profession_note = (const str)[3] {
+    let professions = (const str)[] { "a banker from Boston", "a carpenter from Ohio", "a farmer from Illinois" }
+    let profession_cash = f64[] { 1600.0, 800.0, 400.0 }
+    let profession_bonus = i32[] { 1, 2, 3 }
+    let profession_note = (const str)[] { len = 3,
         "Bankers leave with the most money and the easiest start. The trail gives no extra credit for an easy start.",
         "Carpenters have less money but know their tools: a carpenter mends a broken wagon more often than not.",
         "Farmers have the least money and the hardest start, but they know animals: their oxen are less likely to go lame, and their score counts three times over." }
 
     // Months a party might set out in, and what the season means.
-    let months = (const str)[12] {
+    let months = (const str)[] { len = 12,
         "January", "February", "March", "April", "May", "June", "July",
         "August", "September", "October", "November", "December" }
-    let depart_months = i32[5] { 2, 3, 4, 5, 6 }     // March..July
-    let month_days = i32[12] { 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }   // 1848 is a leap year
+    let depart_months = i32[] { 2, 3, 4, 5, 6 }     // March..July
+    let month_days = i32[] { 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }   // 1848 is a leap year
 
     // Names offered when a name is left blank.
-    let names = (const str)[20] {
+    let names = (const str)[] { len = 20,
         "Hannah", "Eli", "Martha", "Silas", "Ruth", "Amos", "Lydia", "Josiah",
         "Clara", "Ezra", "Nell", "Wade", "Abigail", "Tobias", "Delia", "Jonas",
         "Prudence", "Cyrus", "Mercy", "Gideon" }
 
     // Illnesses and injuries: the name as said, how hard it drains health a
     // day, and how many days it lasts at most.
-    let ills = (const str)[10] {
+    let ills = (const str)[] { len = 10,
         "dysentery", "cholera", "typhoid fever", "the measles", "mountain fever",
         "exhaustion", "a snakebite", "a broken arm", "a broken leg", "a fever" }
-    let ill_drain = f64[10] { 3.0, 6.0, 4.0, 2.5, 3.0, 2.0, 4.5, 1.0, 2.0, 2.5 }
-    let ill_days = i32[10] { 10, 7, 14, 10, 12, 6, 6, 14, 20, 8 }
+    let ill_drain = f64[] { 3.0, 6.0, 4.0, 2.5, 3.0, 2.0, 4.5, 1.0, 2.0, 2.5 }
+    let ill_days = i32[] { 10, 7, 14, 10, 12, 6, 6, 14, 20, 8 }
 
     // The top ten a new player first sees: travelers of the imagination.
-    let legends = (const str)[10] {
+    let legends = (const str)[] { len = 10,
         "Ada Pennock", "Cornelius Hale", "Sarah Whitlow", "Obadiah Crane",
         "Maggie Fenn", "Isaac Boyd", "Temperance Lott", "Walter Ames",
         "Eunice Tate", "Barnabas Grey" }
-    let legend_scores = i32[10] { 7650, 6010, 4930, 3860, 3120, 2480, 1870, 1210, 790, 360 }
+    let legend_scores = i32[] { 7650, 6010, 4930, 3860, 3120, 2480, 1870, 1210, 790, 360 }
 
     // What a score makes you.
     let rating = (score: i32) ->

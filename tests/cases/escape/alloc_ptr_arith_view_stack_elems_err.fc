@@ -2,7 +2,7 @@
 // provenance.
 let bad = () ->
     let mut x = 42
-    let ptrs = i32*[2] { &x, &x }
+    let ptrs = i32*[] { &x, &x }
     let view = i32*[] { ptr = ptrs.ptr + 1, len = 1 }
     alloc(view)!
 

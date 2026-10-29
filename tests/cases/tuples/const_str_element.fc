@@ -15,6 +15,6 @@ let main = (args: str[]) ->
     assert(n == 4)
     assert(s.len == 5)
 
-    let xs = {i32, const str}[2] { { 1, "a" }, { 2, "bb" } }
+    let xs = {i32, const str}[] { { 1, "a" }, { 2, "bb" } }
     assert(xs[1][1].len == 2)
     0

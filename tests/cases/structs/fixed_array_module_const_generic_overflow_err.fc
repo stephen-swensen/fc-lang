@@ -8,7 +8,7 @@ struct sized =
     data: i32['n]
 
 module m =
-    let s = sized { w = default(wide<2>), data = i32[3] { 1, 2, 3 } }
+    let s = sized { w = default(wide<2>), data = i32[] { 1, 2, 3 } }
 
 let main = (args: str[]) ->
     (i32) m.s.data.len

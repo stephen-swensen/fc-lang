@@ -1,0 +1,6 @@
+// The old form in a module constant.
+module tbl =
+    let squares = i32[3] { 0, 1, 4 }
+
+let main = (args: str[]) ->
+    tbl.squares[2]

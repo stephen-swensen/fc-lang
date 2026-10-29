@@ -5,15 +5,15 @@
 // the one entry point that never reached the (already type-var-aware) array
 // literal handling.
 let make4 = (x: 'a) ->
-    let buf = 'a[4] { x, x, x, x }
+    let buf = 'a[] { x, x, x, x }
     buf[0] + buf[1] + buf[2] + buf[3]
 
 let count_len = (x: 'a) ->
-    let buf = 'a[4] { x, x, x, x }
+    let buf = 'a[] { x, x, x, x }
     (i32) buf.len
 
 let sum_iter = (x: 'a) ->
-    let buf = 'a[3] { x, x, x }
+    let buf = 'a[] { x, x, x }
     let mut acc = x
     for e in buf do
         acc = acc + e
@@ -21,7 +21,7 @@ let sum_iter = (x: 'a) ->
 
 // index the literal directly, without binding it first
 let pick_second = (a: 'a, b: 'a) ->
-    'a[2] { a, b }[1]
+    'a[] { a, b }[1]
 
 let main = (args: str[]) ->
     assert(make4(5) == 20)            // 'a = i32

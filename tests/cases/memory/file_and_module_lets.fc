@@ -2,7 +2,7 @@
 // File-level init hoists to the C main wrapper; module-level is emitted
 // as a file-scope definition with a static backing array.
 module table =
-    let lookup = i32[4] { 10, 20, 30, 40 }
+    let lookup = i32[] { 10, 20, 30, 40 }
     let origin = some(0)
 
 let heap = alloc(i32, 3)!

@@ -6,4 +6,4 @@ struct point =
 
 module cfg =
     let origin = point { x = 1, y = 2 }
-    let steps = i32[4] { 1, 2, 4, 8 }
+    let steps = i32[] { 1, 2, 4, 8 }

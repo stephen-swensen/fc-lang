@@ -3,7 +3,7 @@
 let bad = () ->
     let mut x = 41
     x = x + 1
-    let opts = (i32*?)[1] { some(&x) }
+    let opts = (i32*?)[] { some(&x) }
     match opts[0] with
     | some(p) -> p
     | none -> default(i32*)

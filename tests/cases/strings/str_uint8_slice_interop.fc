@@ -12,7 +12,7 @@ let first_byte_u8slice = (s: const u8[]) ->
 
 let main = (args: str[]) ->
     let s = "hello"
-    let mut buf = u8[3] { }
+    let mut buf = u8[] { len = 3 }
     buf.ptr[0] = 65u8
     buf.ptr[1] = 66u8
     buf.ptr[2] = 67u8

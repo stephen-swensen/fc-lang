@@ -4,7 +4,7 @@ module libc from "stdlib.h" =
 
 let main = (args: str[]) ->
     let offset = 10
-    let mut nums = i32[3] { 3, 1, 2 }
+    let mut nums = i32[] { 3, 1, 2 }
     libc.qsort(nums.ptr, 3usize, (usize) sizeof(i32),
         (a: const any*, b: const any*) ->
             (*(const i32*) a + offset) - (*(const i32*) b + offset))

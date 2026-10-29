@@ -4,7 +4,7 @@ module grid =
         x: i32
         y: i32
 
-    let origins = point[3] {
+    let origins = point[] { len = 3,
         point { x = 0, y = 0 },
         point { x = 10, y = 20 },
         point { x = -5, y = 5 }

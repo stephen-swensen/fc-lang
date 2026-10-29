@@ -19,7 +19,7 @@ module font =
     let cell_w = 6
     let cell_h = 9
 
-    private let glyphs = (const str)[95] {
+    private let glyphs = (const str)[] { len = 95,
         "     |     |     |     |     |     |     |     ",   // space
         "  #  |  #  |  #  |  #  |  #  |     |  #  |     ",   // !
         " # # | # # |     |     |     |     |     |     ",   // "

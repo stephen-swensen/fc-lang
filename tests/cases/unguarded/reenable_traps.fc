@@ -1,7 +1,7 @@
 // A `guarded` re-enable inside an `unguarded` region restores the bounds check:
 // an out-of-range access aborts (exit 134) instead of reading out of bounds.
 let main = (args: str[]) ->
-    let xs = i32[3]{10, 20, 30}
+    let xs = i32[]{10, 20, 30}
     let idx = (i32) xs.len + 2      // 5 — out of range, computed at runtime
     let v = unguarded
         let a = xs[0]                 // unchecked: gives the outer marker its effect

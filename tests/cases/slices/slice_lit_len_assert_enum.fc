@@ -1,0 +1,20 @@
+// A `len` written before the elements asserts their count: a table with one
+// entry per enum variant states `len = E.count`, at module scope and inside a
+// function, so adding a variant without an entry stops compiling
+// (slice_lit_len_assert_enum_err).
+enum dir =
+    | north
+    | east
+    | south
+    | west
+
+module step =
+    let dx = i32[] { len = dir.count, 0, 1, 0, -1 }
+    let names = (const str)[] { len = dir.count, "n", "e", "s", "w" }
+
+let main = (args: str[]) ->
+    let dy = i32[] { len = dir.count, -1, 0, 1, 0 }
+    let d = dir.west
+    assert(step.dx[(i32) d] == -1 && dy[(i32) d] == 0)
+    assert(step.names[(i32) dir.east] == "e")
+    0

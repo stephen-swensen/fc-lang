@@ -13,7 +13,7 @@ let main = (args: str[]) ->
     // ================================================================
     let num_buckets = 10
     let mut r1 = pcg_random.make(12345u64)
-    let mut buckets = alloc(i32[10] { })!
+    let mut buckets = alloc(i32[] { len = 10 })!
     defer free(buckets)
 
     for i in 0..n do
@@ -48,7 +48,7 @@ let main = (args: str[]) ->
     //    Generate 1M u32 values, count 1-bits per position.
     // ================================================================
     let mut r2 = pcg_random.make(67890u64)
-    let mut bit_counts = alloc(i32[32] { })!
+    let mut bit_counts = alloc(i32[] { len = 32 })!
     defer free(bit_counts)
 
     for i in 0..n do

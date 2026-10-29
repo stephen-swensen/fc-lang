@@ -106,7 +106,7 @@ module net =
 
     private let ensure_init = () ->
         if !wsa_initialized then
-            let mut buf = u8[512] {}
+            let mut buf = u8[] { len = 512 }
             sock.wsa_startup(0x202u16, (any*) buf.ptr)
             wsa_initialized = true
         return

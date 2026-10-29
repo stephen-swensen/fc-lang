@@ -2,9 +2,9 @@
 // elements hold (tracked one level deep, as indexing is).
 let bad = () ->
     let mut x = 42
-    let ptrs = i32*[1] { &x }
-    let nested = (i32*[])[1] { ptrs }
-    let mut out = alloc(i32*[1] {})!
+    let ptrs = i32*[] { &x }
+    let nested = (i32*[])[] { ptrs }
+    let mut out = alloc(i32*[] { len = 1 })!
     for s in nested do
         out = alloc(s)!
     out

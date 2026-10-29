@@ -1,1 +1,1 @@
-runtime size cannot have explicit elements
+slice literal len must be a compile-time constant

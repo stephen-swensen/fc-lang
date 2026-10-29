@@ -17,7 +17,7 @@ let read_or_zero = (data: u8[], i: i32) ->
     | none -> ok(-1)
 
 let main = (args: str[]) ->
-    let data = u8[3] { 10u8, 20u8, 30u8 }
+    let data = u8[] { 10u8, 20u8, 30u8 }
 
     match read_or_zero(data, 1) with
     | ok(v) -> assert(v == 20)

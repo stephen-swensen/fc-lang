@@ -304,14 +304,14 @@ module wideint =
 
     // Heap-allocated copy of s (caller must free).
     private let heap_copy = (s: const str) ->
-        let out = alloc(u8[s.len] {})!
+        let out = alloc(u8[] { len = s.len })!
         for i, c in s do
             out[i] = c
         out
 
     // Heap-allocated '-' followed by digits (caller must free).
     private let heap_copy_neg = (digits: const str) ->
-        let out = alloc(u8[digits.len + 1i64] {})!
+        let out = alloc(u8[] { len = digits.len + 1i64 })!
         out[0] = '-'
         for i, c in digits do
             out[i + 1] = c
@@ -469,7 +469,7 @@ module wideint =
 
         // a * b, aborting on overflow past 'n bits.
         let checked_mul = (a: uwide<'n>, b: uwide<'n>) ->
-            let full = u32['n / 16] { }
+            let full = u32[] { len = 'n / 16 }
             limbs_mul_full(full, a.limbs, b.limbs)
             assert(limbs_is_zero(full[('n / 32)..('n / 16)]),
                 "uwide.checked_mul: overflow past %d{'n} bits")
@@ -494,13 +494,13 @@ module wideint =
         // Heap-allocated decimal text of a (caller must free).
         let to_str = (a: uwide<'n>) ->
             let work = a
-            let scratch = u8['n * 5 / 16] { }
+            let scratch = u8[] { len = 'n * 5 / 16 }
             heap_copy(limbs_format(scratch, work.limbs, 10u32))
 
         // Heap-allocated lowercase hex text of a (caller must free).
         let to_hex = (a: uwide<'n>) ->
             let work = a
-            let scratch = u8['n * 5 / 16] { }
+            let scratch = u8[] { len = 'n * 5 / 16 }
             heap_copy(limbs_format(scratch, work.limbs, 16u32))
 
     // ===================================================================
@@ -635,7 +635,7 @@ module wideint =
             let bn = limbs_sign(b.limbs) == 1u32
             let ua = if an then iwide.neg(a) else a
             let ub = if bn then iwide.neg(b) else b
-            let full = u32['n / 16] { }
+            let full = u32[] { len = 'n / 16 }
             limbs_mul_full(full, ua.limbs, ub.limbs)
             assert(limbs_signed_mul_fits(full, an != bn),
                 "iwide.checked_mul: signed overflow at %d{'n} bits")
@@ -734,7 +734,7 @@ module wideint =
 
         // Heap-allocated decimal text of a, leading '-' if negative (free it).
         let to_str = (a: iwide<'n>) ->
-            let scratch = u8['n * 5 / 16] { }
+            let scratch = u8[] { len = 'n * 5 / 16 }
             if limbs_sign(a.limbs) == 1u32 then
                 let mag = iwide.neg(a)
                 let work = mag
@@ -746,5 +746,5 @@ module wideint =
         // Heap-allocated raw two's-complement hex text (caller must free).
         let to_hex = (a: iwide<'n>) ->
             let work = a
-            let scratch = u8['n * 5 / 16] { }
+            let scratch = u8[] { len = 'n * 5 / 16 }
             heap_copy(limbs_format(scratch, work.limbs, 16u32))

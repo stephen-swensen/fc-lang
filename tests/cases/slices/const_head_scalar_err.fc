@@ -1,0 +1,5 @@
+// A read-only head on a zero-initialized literal: the fix is the writable
+// slice, which converts to the read-only one.
+let main = (args: str[]) ->
+    let zs = const i32[] { len = 4 }
+    (i32) zs.len

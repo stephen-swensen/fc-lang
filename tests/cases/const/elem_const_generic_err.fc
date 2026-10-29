@@ -6,4 +6,4 @@ let mutable = (s: 'a*[]) ->
 let main = (args: str[]) ->
     let mut x = 1
     let cx = (const i32*) &x
-    mutable(const i32*[2] { cx, cx })
+    mutable((const i32*)[] { cx, cx })

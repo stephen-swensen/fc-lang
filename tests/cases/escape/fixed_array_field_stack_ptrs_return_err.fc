@@ -5,7 +5,7 @@ struct s =
 
 let leak = () ->
     let mut x = 42
-    s { ptrs = i32*[1] { &x } }
+    s { ptrs = i32*[] { &x } }
 
 let main = (args: str[]) ->
     let _r = leak()

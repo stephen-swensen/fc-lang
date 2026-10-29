@@ -11,8 +11,8 @@ let describe = (xs: 'a[]) ->
     (i64) c.strlen(cs) + (i64) msg.len
 
 let main = (args: str[]) ->
-    let ints = i32[2] { 5, 6 }
-    let longs = i64[3] { 5i64, 6i64, 7i64 }
+    let ints = i32[] { 5, 6 }
+    let longs = i64[] { 5i64, 6i64, 7i64 }
     assert(describe(ints) == 3i64 + 5i64)    // "len" + "len=2"  ('a = i32)
     assert(describe(longs) == 3i64 + 5i64)   // "len" + "len=3"  ('a = i64)
     0

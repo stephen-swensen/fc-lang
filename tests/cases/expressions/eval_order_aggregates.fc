@@ -29,7 +29,7 @@ let main = (args: str[]) ->
 
     // Array literal: elements run in source order.
     let mut r = 0
-    let arr = i32[3] { bump(&r), bump(&r), bump(&r) }
+    let arr = i32[] { bump(&r), bump(&r), bump(&r) }
     assert(arr[0] == 1 && arr[1] == 2 && arr[2] == 3)
     assert(r == 3)
 
@@ -40,7 +40,7 @@ let main = (args: str[]) ->
     assert(m == 2)
 
     // Raw slice literal: the ptr expression runs before the len expression.
-    let mut backing = i32[8] { 0, 0, 0, 0, 0, 0, 0, 0 }
+    let mut backing = i32[] { 0, 0, 0, 0, 0, 0, 0, 0 }
     let mut k = 0
     // ptr() bumps k 0->1, then len reads k == 1.  Reversed order would read 0.
     let sl = i32[] { ptr = bump_ptr(&k, backing.ptr), len = k }

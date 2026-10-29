@@ -7,7 +7,7 @@ let main = (args: str[]) ->
     copy[0] = 'j'
     assert(copy[0] == 'j')
 
-    let ro = (const str[]) const str[2] { "a", "b" }
+    let ro = (const str[]) (const str)[] { "a", "b" }
     let h = alloc(ro)!
     defer free(h)
     h[1] = "zz"

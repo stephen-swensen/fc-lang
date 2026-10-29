@@ -1,4 +1,4 @@
-// Frozen module `let` with the empty slice form `T[N]{ }` reads as N
+// Frozen module `let` with the zero-initialized form `T[] { len = n }` reads as n
 // zeros (same regression class as the mut twin: the backing array must
 // exist even with no written elements). Also covers the genuinely
 // zero-length literal (no backing, len 0) and an empty literal nested
@@ -9,9 +9,9 @@ struct pair =
     n: i32
 
 module m =
-    let fz = i32[5]{ }
-    let zl = i32[0]{ }
-    let p = pair { xs = i32[3]{ }, n = 7 }
+    let fz = i32[] { len = 5 }
+    let zl = i32[] { }
+    let p = pair { xs = i32[] { len = 3 }, n = 7 }
 
 let main = (args: str[]) ->
     for i in 0..5 do assert(m.fz[i] == 0)

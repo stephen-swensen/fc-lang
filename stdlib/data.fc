@@ -45,7 +45,7 @@ module data =
 
         private let grow = (l: array_list<'a>*) ->
             let new_cap = l.data.len * 2
-            let mut new_data = alloc('a[new_cap] { })!
+            let mut new_data = alloc('a[] { len = new_cap })!
             for i, e in l.data[0..l.len] do
                 new_data[i] = e
             free(l.data)
@@ -53,12 +53,12 @@ module data =
 
         // Creates an empty array_list with default capacity 8. Caller must destroy.
         let make = <'a>() ->
-            alloc(array_list { data = alloc('a[8] { })!, len = 0 })!
+            alloc(array_list { data = alloc('a[] { len = 8 })!, len = 0 })!
 
         // Creates an empty array_list with given capacity. Caller must destroy.
         let make_with_capacity = <'a>(cap: i64) ->
             let actual = if cap < 1i64 then 1i64 else cap
-            alloc(array_list { data = alloc('a[actual] { })!, len = 0 })!
+            alloc(array_list { data = alloc('a[] { len = actual })!, len = 0 })!
 
         // Frees backing storage and the header. Does not free element values.
         let destroy = (l: array_list<'a>*) ->
@@ -67,7 +67,7 @@ module data =
 
         // Returns a deep copy. Caller must destroy.
         let copy = (l: array_list<'a>*) ->
-            let new_data = alloc('a[l.data.len] { })!
+            let new_data = alloc('a[] { len = l.data.len })!
             for i, e in l.data[0..l.len] do
                 new_data[i] = e
             alloc(array_list { data = new_data, len = l.len })!
@@ -320,7 +320,7 @@ module data =
 
         // Like fold, returns all intermediate values. Caller must free.
         let scan = (s: const 'a[], init: 'b, f: ('b, 'a) -> 'b) ->
-            let result = alloc('b[s.len + 1] { })!
+            let result = alloc('b[] { len = s.len + 1 })!
             let mut acc = init
             result[0] = acc
             let mut j = 1i64
@@ -332,14 +332,14 @@ module data =
 
         // Transforms each element. Caller must free.
         let map = (s: const 'a[], f: ('a) -> 'b) ->
-            let result = alloc('b[s.len] { })!
+            let result = alloc('b[] { len = s.len })!
             for i, e in s do
                 result[i] = f(e)
             result
 
         // Transforms each element with index. Caller must free.
         let mapi = (s: const 'a[], f: (i64, 'a) -> 'b) ->
-            let result = alloc('b[s.len] { })!
+            let result = alloc('b[] { len = s.len })!
             for i, e in s do
                 result[i] = f(i, e)
             result
@@ -349,7 +349,7 @@ module data =
             let mut n = 0i64
             for e in s do
                 if pred(e) then n = n + 1
-            let result = alloc('a[n] { })!
+            let result = alloc('a[] { len = n })!
             let mut j = 0i64
             for e in s do
                 if pred(e) then
@@ -428,7 +428,7 @@ module data =
 
         // Returns a heap-allocated copy. Caller must free.
         let copy = (s: const 'a[]) ->
-            let result = alloc('a[s.len] { })!
+            let result = alloc('a[] { len = s.len })!
             for i, e in s do
                 result[i] = e
             result
@@ -687,7 +687,7 @@ module data =
 
         // Like fold, returns all intermediate values. Caller must free.
         let scan = (l: linked_list<'a>*, init: 'b, f: ('b, 'a) -> 'b) ->
-            let result = alloc('b[l.len + 1] { })!
+            let result = alloc('b[] { len = l.len + 1 })!
             let mut acc = init
             result[0] = acc
             let mut cur = l.head
@@ -805,7 +805,7 @@ module data =
 
         // Converts to a heap-allocated slice. Caller must free.
         let to_slice = (l: linked_list<'a>*) ->
-            let result = alloc('a[l.len] { })!
+            let result = alloc('a[] { len = l.len })!
             let mut cur = l.head
             let mut j = 0i64
             loop
@@ -918,12 +918,12 @@ module data =
         // Creates empty hash_dict with default capacity 16. Caller must destroy.
         // 'b must be explicitly provided; 'a is inferred from hash/eq.
         let make = <'b>(hash: ('a) -> i64, eq: ('a, 'a) -> bool) ->
-            alloc(hash_dict { buckets = alloc(hd_entry<'a, 'b>[16] { })!, len = 0, hash = hash, eq = eq })!
+            alloc(hash_dict { buckets = alloc(hd_entry<'a, 'b>[] { len = 16 })!, len = 0, hash = hash, eq = eq })!
 
         // Creates empty hash_dict with given capacity. Caller must destroy.
         let make_with_capacity = <'b>(cap: i64, hash: ('a) -> i64, eq: ('a, 'a) -> bool) ->
             let actual = if cap < 4i64 then 4i64 else cap
-            alloc(hash_dict { buckets = alloc(hd_entry<'a, 'b>[actual] { })!, len = 0, hash = hash, eq = eq })!
+            alloc(hash_dict { buckets = alloc(hd_entry<'a, 'b>[] { len = actual })!, len = 0, hash = hash, eq = eq })!
 
         // Frees bucket storage and the header. Does not free key/value heap data.
         let destroy = (d: hash_dict<'a, 'b>*) ->
@@ -934,7 +934,7 @@ module data =
             let old = d.buckets
             let old_cap = old.len
             let new_cap = old_cap * 2
-            d.buckets = alloc(hd_entry<'a, 'b>[new_cap] { })!
+            d.buckets = alloc(hd_entry<'a, 'b>[] { len = new_cap })!
             d.len = 0
             for i in 0..old_cap do
                 let entry = old[i]
@@ -1043,7 +1043,7 @@ module data =
 
         // Returns all keys as heap-allocated slice. Caller must free.
         let keys = (d: hash_dict<'a, 'b>*) ->
-            let result = alloc('a[d.len] { })!
+            let result = alloc('a[] { len = d.len })!
             let mut j = 0i64
             for i in 0..d.buckets.len do
                 let entry = d.buckets[i]
@@ -1054,7 +1054,7 @@ module data =
 
         // Returns all values as heap-allocated slice. Caller must free.
         let values = (d: hash_dict<'a, 'b>*) ->
-            let result = alloc('b[d.len] { })!
+            let result = alloc('b[] { len = d.len })!
             let mut j = 0i64
             for i in 0..d.buckets.len do
                 let entry = d.buckets[i]
@@ -1115,12 +1115,12 @@ module data =
 
         // Creates empty hash_set with default capacity 16. Caller must destroy.
         let make = (hash: ('a) -> i64, eq: ('a, 'a) -> bool) ->
-            alloc(hash_set { buckets = alloc(hs_entry<'a>[16] { })!, len = 0, hash = hash, eq = eq })!
+            alloc(hash_set { buckets = alloc(hs_entry<'a>[] { len = 16 })!, len = 0, hash = hash, eq = eq })!
 
         // Creates empty hash_set with given capacity. Caller must destroy.
         let make_with_capacity = (cap: i64, hash: ('a) -> i64, eq: ('a, 'a) -> bool) ->
             let actual = if cap < 4i64 then 4i64 else cap
-            alloc(hash_set { buckets = alloc(hs_entry<'a>[actual] { })!, len = 0, hash = hash, eq = eq })!
+            alloc(hash_set { buckets = alloc(hs_entry<'a>[] { len = actual })!, len = 0, hash = hash, eq = eq })!
 
         // Frees bucket storage and the header.
         let destroy = (s: hash_set<'a>*) ->
@@ -1131,7 +1131,7 @@ module data =
             let old = s.buckets
             let old_cap = old.len
             let new_cap = old_cap * 2
-            s.buckets = alloc(hs_entry<'a>[new_cap] { })!
+            s.buckets = alloc(hs_entry<'a>[] { len = new_cap })!
             s.len = 0
             for i in 0..old_cap do
                 let entry = old[i]
@@ -1238,7 +1238,7 @@ module data =
 
         // Returns all elements as heap-allocated slice. Caller must free.
         let to_slice = (s: hash_set<'a>*) ->
-            let result = alloc('a[s.len] { })!
+            let result = alloc('a[] { len = s.len })!
             let mut j = 0i64
             for i in 0..s.buckets.len do
                 let entry = s.buckets[i]

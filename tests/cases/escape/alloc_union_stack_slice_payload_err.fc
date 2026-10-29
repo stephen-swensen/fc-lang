@@ -5,7 +5,7 @@ union carrier =
     | empty
 
 let bad = () ->
-    let buf = i32[2] { 4, 5 }
+    let buf = i32[] { 4, 5 }
     alloc(carrier.held(buf))!
 
 let main = (args: str[]) ->

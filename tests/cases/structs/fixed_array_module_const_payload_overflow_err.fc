@@ -7,7 +7,7 @@ union holder =
     | empty
 
 module m =
-    let h = holder.full(box { data = i32[3] { 1, 2, 3 } })
+    let h = holder.full(box { data = i32[] { 1, 2, 3 } })
 
 let main = (args: str[]) ->
     match m.h with

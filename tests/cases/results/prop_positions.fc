@@ -44,7 +44,7 @@ let main = (args: str[]) ->
     assert(gated(false).is_err)
     assert(first_over(1, 3)! == 30)
     assert(first_over(1, -2).is_err)
-    let xs = i32[4] { 9, 8, 7, 6 }
+    let xs = i32[] { 9, 8, 7, 6 }
     assert(checked_pick(xs, 2)! == 7)
     assert(checked_pick(xs, -1).is_err)
     assert(via_lambda(4) == 5)

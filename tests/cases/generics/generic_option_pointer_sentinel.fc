@@ -24,7 +24,7 @@ let none_of = <'a>() -> none('a)
 let main = (args: str[]) ->
     let mut p = point { x = 5 }
     let mut q = point { x = 9 }
-    let arr = point*[2] { &p, &q }
+    let arr = point*[] { &p, &q }
 
     // generic return of 'a? with 'a = point*: some and none paths
     let got = pick(arr, 1, true)
@@ -50,7 +50,7 @@ let main = (args: str[]) ->
 
     // non-pointer instantiation of the same generics still uses the
     // struct representation
-    let iv = pick(i32[2] { 7, 8 }, 0, true)
+    let iv = pick(i32[] { 7, 8 }, 0, true)
     assert(unwrap_or(iv, 0) == 7)
     assert(!has(none_of<i32>()))
     0

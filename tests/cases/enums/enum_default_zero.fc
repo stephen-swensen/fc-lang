@@ -17,6 +17,6 @@ let main = (args: str[]) ->
     let hp = alloc(machine)!
     assert(hp.st == state.idle)
     free(hp)
-    let arr = state[3]{ }
+    let arr = state[] { len = 3 }
     assert(arr[1] == state.idle)
     0

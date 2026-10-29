@@ -1,9 +1,9 @@
-// stack slice literal of option-of-struct elements: T?[N] { ... }
+// stack slice literal of option-of-struct elements: T?[] { ... }
 struct p =
     x: i32
 
 let main = (args: str[]) ->
-    let arr = p?[3] { some(p { x = 10 }), none(p), some(p { x = 5 }) }
+    let arr = p?[] { some(p { x = 10 }), none(p), some(p { x = 5 }) }
     let mut sum = 0
     let mut nones = 0
     for o in arr do

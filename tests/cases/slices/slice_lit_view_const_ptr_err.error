@@ -1,0 +1,1 @@
+write 'const u8[] { ptr = ..., len = ... }'

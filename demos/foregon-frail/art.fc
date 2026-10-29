@@ -35,7 +35,7 @@ module art =
     // to capitals before it gets here.
     // ============================================================
 
-    private let font = (const str)[64] {
+    private let font = (const str)[] { len = 64,
         "     |     |     |     |     |     |     ",   // space
         "  #  |  #  |  #  |  #  |  #  |     |  #  ",   // !
         " # # | # # |     |     |     |     |     ",   // "
@@ -197,7 +197,7 @@ module art =
     // The peaks, as (mile, height, half-width). The Rockies around South
     // Pass, the Blue Mountains past Fort Boise, the Cascades — Mount Hood
     // tallest of them — before the Willamette.
-    private let peaks = i32[48] {
+    private let peaks = i32[] { len = 48,
          820, 34, 60,    870, 58, 70,    915, 46, 55,    990, 64, 80,
         1040, 44, 60,   1100, 70, 70,   1150, 52, 60,   1210, 40, 70,
         1290, 30, 80,   1650, 36, 60,   1705, 50, 70,   1760, 40, 60,
@@ -222,7 +222,7 @@ module art =
 
     // Rivers along the trail, as (from mile, to mile): the Platte, the
     // Snake, the Columbia.
-    private let rivers = i32[6] { 300, 700, 1260, 1540, 1860, 2040 }
+    private let rivers = i32[] { 300, 700, 1260, 1540, 1860, 2040 }
 
     private let draw_rivers = () ->
         for i in 0..3 do
@@ -406,9 +406,9 @@ module art =
     // The ruler of landmarks
     // ============================================================
 
-    private let landmark_miles = i32[15] {
+    private let landmark_miles = i32[] { len = 15,
         0, 102, 185, 304, 554, 640, 830, 950, 1026, 1150, 1260, 1540, 1700, 1880, 2040 }
-    private let landmark_names = (const str)[15] {
+    private let landmark_names = (const str)[] { len = 15,
         "INDEPENDENCE", "KANSAS R.", "BIG BLUE R.", "FT. KEARNEY", "CHIMNEY ROCK",
         "FT. LARAMIE", "INDEPENDENCE ROCK", "SOUTH PASS", "FT. BRIDGER",
         "SODA SPRINGS", "FT. HALL", "FT. BOISE", "BLUE MTNS.", "THE DALLES",

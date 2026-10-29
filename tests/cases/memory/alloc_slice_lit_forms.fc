@@ -1,0 +1,48 @@
+// alloc and alloca take every slice-literal form. A zero-initialized literal's
+// len may be a runtime value there (and only there); an element list's len
+// assertion must still be constant, but a constant expression is enough.
+enum dir =
+    | north
+    | east
+    | south
+    | west
+
+let alloca_len = (n: i64) ->
+    let mut tmp = alloca(i32[] { len = n })
+    tmp[n - 1] = 3
+    tmp[n - 1] + (i32) tmp.len
+
+let main = (args: str[]) ->
+    let n = (i64) args.len + 4
+    let mut zeroed = alloc(u8[] { len = n })!
+    assert(zeroed.len == 5 && zeroed[4] == 0u8)
+    free(zeroed)
+
+    let counted = alloc(i32[] { 1, 2, 3 })!
+    assert(counted.len == 3 && counted[2] == 3)
+    free(counted)
+
+    let table = alloc(i32[] { len = dir.count, 9, 8, 7, 6 })!
+    assert(table[(i32) dir.west] == 6)
+    free(table)
+
+    let mut names = alloc((const str)[] { len = n })!
+    names[0] = "zero"
+    assert(names[0].len == 4)
+    free(names)
+
+    let src = u8[] { 1u8, 2u8, 3u8 }
+    let copy = alloc(u8[] { ptr = src.ptr, len = 2 })!
+    assert(copy.len == 2 && copy[1] == 2u8)
+    free(copy)
+
+    let codes = alloc(error[] { len = n })!
+    assert(codes.len == 5 && codes[0] == 0)
+    free(codes)
+
+    let empty = alloc(i32[] { })!
+    assert(empty.len == 0)
+    free(empty)
+
+    assert(alloca_len(4) == 7)
+    0

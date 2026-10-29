@@ -8,7 +8,7 @@ module m =
     let y1 = 2
     let x2 = 3
     let y2 = 4
-    let pts = point[2] {
+    let pts = point[] { len = 2,
         point { x = x1, y = y1 },
         point { x = x2, y = y2 }
     }

@@ -3,7 +3,7 @@
 // No pattern walk would see this collision — it is between two separate
 // header bindings.
 let main = (args: str[]) ->
-    let s = i32[2] { 1, 2 }
+    let s = i32[] { 1, 2 }
     for a, a in s do
         assert(a >= 0)
     0

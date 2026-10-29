@@ -21,7 +21,7 @@ let main = (args: str[]) ->
     let mut b = box { }
     b.data = "xy"
     assert(b.data[0] == 'x' && b.data[1] == 'y' && b.data[2] == 0u8)
-    let ro = (const u8[]) u8[3] { 1u8, 2u8, 3u8 }
+    let ro = (const u8[]) u8[] { 1u8, 2u8, 3u8 }
     b.data = ro
     assert(b.data[2] == 3u8)
     fill(&b, "zz")
@@ -30,12 +30,12 @@ let main = (args: str[]) ->
     // Elements read out of a read-only slice of strings are `const str`, which
     // the `(const str)` slots accept; so do the `str` elements of a writable
     // slice.
-    let words = (const str[]) const str[2] { "one", "two" }
+    let words = (const str[]) (const str)[] { "one", "two" }
     b.names = words
     assert(b.names[1].len == 3)
-    let mut buf = alloc(u8[2] { 'o', 'k' })!
+    let mut buf = alloc(u8[] { 'o', 'k' })!
     defer free(buf)
-    b.names = str[1] { buf }
+    b.names = str[] { buf }
     assert(b.names[0][1] == 'k')
 
     assert(m.greeting.data[1] == 'i' && m.greeting.data[2] == 0u8)

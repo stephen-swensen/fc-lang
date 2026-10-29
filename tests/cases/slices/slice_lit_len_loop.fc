@@ -1,7 +1,7 @@
 // A runtime-len slice literal in a loop: the negative-length guard is a plain
 // statement-expression (no alloca), so it is safe to reuse every iteration.
 let main = (args: str[]) ->
-    let mut data = i32[3] { 7, 8, 9 }
+    let mut data = i32[] { 7, 8, 9 }
     let mut total = 0i32
     for i in 0..1000 do
         let len = (i64) (i % 3) + 1i64    // 1..3, runtime, non-negative

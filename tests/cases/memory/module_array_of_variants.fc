@@ -5,7 +5,7 @@ module events =
         | pause
         | resume(i32)
 
-    let queue = event[4] {
+    let queue = event[] { len = 4,
         event.tick(1),
         event.pause,
         event.tick(2),

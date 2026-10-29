@@ -115,7 +115,7 @@ print the error code in its abort message.
 - **A `#` suffix:** needs the lexer's directive scan reworked, carries preprocessor and comment
   baggage, and wins nothing over `$`.
 - **Freeing `!` by renaming unwrap:** `checked` is taken by the overflow axis; an `unwrap(x)`
-  intrinsic turns the most common idiom, `alloc(u8[n] {})!`, into inside-out noise; and `!` stays
+  intrinsic turns the most common idiom, `alloc(u8[] { len = n })!`, into inside-out noise; and `!` stays
   prefix boolean-not regardless, so no single-purpose token is gained.
 
 ## Propagation operator `x?`

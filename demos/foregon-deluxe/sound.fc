@@ -24,7 +24,7 @@ module snd =
     private let i_thud  = 5     // bumps and crashes
     private let i_wash  = 6     // water
 
-    private let instruments = opl_audio.instrument[7] {
+    private let instruments = opl_audio.instrument[] { len = 7,
         opl_audio.instrument {
             m_char = 0x02, m_scale = 0x14, m_atk = 0xFA, m_sus = 0x6A, m_wave = 0x00,
             c_char = 0x01, c_scale = 0x16, c_atk = 0xFA, c_sus = 0x3A, c_wave = 0x00,
@@ -81,7 +81,7 @@ module snd =
 
     // (note, ticks) pairs; -1 rests; 48 is middle C. One effect a line, in
     // id order. Foster's quarter note is 72 ticks; Chopin's, 60.
-    private let script = i32[142] {
+    private let script = i32[] { len = 142,
         79,1,                                                        // key       1
         72,1, 76,1,                                                  // click     2
         62,4, 55,10,                                                 // bad       2
@@ -103,7 +103,7 @@ module snd =
         60,54, 62,18, 64,36, 64,36, 62,36, 62,36, 60,108, -1,1
     }
 
-    private let sounds = opl_audio.sound[15] {
+    private let sounds = opl_audio.sound[] { len = 15,
         opl_audio.sound { instr = i_tick,  first = 0,  steps = 1 },
         opl_audio.sound { instr = i_tick,  first = 1,  steps = 2 },
         opl_audio.sound { instr = i_reed,  first = 3,  steps = 2 },

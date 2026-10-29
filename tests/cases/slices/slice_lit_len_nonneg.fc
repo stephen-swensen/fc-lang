@@ -1,7 +1,7 @@
 // Non-negative slice-literal lengths (literal, unsigned-source, runtime, and
 // zero) all construct correctly and remain bounds-checked.
 let main = (args: str[]) ->
-    let mut data = i32[4] { 10, 20, 30, 40 }
+    let mut data = i32[] { 10, 20, 30, 40 }
 
     // literal length (provably non-negative → no runtime guard)
     let a = i32[] { ptr = data.ptr, len = 4 }

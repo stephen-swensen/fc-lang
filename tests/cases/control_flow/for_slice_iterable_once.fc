@@ -6,7 +6,7 @@ let tap = (s: i32[]) ->
     s
 
 let main = (args: str[]) ->
-    let data = i32[3] { 10, 20, 30 }
+    let data = i32[] { 10, 20, 30 }
     let mut total = 0i32
     for x in tap(data) do
         total = total + x

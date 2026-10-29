@@ -3,7 +3,7 @@ module libc from "string.h" =
 
 let main = (args: str[]) ->
     let cs = c"hello"
-    let st = str { ptr = cs, len = (i64) libc.strlen(cs) }
+    let st = const str { ptr = cs, len = (i64) libc.strlen(cs) }
     assert(st.len == 5i64)
     assert(st[0] == 104u8)
     0

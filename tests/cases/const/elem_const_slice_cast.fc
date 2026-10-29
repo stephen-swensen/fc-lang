@@ -1,7 +1,7 @@
 // Both spellings are castable in both directions — const casts are the
 // escape hatch, and a parenthesized element type is a legal cast target.
 let main = (args: str[]) ->
-    let words = const str[2] { "a", "bc" }
+    let words = (const str)[] { "a", "bc" }
     let ro = (const str[]) words
     assert(ro.len == 2)
 

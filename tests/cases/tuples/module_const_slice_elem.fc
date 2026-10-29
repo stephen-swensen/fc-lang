@@ -4,9 +4,9 @@ struct holder =
     pair: {i32[], i32}
 
 module m =
-    let t = { i32[2] { 1, 2 }, 3 }
-    let nested = { 0, { i32[3] { 7, 8, 9 }, 1 } }
-    let h = holder { pair = { i32[1] { 4 }, 5 } }
+    let t = { i32[] { 1, 2 }, 3 }
+    let nested = { 0, { i32[] { 7, 8, 9 }, 1 } }
+    let h = holder { pair = { i32[] { 4 }, 5 } }
 
 let main = (args: str[]) ->
     assert(m.t[0][1] == 2)

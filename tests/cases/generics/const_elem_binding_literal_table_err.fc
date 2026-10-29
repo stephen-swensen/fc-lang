@@ -4,7 +4,7 @@
 let first = (xs: const 'a[]) -> xs[0]
 
 let main = (args: str[]) ->
-    let words = const str[2] { "ab", "cd" }
+    let words = (const str)[] { "ab", "cd" }
     let w = first(words)
     w[0] = 'z'
     0

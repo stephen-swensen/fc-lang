@@ -1,0 +1,6 @@
+// The old runtime-length alloc spelling: the length moves into the braces.
+let main = (args: str[]) ->
+    let n = (i64) args.len
+    let buf = alloc(u8[n] { })!
+    free(buf)
+    0

@@ -4,7 +4,7 @@ struct point =
     y: i32
 
 let main = (args: str[]) ->
-    let mut pts = alloc(point[3] { })!
+    let mut pts = alloc(point[] { len = 3 })!
     // Individual field writes on slice elements
     pts[0].x = 10
     pts[0].y = 20

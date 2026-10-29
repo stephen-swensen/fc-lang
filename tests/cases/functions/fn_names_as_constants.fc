@@ -14,7 +14,7 @@ let mut current = inc
 
 module ops =
     let double = (x: i32) -> x * 2
-    let table = ((i32) -> i32)[4] { double, c.abs, (x: i32) -> x * 10, double }
+    let table = ((i32) -> i32)[] { double, c.abs, (x: i32) -> x * 10, double }
     let same = table
     let mut hook = double
 

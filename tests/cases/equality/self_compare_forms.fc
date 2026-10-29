@@ -33,7 +33,7 @@ let main = (args: str[]) ->
     assert(q == q)
     assert(*q == *q)
 
-    let s = i32[3] { 1, 2, 3 }
+    let s = i32[] { 1, 2, 3 }
     assert(s[1] == s[1])
     let i = 2
     assert(s[i] == s[i])

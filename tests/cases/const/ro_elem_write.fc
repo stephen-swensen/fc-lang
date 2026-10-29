@@ -1,5 +1,5 @@
 module tbl =
-    let steps = i32[4] { 1, 2, 4, 8 }
+    let steps = i32[] { 1, 2, 4, 8 }
 
 let main = (args: str[]) ->
     tbl.steps[0] = 99

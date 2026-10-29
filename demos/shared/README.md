@@ -410,7 +410,7 @@ Splitting the steps out of the struct is what lets every effect in a game live
 in one readable table:
 
 ```fc
-private let script = i32[66] {
+private let script = i32[] { len = 66,
     72,1, 79,1, 84,3,                            // shoot     3 steps
     64,3,                                        // bounce    1
     50,2, 45,3,                                  // stick     2
@@ -418,7 +418,7 @@ private let script = i32[66] {
     ...
 }
 
-private let sounds = opl_audio.sound[9] {
+private let sounds = opl_audio.sound[] { len = 9,
     opl_audio.sound { instr = i_shoot,  first = 0, steps = 3 },
     opl_audio.sound { instr = i_bounce, first = 3, steps = 1 },
     opl_audio.sound { instr = i_stick,  first = 4, steps = 2 },
@@ -753,7 +753,7 @@ at an `i16[]`, write a WAV, and you can listen to a single effect in isolation
 ```fc
 let a = snd.init(44100, music)
 opl_audio.play(a, snd.sfx_pop)
-let buf = alloc(i16[44100 * 2] { })!
+let buf = alloc(i16[] { len = 44100 * 2 })!
 opl_audio.render(a, buf, 44100 * 2)      // two seconds, tail included
 ```
 

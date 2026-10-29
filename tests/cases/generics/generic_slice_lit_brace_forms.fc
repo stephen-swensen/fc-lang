@@ -1,0 +1,23 @@
+// The generic twins of the slice literal's forms: a type-variable element type
+// with counted elements, a const-parameter len (zero-initialized), and a
+// const-parameter len asserting the element count, across instances.
+let fill = <'n>(x: 'a) ->
+    let mut out = 'a[] { len = 'n }
+    for i in 0..out.len do
+        out[i] = x
+    out[(i64) 'n - 1]
+
+let pair = (x: 'a, y: 'a) ->
+    let both = 'a[] { x, y }
+    both.len
+
+let triple = <'n>() ->
+    let t = i32[] { len = 'n, 7, 8, 9 }
+    t[2]
+
+let main = (args: str[]) ->
+    assert(fill<3>(5) == 5)
+    assert(fill<2>(2.5) == 2.5)
+    assert(pair("a", "b") == 2 && pair(1, 2) == 2)
+    assert(triple<3>() == 9)
+    0

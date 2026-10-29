@@ -1,4 +1,4 @@
-// Disambiguation guard for the type-variable slice literal: only 'a[expr] { ... }
+// Disambiguation guard for the type-variable slice literal: only 'a[] { ... }
 // (a following '{') is a slice literal. A bare 'a[i] with no brace is not a
 // value — it must still be rejected, not silently parsed as indexing a type
 // variable.

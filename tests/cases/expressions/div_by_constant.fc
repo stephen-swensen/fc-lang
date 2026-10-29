@@ -82,22 +82,22 @@ let div_by = <'n>(x: i64) -> x / 'n
 let rem_by = <'n>(x: i64) -> x % 'n
 
 let main = (args: str[]) ->
-    for x in i64[17] { i64.min, i64.min + 1, -1000000007, -4294967297i64, -1025, -1024, -1023,
+    for x in i64[] { len = 17, i64.min, i64.min + 1, -1000000007, -4294967297i64, -1025, -1024, -1023,
                        -8, -7, -1, 0, 1, 7, 1024, 4294967297i64, i64.max - 1, i64.max } do
         check_i64(x)
         assert(div_by<8>(x) == div_i64(x, 8) && rem_by<8>(x) == rem_i64(x, 8))
         assert(div_by<10>(x) == div_i64(x, 10) && rem_by<10>(x) == rem_i64(x, 10))
-    for x in u64[8] { 0u64, 1u64, 4095u64, 4096u64, 4294967297u64, 9223372036854775807u64,
+    for x in u64[] { len = 8, 0u64, 1u64, 4095u64, 4096u64, 4294967297u64, 9223372036854775807u64,
                       9223372036854775808u64, u64.max } do
         check_u64(x)
-    for x in i32[9] { i32.min, i32.min + 1, -65537, -5, -1, 0, 5, 65537, i32.max } do
+    for x in i32[] { i32.min, i32.min + 1, -65537, -5, -1, 0, 5, 65537, i32.max } do
         check_i32(x)
-    for x in u32[5] { 0u32, 15u32, 2147483648u32, 4000000000u32, u32.max } do
+    for x in u32[] { 0u32, 15u32, 2147483648u32, 4000000000u32, u32.max } do
         check_u32(x)
-    for x in i16[7] { i16.min, -16385i16, -3i16, -1i16, 0i16, 16385i16, i16.max } do
+    for x in i16[] { i16.min, -16385i16, -3i16, -1i16, 0i16, 16385i16, i16.max } do
         check_i16(x)
-    for x in u8[5] { 0u8, 1u8, 127u8, 128u8, 255u8 } do
+    for x in u8[] { 0u8, 1u8, 127u8, 128u8, 255u8 } do
         check_u8(x)
-    for x in i8[8] { -128i8, -127i8, -65i8, -1i8, 0i8, 1i8, 65i8, 127i8 } do
+    for x in i8[] { -128i8, -127i8, -65i8, -1i8, 0i8, 1i8, 65i8, 127i8 } do
         check_i8(x)
     0

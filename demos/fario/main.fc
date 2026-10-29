@@ -57,15 +57,15 @@ let load_song = (path: const str) ->
         none(opl_midi.song)
 
 let silent_song = () ->
-    opl_midi.song { events = alloc(opl_midi.event[0] {})!,
+    opl_midi.song { events = alloc(opl_midi.event[] { })!,
                     division = 480, length = 0 }
 
 // The whole playlist: overworld, underground, water, castle, in the order
 // `tune_for` numbers them. A missing file leaves a silent slot rather than
 // shifting its neighbours onto the wrong levels.
 let open_music = () ->
-    let names = (const str)[4] { "overworld", "underground", "water", "castle" }
-    let songs = alloc(opl_midi.song[4] {})!
+    let names = (const str)[] { "overworld", "underground", "water", "castle" }
+    let songs = alloc(opl_midi.song[] { len = 4 })!
     for i in 0i64..4i64 do
         let path = alloc("%s{music_dir}/%s{names[i]}.mid")!
         defer free(path)

@@ -77,7 +77,7 @@ module sprites =
     // The wagon and its team, facing west (left)
     // ============================================================
 
-    let wagon = (const str)[10] {
+    let wagon = (const str)[] { len = 10,
         "...cccccccccccccccccc.....",
         "..cwwwwwwwwwwwwwwwwwwc....",
         ".cwwwwwwwwwwwwwwwwwwwwc...",
@@ -89,7 +89,7 @@ module sprites =
         "dbbbbbbbbbbbbbbbbbbbbbbbd.",
         "ddddddddddddddddddddddddd." }
 
-    let wheel_a = (const str)[9] {
+    let wheel_a = (const str)[] { len = 9,
         "..ddddd..",
         ".d..d..d.",
         "d...d...d",
@@ -100,7 +100,7 @@ module sprites =
         ".d..d..d.",
         "..ddddd.." }
 
-    let wheel_b = (const str)[9] {
+    let wheel_b = (const str)[] { len = 9,
         "..ddddd..",
         ".dd...dd.",
         "d.d...d.d",
@@ -111,7 +111,7 @@ module sprites =
         ".dd...dd.",
         "..ddddd.." }
 
-    let ox_a = (const str)[9] {
+    let ox_a = (const str)[] { len = 9,
         "..w..w..........",
         "..dddd..........",
         ".dkdddbbbbbbbbb.",
@@ -122,7 +122,7 @@ module sprites =
         "...b..b.....b..b",
         "...d..d.....d..d" }
 
-    let ox_b = (const str)[9] {
+    let ox_b = (const str)[] { len = 9,
         "..w..w..........",
         "..dddd..........",
         ".dkdddbbbbbbbbb.",
@@ -137,7 +137,7 @@ module sprites =
     // The hunt: the hunter, and what he hunts (facing right)
     // ============================================================
 
-    let hunter = (const str)[11] {
+    let hunter = (const str)[] { len = 11,
         "..ddd..",
         ".ddddd.",
         "..sss..",
@@ -150,7 +150,7 @@ module sprites =
         "..u.u..",
         "..d.d.." }
 
-    let buffalo = (const str)[12] {
+    let buffalo = (const str)[] { len = 12,
         ".......dddddd.......",
         "....dddddddddddd....",
         "..dddddddddddddddd..",
@@ -164,7 +164,7 @@ module sprites =
         "..b...b......b...b..",
         "..k...k......k...k.." }
 
-    let deer = (const str)[12] {
+    let deer = (const str)[] { len = 12,
         "...........d.d..",
         "............dd..",
         "...........tt...",
@@ -178,7 +178,7 @@ module sprites =
         "..t.t.....t.t...",
         "..k.k.....k.k..." }
 
-    let elk = (const str)[14] {
+    let elk = (const str)[] { len = 14,
         "..........d...d...",
         "...........d.d.d..",
         "..........d.ddd...",
@@ -194,7 +194,7 @@ module sprites =
         "..b.b......b.b....",
         "..k.k......k.k...." }
 
-    let bear = (const str)[10] {
+    let bear = (const str)[] { len = 10,
         "..............dd..",
         "...ddddddddddddddd",
         "..ddddddddddddddkd",
@@ -206,7 +206,7 @@ module sprites =
         ".dd.dd.....dd.dd..",
         ".kk.kk.....kk.kk.." }
 
-    let rabbit = (const str)[6] {
+    let rabbit = (const str)[] { len = 6,
         "......gg",
         "......g.",
         "..gggggk",
@@ -214,14 +214,14 @@ module sprites =
         ".gggggg.",
         "..g..g.." }
 
-    let squirrel = (const str)[5] {
+    let squirrel = (const str)[] { len = 5,
         "oo.....",
         "o.oooo.",
         "oooooko",
         ".ooooo.",
         "..o.o.." }
 
-    let tree = (const str)[13] {
+    let tree = (const str)[] { len = 13,
         "....NNN....",
         "..NNnnnNN..",
         ".NnnnnnnnN.",
@@ -236,7 +236,7 @@ module sprites =
         "....ddd....",
         "..........." }
 
-    let bush = (const str)[5] {
+    let bush = (const str)[] { len = 5,
         "..NnN..",
         ".NnnnN.",
         "NnnNnnN",
@@ -247,7 +247,7 @@ module sprites =
     // The river: the raft from above, and the rocks
     // ============================================================
 
-    let raft = (const str)[14] {
+    let raft = (const str)[] { len = 14,
         "bdbdbdbdbdbdbd",
         "bdbdbdbdbdbdbd",
         "bdbcccccccccbd",
@@ -267,7 +267,7 @@ module sprites =
     // A marker on the trail
     // ============================================================
 
-    let tombstone = (const str)[14] {
+    let tombstone = (const str)[] { len = 14,
         "....gggg....",
         "..gggggggg..",
         ".gggggggggg.",

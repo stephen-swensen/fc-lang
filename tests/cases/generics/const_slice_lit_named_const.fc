@@ -4,7 +4,7 @@ module cfg =
     let words = 2
 
 let mk = <'n>() ->
-    let s = u32['n * cfg.words] { }
+    let s = u32[] { len = 'n * cfg.words }
     s.len
 
 let main = (args: str[]) ->

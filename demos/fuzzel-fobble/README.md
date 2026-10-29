@@ -972,8 +972,8 @@ numbers are this demo's own.
   in `game.create` and passed as `world*`. The renderer, audio device, and rng
   stay outside it: they are channels (output, output, entropy), not state the
   game owns.
-- **Heap slices with `alloc`** — `alloc(world)!`, `alloc(i32[grid_cells] { })!`,
-  `alloc(faller[max_fallers] { })!`; `alloc` zero-fills, so the inline
+- **Heap slices with `alloc`** — `alloc(world)!`, `alloc(i32[] { len = grid_cells })!`,
+  `alloc(faller[] { len = max_fallers })!`; `alloc` zero-fills, so the inline
   `game_state` and `shot` fields start clean.
 - **Union types for game phases** — `splash`, `playing`, `paused`,
   `level_clear`, `game_over`, dispatched with `match`. The save prompt and the

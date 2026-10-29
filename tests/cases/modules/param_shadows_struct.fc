@@ -10,7 +10,7 @@ module m =
     let len_of = (point: u8[]) -> (i32) point.len
 
 let main = (args: str[]) ->
-    let buf = u8[2] { 1u8, 2u8 }
+    let buf = u8[] { 1u8, 2u8 }
     assert(m.len_of(buf) == 2)
     // Struct access still works through the type name
     let p = point { x = 3, y = 4 }

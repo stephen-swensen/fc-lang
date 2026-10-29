@@ -3,7 +3,7 @@
 let mut g = default(const i32[])
 
 let leak = () ->
-    let arr = i32[4] { 1, 2, 3, 4 }
+    let arr = i32[] { 1, 2, 3, 4 }
     g = arr[0..2]
 
 let main = (args: str[]) ->

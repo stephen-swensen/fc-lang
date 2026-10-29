@@ -83,15 +83,15 @@ let loops = () ->
     0
 
 let main = (args: str[]) ->
-    for x in i64[7] { i64.min, -2147483649i64, -1, 0, 3, 7, 4294967297i64 } do
-        for y in i64[5] { -2147483650i64, -1, 0, 3, 11 } do
+    for x in i64[] { i64.min, -2147483649i64, -1, 0, 3, 7, 4294967297i64 } do
+        for y in i64[] { -2147483650i64, -1, 0, 3, 11 } do
             ints(x, y)
-    for x in u64[3] { 0u64, 9223372036854775807u64, u64.max } do
-        for y in u32[3] { 0u32, 7u32, u32.max } do
-            for z in u8[3] { 0u8, 127u8, 255u8 } do
+    for x in u64[] { 0u64, 9223372036854775807u64, u64.max } do
+        for y in u32[] { 0u32, 7u32, u32.max } do
+            for z in u8[] { 0u8, 127u8, 255u8 } do
                 unsigned(x, y, z)
-    for x in f64[5] { f64.nan, 1.5, 1.0, 2.0, -f64.inf } do
-        for y in f32[3] { f32.nan, 2.5f32, 0.0f32 } do
+    for x in f64[] { f64.nan, 1.5, 1.0, 2.0, -f64.inf } do
+        for y in f32[] { f32.nan, 2.5f32, 0.0f32 } do
             floats(x, y)
     assert(guard(color.red, 5) == 1 && guard(color.red, -1) == 2 && guard(color.red, 10) == 4)
     assert(guard(color.green, 5) == 3 && guard(color.green, 1) == 4 && guard(color.blue, 0) == 4)

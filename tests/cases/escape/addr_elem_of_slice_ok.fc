@@ -3,11 +3,11 @@
 let second = (s: i32[]) -> &s[1]
 
 let heap_second = () ->
-    let s = alloc(i32[3] { 1, 2, 3 })!
+    let s = alloc(i32[] { 1, 2, 3 })!
     &s[1]
 
 let main = (args: str[]) ->
-    let s = alloc(i32[3] { 1, 2, 3 })!
+    let s = alloc(i32[] { 1, 2, 3 })!
     defer free(s)
     *second(s) = 7
     assert(s[1] == 7)

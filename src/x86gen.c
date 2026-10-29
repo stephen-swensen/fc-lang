@@ -3515,7 +3515,7 @@ static void dyn_alloca_rax(void) {
     movq(R(RSP), R(RAX));
 }
 
-/* T[N]{...}: a slice over a frame slot (fixed size), or over fresh stack
+/* T[] {...}: a slice over a frame slot (fixed size), or over fresh stack
  * memory each evaluation (`dynamic`, the alloca form). */
 static void gen_array_lit(Expr *e, bool dynamic) {
     Type *elem = conc(e->array_lit.elem_type);

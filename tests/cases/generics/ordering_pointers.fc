@@ -4,7 +4,7 @@ let less = (a: 'a, b: 'a) -> a < b
 let clamp_hi = (x: 'a, hi: 'a) -> if x > hi then hi else x
 
 let main = (args: str[]) ->
-    let xs = i32[3] { 1, 2, 3 }
+    let xs = i32[] { 1, 2, 3 }
     let p = &xs[0]
     let q = &xs[2]
     assert(less(p, q))

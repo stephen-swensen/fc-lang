@@ -5,7 +5,7 @@ struct point =
 
 let main = (args: str[]) ->
     let _result =
-        let arr = point[4] {
+        let arr = point[] { len = 4,
             point { x = 10, y = 0 },
             point { x = 20, y = 0 },
             point { x = 5, y = 0 },

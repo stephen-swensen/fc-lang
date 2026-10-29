@@ -9,6 +9,6 @@ let cmp = (a: const any*, b: const any*) ->
     0
 
 let main = (args: str[]) ->
-    let mut xs = i32[4] { 4, 3, 2, 1 }
+    let mut xs = i32[] { 4, 3, 2, 1 }
     libc.qsort((any*) xs.ptr, 4usize, 4usize, cmp)
     0

@@ -1,6 +1,6 @@
 let main = (args: str[]) ->
     let _result =
-        let mut buf = u8[4] { }
+        let mut buf = u8[] { len = 4 }
         buf.ptr[0] = 10u8
         buf.ptr[1] = 20u8
         buf.ptr[2] = 30u8

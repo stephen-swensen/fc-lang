@@ -218,7 +218,7 @@ module art =
     // ============================================================
 
     // --- Fario, small (16x16, three leg frames and a jump) ---
-    private let hero_stand = (const str)[16] {
+    private let hero_stand = (const str)[] { len = 16,
         "......gggg......",
         "....gggggggg....",
         "...gggggggggg...",
@@ -236,7 +236,7 @@ module art =
         "...NNN....NNN...",
         "...NNN....NNN..."
     }
-    private let hero_walk1 = (const str)[16] {
+    private let hero_walk1 = (const str)[] { len = 16,
         "......gggg......",
         "....gggggggg....",
         "...gggggggggg...",
@@ -254,7 +254,7 @@ module art =
         "..NNN......NNN..",
         "..NN........NN.."
     }
-    private let hero_walk2 = (const str)[16] {
+    private let hero_walk2 = (const str)[] { len = 16,
         "......gggg......",
         "....gggggggg....",
         "...gggggggggg...",
@@ -272,7 +272,7 @@ module art =
         "....NNNNNN......",
         "....NNNN........"
     }
-    private let hero_jump = (const str)[16] {
+    private let hero_jump = (const str)[] { len = 16,
         "......gggg......",
         "....gggggggg....",
         "...gggggggggg...",
@@ -292,7 +292,7 @@ module art =
     }
 
     // --- Fario, grown (16x32) ---
-    private let big_stand = (const str)[32] {
+    private let big_stand = (const str)[] { len = 32,
         "......gggg......",
         "....gggggggg....",
         "...gggggggggg...",
@@ -326,7 +326,7 @@ module art =
         "..NNNNN..NNNNN..",
         "..NNNNN..NNNNN.."
     }
-    private let big_walk1 = (const str)[32] {
+    private let big_walk1 = (const str)[] { len = 32,
         "......gggg......",
         "....gggggggg....",
         "...gggggggggg...",
@@ -360,7 +360,7 @@ module art =
         ".NNNNN......NNNN",
         ".NNNNN.........."
     }
-    private let big_walk2 = (const str)[32] {
+    private let big_walk2 = (const str)[] { len = 32,
         "......gggg......",
         "....gggggggg....",
         "...gggggggggg...",
@@ -394,7 +394,7 @@ module art =
         "...NNNNN........",
         "...NNNN........."
     }
-    private let big_jump = (const str)[32] {
+    private let big_jump = (const str)[] { len = 32,
         "......gggg......",
         "....gggggggg....",
         "...gggggggggg...",
@@ -430,7 +430,7 @@ module art =
     }
 
     // --- The creatures ---
-    private let grumble_rows = (const str)[16] {
+    private let grumble_rows = (const str)[] { len = 16,
         "................",
         ".....nnnnnn.....",
         "...nnnnnnnnnn...",
@@ -448,14 +448,14 @@ module art =
         "..NNN....NNN....",
         "................"
     }
-    private let grumble_flat = (const str)[5] {
+    private let grumble_flat = (const str)[] { len = 5,
         "................",
         "..nnnnnnnnnnnn..",
         ".nnnnnnnnnnnnnn.",
         ".NNnnnnnnnnnnNN.",
         "................"
     }
-    private let snapper_rows = (const str)[16] {
+    private let snapper_rows = (const str)[] { len = 16,
         "................",
         "....ggggg.......",
         "..ggggggggg.....",
@@ -473,7 +473,7 @@ module art =
         "................",
         "................"
     }
-    private let shell_rows = (const str)[10] {
+    private let shell_rows = (const str)[] { len = 10,
         "................",
         "....gggggggg....",
         "..gggGGggGGgg...",
@@ -485,7 +485,7 @@ module art =
         "...cccccccccc...",
         "................"
     }
-    private let prickle_rows = (const str)[12] {
+    private let prickle_rows = (const str)[] { len = 12,
         "....k...k...k...",
         "....k...k...k...",
         "..k.ppppppp.k...",
@@ -499,7 +499,7 @@ module art =
         "...NN..NN..NN...",
         "................"
     }
-    private let finn_rows = (const str)[10] {
+    private let finn_rows = (const str)[] { len = 10,
         "................",
         "......tttt......",
         ".t...tttttt.....",
@@ -511,7 +511,7 @@ module art =
         "......tttt......",
         "................"
     }
-    private let jelly_rows = (const str)[10] {
+    private let jelly_rows = (const str)[] { len = 10,
         ".....pppppp.....",
         "...pppppppppp...",
         "..pppppppppppp..",
@@ -523,7 +523,7 @@ module art =
         ".....p.p..p.....",
         "....p...p..p...."
     }
-    private let chomper_rows = (const str)[14] {
+    private let chomper_rows = (const str)[] { len = 14,
         "...rrrrrrrr.....",
         "..rrwwrrrrrr....",
         ".rrrwwrrrrrrr...",
@@ -539,7 +539,7 @@ module art =
         "......gg........",
         "......gg........"
     }
-    private let shroom_rows = (const str)[12] {
+    private let shroom_rows = (const str)[] { len = 12,
         ".....rrrrrr.....",
         "...rrrrrrrrrr...",
         "..rwwrrrrrrwwr..",
@@ -553,7 +553,7 @@ module art =
         "....cccccccc....",
         "................"
     }
-    private let flower_rows = (const str)[12] {
+    private let flower_rows = (const str)[] { len = 12,
         "...oo..oo..oo...",
         "..oooooooooooo..",
         "..ooyyyyyyyoo...",
@@ -567,7 +567,7 @@ module art =
         "......gg........",
         ".....gggg......."
     }
-    private let star_rows = (const str)[13] {
+    private let star_rows = (const str)[] { len = 13,
         ".......yy.......",
         ".......yy.......",
         "......yyyy......",
@@ -582,7 +582,7 @@ module art =
         "..yyy......yyy..",
         "..yy........yy.."
     }
-    private let coin_rows = (const str)[12] {
+    private let coin_rows = (const str)[] { len = 12,
         ".....yyyyy......",
         "...yyyyyyyyy....",
         "..yyYYYYYYYyy...",
@@ -596,7 +596,7 @@ module art =
         "...yyyyyyyyy....",
         ".....yyyyy......"
     }
-    private let axe_rows = (const str)[10] {
+    private let axe_rows = (const str)[] { len = 10,
         "...eeee.........",
         "..eeeeee........",
         ".eeeeeeee.......",

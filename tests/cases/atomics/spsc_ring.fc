@@ -30,7 +30,7 @@ let dequeue = (r: ring*) ->
         v
 
 let main = (args: str[]) ->
-    let buf = alloc(i32[4] { })!
+    let buf = alloc(i32[] { len = 4 })!
     let r = alloc(ring)!
     r.buf = buf
     r.head = 0usize

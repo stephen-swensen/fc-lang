@@ -4,16 +4,16 @@
 // three must survive the deep copy.
 let main = (args: str[]) ->
     // scalar elements: no provenance to launder
-    let nums = alloc(i32[3] { 1, 2, 3 })!
+    let nums = alloc(i32[] { 1, 2, 3 })!
     assert(nums[2] == 3)
 
     // static elements: a stack slice of string literals is safe to copy
-    let names = alloc(const str[2] { "ab", "cde" })!
+    let names = alloc((const str)[] { "ab", "cde" })!
     assert(names[1].len == 3)
 
     // heap elements: the copied fat pointers keep targeting the heap
-    let inner = alloc(i32[2] { 4, 5 })!
-    let outer = alloc((i32[])[1] { inner })!
+    let inner = alloc(i32[] { 4, 5 })!
+    let outer = alloc((i32[])[] { inner })!
     assert(outer[0][1] == 5)
 
     // a closure capturing only heap and static values promotes fine

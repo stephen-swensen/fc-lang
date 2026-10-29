@@ -5,7 +5,7 @@ module bufs =
         len: i32
 
     let header = buf4 {
-        data = i32[4] { 1, 2, 3, 4 },
+        data = i32[] { 1, 2, 3, 4 },
         len = 4
     }
 

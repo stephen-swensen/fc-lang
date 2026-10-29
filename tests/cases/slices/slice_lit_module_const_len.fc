@@ -5,10 +5,10 @@ module cfg =
     let bits = 32
 
 let main = (args: str[]) ->
-    let b = u32[cfg.words] { }
+    let b = u32[] { len = cfg.words }
     assert(b.len == 4)
-    let c = bool[cfg.words * 2] { }
+    let c = bool[] { len = cfg.words * 2 }
     assert(c.len == 8)
-    let d = u8[cfg.bits / 8] { 1u8, 2u8, 3u8, 4u8 }
+    let d = u8[] { len = cfg.bits / 8, 1u8, 2u8, 3u8, 4u8 }
     assert(d[3] == 4u8)
     0

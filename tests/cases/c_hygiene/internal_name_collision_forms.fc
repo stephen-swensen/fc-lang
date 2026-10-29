@@ -25,7 +25,7 @@ let g = (_l_x_0: i32, _fc_back_0: i32, _loop_result: i32) ->
 // The name a slice-literal backing array would take, as a param, next to a
 // slice literal that actually mints one.
 let h = (_fc_back_0: i32) ->
-    let arr = i32[2] { _fc_back_0, 2 }
+    let arr = i32[] { _fc_back_0, 2 }
     arr[0] + arr[1]
 
 // Self-compare sequencing mints _sq temps.
@@ -43,7 +43,7 @@ let main = (args: str[]) ->
         sum = sum + _fe0
     assert(sum == 10)
 
-    let items = i32[3] { 10, 20, 30 }
+    let items = i32[] { 10, 20, 30 }
     let mut total = 0
     for _fi0, _fs0 in items do
         total = total + _fs0 + (i32) _fi0
@@ -67,7 +67,7 @@ let main = (args: str[]) ->
     let { x = _sl0, y = _sg0_1 } = p
     assert(_sl0 + _sg0_1 == 9)
 
-    let pts = pt[2] { pt { x = 1, y = 2 }, pt { x = 3, y = 4 } }
+    let pts = pt[] { pt { x = 1, y = 2 }, pt { x = 3, y = 4 } }
     let mut acc = 0
     for { x = _subj0, y = _match0 } in pts do
         acc = acc + _subj0 * _match0

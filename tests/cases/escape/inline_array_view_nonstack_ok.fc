@@ -4,7 +4,7 @@
 struct holder =
     data: i32[4]
 
-let mut g = holder { data = i32[4] { 1, 2, 3, 4 } }
+let mut g = holder { data = i32[] { 1, 2, 3, 4 } }
 
 let global_view = () -> g.data
 let param_view = (h: holder*) -> h.data

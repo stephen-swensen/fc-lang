@@ -14,7 +14,7 @@ module opl2_tables =
     // First-quadrant log-sin attenuation in fine units (1/16 env unit
     // = 0.01172 dB): logsin_table[i] attenuates a "1.0" reference to
     // |sin(x)| at x = (i + 0.5) * pi/512.
-    let logsin_table = i32[256]{
+    let logsin_table = i32[] { len = 256,
         4289, 3474, 3096, 2846, 2660, 2511, 2388, 2282, 
         2189, 2107, 2033, 1965, 1904, 1847, 1794, 1744, 
         1698, 1655, 1614, 1575, 1538, 1503, 1469, 1437, 
@@ -52,7 +52,7 @@ module opl2_tables =
     // Atten (1/16 env unit) -> linear amplitude scaled to op_peak:
     // gain_table[i] = op_peak * 10^(-i * 0.01172 / 20). Entries past
     // i = 6400 round to 0 (inaudibly quiet).
-    let gain_table = i32[16384]{
+    let gain_table = i32[] { len = 16384,
         4096, 4090, 4084, 4079, 4073, 4068, 4062, 4057, 4052, 4046, 4041, 4035, 4030, 4024, 4019, 4013, 
         4008, 4003, 3997, 3992, 3986, 3981, 3976, 3970, 3965, 3960, 3954, 3949, 3944, 3938, 3933, 3928, 
         3922, 3917, 3912, 3907, 3901, 3896, 3891, 3886, 3880, 3875, 3870, 3865, 3859, 3854, 3849, 3844, 
@@ -1082,5 +1082,5 @@ module opl2_tables =
     // block -> 2^(block-1), the octave multiplier in the YM3812
     // frequency formula; fb -> 2^(9-fb), the feedback divisor. Exact
     // powers of two, written literally.
-    let block_scale = f64[8]{ 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0 }
-    let fb_div = f64[8]{ 512.0, 256.0, 128.0, 64.0, 32.0, 16.0, 8.0, 4.0 }
+    let block_scale = f64[] { 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0 }
+    let fb_div = f64[] { 512.0, 256.0, 128.0, 64.0, 32.0, 16.0, 8.0, 4.0 }

@@ -3,7 +3,7 @@
 // the body ever gets. Adding widening to concrete element types must not
 // weaken it.
 let make = (x: 'a) ->
-    let buf = 'a[2] { x, 1i32 }
+    let buf = 'a[] { x, 1i32 }
     buf.len
 
 let main = (args: str[]) ->

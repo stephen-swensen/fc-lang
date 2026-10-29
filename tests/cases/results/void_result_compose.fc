@@ -15,7 +15,7 @@ let main = (args: str[]) ->
     | err(7) -> assert(true)
     | err(_) -> assert(false, "expected 7")
 
-    let rs = void![3] {}
+    let rs = void![] { len = 3 }
     assert(rs[0].is_ok, "zero-filled element is ok")
     assert(rs.len == 3, "len")
 

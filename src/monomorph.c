@@ -431,7 +431,7 @@ static void discover_in_expr(Expr *e, void *ctx) {
          * construction appears only inside a generic body. */
         if (e->field.is_variant_constructor) discover_in_type(e->type, c);
         break;
-    /* The element type may be a generic instance (box<'a>[N] { ... }) used only
+    /* The element type may be a generic instance (box<'a>[] { ... }) used only
      * inside a generic body; register it even when no element constructs it. */
     case EXPR_ARRAY_LIT:  discover_in_type(e->array_lit.elem_type, c); break;
     case EXPR_SLICE_LIT:  discover_in_type(e->slice_lit.elem_type, c); break;

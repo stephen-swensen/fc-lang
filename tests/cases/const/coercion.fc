@@ -8,6 +8,6 @@ let main = (args: str[]) ->
     let mut x = 42
     let p = &x
     let v1 = use_const(p)
-    let arr = i32[2] { 7, 8 }
+    let arr = i32[] { 7, 8 }
     let v2 = use_const_slice(arr)
     v1 + v2 - 42 - 7

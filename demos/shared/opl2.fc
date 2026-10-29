@@ -409,7 +409,7 @@ module opl2 =
     // positions are spread evenly across the 8-cycle window so the
     // envelope advances at the right average rate without bunching
     // steps in time. Frozen module constant → read-only memory.
-    let eg_fire = i32[32]{
+    let eg_fire = i32[] { len = 32,
         0, 1, 0, 1, 0, 1, 0, 1,     // sub 0: 4/8
         0, 1, 0, 1, 1, 1, 0, 1,     // sub 1: 5/8
         0, 1, 1, 1, 0, 1, 1, 1,     // sub 2: 6/8
@@ -508,7 +508,7 @@ module opl2 =
     // 0.375 dB before scaling. The chip combines this with block via
     // `ksl_rom[fnum_msb4] - (7 - block) * 8`, floored at 0; the result
     // is then scaled by the per-op KSL setting. Frozen → read-only memory.
-    let ksl_rom = i32[16]{
+    let ksl_rom = i32[] { len = 16,
         0, 32, 40, 45, 48, 51, 53, 55, 56, 58, 59, 60, 61, 62, 63, 64 }
 
     // Recompute one operator's cached key-scale-level attenuation, which
@@ -719,7 +719,7 @@ module opl2 =
     // approximated as their neighbors per the chip's published table.
     // Frozen module constant → read-only memory; indexed in the
     // per-sample path, where a table load beats a 5-way branch chain.
-    let mult_val = f64[16]{
+    let mult_val = f64[] { len = 16,
         0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0,
         8.0, 9.0, 10.0, 10.0, 12.0, 12.0, 15.0, 15.0 }
 

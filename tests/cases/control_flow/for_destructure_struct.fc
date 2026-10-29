@@ -4,7 +4,7 @@ struct point =
     y: i32
 
 let main = (args: str[]) ->
-    let pts = point[2] { point { x = 10, y = 20 }, point { x = 30, y = 40 } }
+    let pts = point[] { point { x = 10, y = 20 }, point { x = 30, y = 40 } }
     let mut tot = 0
     for { x = px, y = py } in pts do
         tot = tot + px + py

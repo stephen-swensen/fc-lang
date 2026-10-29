@@ -6,7 +6,7 @@
 let bad = () ->
     let mut a = 41
     a = a + 1
-    let ptrs = i32*[1] { &a }
+    let ptrs = i32*[] { &a }
     for p in ptrs do
         return p
     default(i32*)

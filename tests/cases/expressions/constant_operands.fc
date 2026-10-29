@@ -51,10 +51,10 @@ enum shade of u8 =
     | light = 200
 
 let main = (args: str[]) ->
-    for x in i64[9] { i64.min, -4294967297i64, -2147483649i64, -1, 0, 1, 2147483647, 4294967297i64, i64.max } do
+    for x in i64[] { i64.min, -4294967297i64, -2147483649i64, -1, 0, 1, 2147483647, 4294967297i64, i64.max } do
         check_i64(x)
-    for a in u32[4] { 0u32, 1u32, 2147483648u32, 4294967295u32 } do
-        for b in u8[3] { 0u8, 100u8, 255u8 } do
+    for a in u32[] { 0u32, 1u32, 2147483648u32, 4294967295u32 } do
+        for b in u8[] { 0u8, 100u8, 255u8 } do
             check_narrow(a, b, (i8) b, (u64) a * 4294967297u64)
     // constants of other kinds as operands
     let s = shade.light

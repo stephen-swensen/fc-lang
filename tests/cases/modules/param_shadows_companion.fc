@@ -11,7 +11,7 @@ module m =
     let sum_bytes = (point: u8[]) -> (i32) point.len
 
 let main = (args: str[]) ->
-    let buf = u8[5] { 1u8, 2u8, 3u8, 4u8, 5u8 }
+    let buf = u8[] { 1u8, 2u8, 3u8, 4u8, 5u8 }
     assert(m.sum_bytes(buf) == 5)
     // Companion pattern still works when accessed by type name
     let p = point.origin()

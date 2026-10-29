@@ -1,0 +1,6 @@
+// A slice literal's head is the type it yields, so `const str[]` is the
+// read-only slice; a literal that creates storage creates writable slots and
+// cannot have it. Slots holding string literals are `(const str)[]`.
+let main = (args: str[]) ->
+    let names = const str[] { "a", "bc" }
+    (i32) names.len

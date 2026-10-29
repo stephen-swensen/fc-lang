@@ -7,7 +7,7 @@ struct flags_holder =
     flags: bool[]
 
 let main = (args: str[]) ->
-    let arr = bool[4] { true, false, true, false }
+    let arr = bool[] { true, false, true, false }
 
     // `!arr[i]` — bang over slice index
     assert(!arr[1])

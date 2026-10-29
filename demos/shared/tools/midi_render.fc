@@ -211,7 +211,7 @@ let main = (args: str[]) ->
     // reason to ask for more.
     opl_midi.set_loop(p, secs > song_secs + 0.05)
 
-    let w_buf = alloc(u8[44i64 + (i64) frames * 2i64] {})!
+    let w_buf = alloc(u8[] { len = 44i64 + (i64) frames * 2i64 })!
     defer free(w_buf)
     let mut w = wav { b = w_buf, n = 0i64 }
     put_header(&w, rate, frames)

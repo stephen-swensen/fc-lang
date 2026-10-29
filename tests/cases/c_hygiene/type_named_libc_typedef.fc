@@ -16,7 +16,7 @@ let main = (args: str[]) ->
     let mut d = div_t { static = 42 }
     assert(via_ptr(&d) == 42)
 
-    let mut arr = alloc(div_t[2] { })!
+    let mut arr = alloc(div_t[] { len = 2 })!
     arr[0] = div_t { static = 99 }
     assert(via_slice(arr) == 99)
     free(arr.ptr)

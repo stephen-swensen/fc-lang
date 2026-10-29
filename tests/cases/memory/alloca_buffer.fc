@@ -1,4 +1,4 @@
-// alloca(T, n) -> T* (raw, unchecked) and alloca(T[n] {}) -> T[] (zeroed,
+// alloca(T, n) -> T* (raw, unchecked) and alloca(T[] { len = n }) -> T[] (zeroed,
 // bounds-checked slice), both runtime-sized on the stack with no free.
 let main = (args: str[]) ->
     let n = 8
@@ -11,7 +11,7 @@ let main = (args: str[]) ->
     assert(p[7] == 90u8)
 
     // slice form: has .len and is zero-initialized
-    let mut sl = alloca(u8[n] {})
+    let mut sl = alloca(u8[] { len = n })
     assert(sl.len == 8)
     assert(sl[0] == 0u8)
     assert(sl[7] == 0u8)

@@ -15,7 +15,7 @@ module m =
     let twice = ~~x
     let not_flag = !true
     let in_struct = pair { lo = ~x, hi = ~1usize }
-    let in_slice = isize[2] { ~x, -~x }
+    let in_slice = isize[] { ~x, -~x }
 
 let file_level = ~7isize
 

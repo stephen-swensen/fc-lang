@@ -143,7 +143,7 @@ let captured = (n: i64) ->
 
 let main = (args: str[]) ->
     assert(late_arg(7, 5) == 7016)
-    let mut bx = box { vals = i64[4] { 10, 20, 30, 40 }, n = 0 }
+    let mut bx = box { vals = i64[] { 10, 20, 30, 40 }, n = 0 }
     assert(late_index(&bx, 1) == 30)
     late_assign(&bx, 21)
     assert(bx.n == 42)
@@ -154,7 +154,7 @@ let main = (args: str[]) ->
     assert(keeps(2) == 947)
     assert(tail_entry(10000) == 50065000)
     assert(tail_caller(10) == 115 + 11 * 12 * 13 + 36)
-    let mut xs = i64[9] { 5, -3, 99, 0, 7, -40, 12, 7, 1 }
+    let mut xs = i64[] { 5, -3, 99, 0, 7, -40, 12, 7, 1 }
     libc.qsort((any*) xs.ptr, (usize) xs.len, (usize) sizeof(i64), cmp_i64)
     for i in 1..xs.len do assert(xs[i - 1] <= xs[i])
     assert(xs[0] == -40 && xs[8] == 99)

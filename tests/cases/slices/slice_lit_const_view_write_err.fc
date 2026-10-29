@@ -1,0 +1,6 @@
+// A view written `const T[] { .. }` is read-only even over writable memory.
+let main = (args: str[]) ->
+    let mut nums = i32[] { 1, 2, 3 }
+    let ro = const i32[] { ptr = nums.ptr, len = 3 }
+    ro[0] = 9
+    0

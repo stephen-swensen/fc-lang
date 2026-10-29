@@ -20,7 +20,7 @@ let mut g8 = 0i64
 let mut g4 = 0u32
 let mut g1 = 0u8
 let mut gf = 0.0
-let mut gs = i64[3] { 1i64, 2i64, 3i64 }
+let mut gs = i64[] { 1i64, 2i64, 3i64 }
 
 let fill = (p: packed*, v8: u8, v64: i64) ->
     p.a = v8
@@ -94,19 +94,19 @@ let main = (args: str[]) ->
     assert(tup[0] == 255u8 && tup[1] == v64 && tup[2] == 65535u16)
 
     // slice elements of each width
-    let mut b = u8[4] { 1u8, 2u8, 3u8, 4u8 }
+    let mut b = u8[] { 1u8, 2u8, 3u8, 4u8 }
     b[1] = 255u8
     b[2] = v8
     assert(b[0] == 1u8 && b[1] == 255u8 && b[2] == v8 && b[3] == 4u8)
-    let mut w = i16[3] { 1i16, 2i16, 3i16 }
+    let mut w = i16[] { 1i16, 2i16, 3i16 }
     w[1] = -32768i16
     assert(w[0] == 1i16 && w[1] == -32768i16 && w[2] == 3i16)
-    let mut q = i64[3] { 1i64, 2i64, 3i64 }
+    let mut q = i64[] { 1i64, 2i64, 3i64 }
     q[1] = 2147483648i64
     q[2] = -2147483649i64
     q[0] = v64
     assert(q[0] == v64 && q[1] == 2147483648i64 && q[2] == -2147483649i64)
-    let mut fl = f32[3] { 1.0f32, 2.0f32, 3.0f32 }
+    let mut fl = f32[] { 1.0f32, 2.0f32, 3.0f32 }
     let half = 0.5f32
     fl[1] = half
     fl[2] = 8.0f32

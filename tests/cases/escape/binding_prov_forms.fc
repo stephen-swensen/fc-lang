@@ -46,7 +46,7 @@ let main = (args: str[]) ->
     assert(*via_destructure(h) == 7)
     assert(*via_struct_destructure(h) == 7)
     assert(*via_loop(h) == 7)
-    let hs = i32*[1] { h }
+    let hs = i32*[] { h }
     assert(*via_for(hs) == 7)
     assert(static_via_match().len == 5)
     free(h)

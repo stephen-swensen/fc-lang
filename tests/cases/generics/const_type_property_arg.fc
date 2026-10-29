@@ -55,8 +55,8 @@ let main = (args: str[]) ->
     assert(width<gfx.mode.count + 1>() == 4)
 
     // and in the sibling size slots, which must agree
-    let s = u8[dir.count] {}
-    let t = u8[i32.bits] {}
+    let s = u8[] { len = dir.count }
+    let t = u8[] { len = i32.bits }
     assert(s.len == 4)
     assert(t.len == 32)
     0

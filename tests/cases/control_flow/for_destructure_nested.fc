@@ -5,21 +5,21 @@ struct point =
 
 let main = (args: str[]) ->
     // Nested tuple-in-tuple.
-    let nested = {i32, {i32, i32}}[2] { { 1, { 2, 3 } }, { 4, { 5, 6 } } }
+    let nested = {i32, {i32, i32}}[] { { 1, { 2, 3 } }, { 4, { 5, 6 } } }
     let mut n = 0
     for { a, { b, c } } in nested do
         n = n + a + b + c
     assert(n == 21)
 
     // Wildcard skips an element.
-    let pairs = {i32, i32}[3] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
+    let pairs = {i32, i32}[] { { 1, 2 }, { 3, 4 }, { 5, 6 } }
     let mut firsts = 0
     for { a, _ } in pairs do
         firsts = firsts + a
     assert(firsts == 9)
 
     // Struct nested inside a tuple.
-    let mixed = {i32, point}[2] { { 1, point { x = 2, y = 3 } }, { 4, point { x = 5, y = 6 } } }
+    let mixed = {i32, point}[] { { 1, point { x = 2, y = 3 } }, { 4, point { x = 5, y = 6 } } }
     let mut m = 0
     for { a, { x = px, y = py } } in mixed do
         m = m + a + px + py

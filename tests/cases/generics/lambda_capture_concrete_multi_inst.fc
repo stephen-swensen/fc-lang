@@ -7,6 +7,6 @@ let len_tag = (xs: 'a[], tag: i32) ->
     f()
 
 let main = (args: str[]) ->
-    assert(len_tag(i32[3]{1, 2, 3}, 7) == 703)
-    assert(len_tag(f64[2]{1.0, 2.0}, 9) == 902)
+    assert(len_tag(i32[]{1, 2, 3}, 7) == 703)
+    assert(len_tag(f64[]{1.0, 2.0}, 9) == 902)
     0

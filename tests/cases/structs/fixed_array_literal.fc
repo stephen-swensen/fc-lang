@@ -3,7 +3,7 @@ struct packet =
     payload: u8[8]
 
 let main = (args: str[]) ->
-    let h = u8[4] { 0xAAu8, 0xBBu8, 0xCCu8, 0xDDu8 }
+    let h = u8[] { 0xAAu8, 0xBBu8, 0xCCu8, 0xDDu8 }
     let p = packet { header = h }
     assert(p.header[0] == 0xAAu8)
     assert(p.header[3] == 0xDDu8)

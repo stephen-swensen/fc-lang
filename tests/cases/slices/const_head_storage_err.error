@@ -1,0 +1,1 @@
+for slots holding read-only views write '(const str)[] { ... }'

@@ -1,6 +1,6 @@
 // A negative signed index is reported as -1 (the format follows the operand's
 // own signedness; see oob_index_unsigned).
 let main = (args: str[]) ->
-    let s = i32[3] { 1, 2, 3 }
+    let s = i32[] { 1, 2, 3 }
     let i = 0 - 1
     s[i]

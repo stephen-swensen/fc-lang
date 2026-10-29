@@ -1,6 +1,6 @@
 // Error: an element of a stack slice literal lives in the frame.
 let bad = () ->
-    let s = i32[3] { 1, 2, 3 }
+    let s = i32[] { 1, 2, 3 }
     &s[0]
 
 let main = (args: str[]) ->

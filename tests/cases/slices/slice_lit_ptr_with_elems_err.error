@@ -1,0 +1,1 @@
+a slice literal with 'ptr' is a view of existing elements and lists none of its own

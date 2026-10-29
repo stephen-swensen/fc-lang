@@ -5,4 +5,4 @@ let fill = (s: const str[]) ->
     (i32) s.len
 
 let main = (args: str[]) ->
-    fill(const str[2] { "a", "bc" })
+    fill((const str)[] { "a", "bc" })

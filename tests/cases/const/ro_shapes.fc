@@ -20,7 +20,7 @@ module k =
     let d = dir.south
     let cs = c"hi"
     let s = "hello"
-    let tbl = i32[3] { 10, 20, 30 }
+    let tbl = i32[] { 10, 20, 30 }
 
 let main = (args: str[]) ->
     let mut acc = 0

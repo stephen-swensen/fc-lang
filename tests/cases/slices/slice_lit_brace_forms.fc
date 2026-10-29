@@ -1,0 +1,31 @@
+// The braces of a slice literal say what it holds; the head is always the
+// slice type T[]. Elements alone (the length is their count), `len` alone
+// (zero-initialized), `len` before the elements (an assertion), and nothing
+// (the empty slice).
+let main = (args: str[]) ->
+    let counted = i32[] { 4, 5, 6 }
+    assert(counted.len == 3 && counted[2] == 6)
+
+    let mut zeroed = u8[] { len = 16 }
+    assert(zeroed.len == 16 && zeroed[15] == 0u8)
+    zeroed[15] = 9u8
+    assert(zeroed[15] == 9u8)
+
+    let asserted = i64[] { len = 3, 1, 2, 3 }
+    assert(asserted.len == 3 && asserted[0] == 1i64)
+
+    // the length may be any constant expression, and a trailing comma follows
+    // either the named field or the last element
+    let k = i32[] { len = 2 * 2, }
+    assert(k.len == 4 && k[3] == 0)
+    let m = i32[] {
+        len = 4,
+        10, 20,
+        30, 40,
+    }
+    assert(m.len == 4 && m[3] == 40)
+
+    let empty = i32[] { }
+    assert(empty.len == 0)
+    assert(empty == default(i32[]))
+    0

@@ -332,10 +332,11 @@ struct Expr {
             int elem_count;
         } tuple_lit;
 
-        /* EXPR_ARRAY_LIT */
+        /* EXPR_ARRAY_LIT: T[] { e0, ... }, T[] { len = n }, or both */
         struct {
             Type *elem_type;
-            Expr *size_expr;    /* NULL for unsized */
+            Expr *size_expr;    /* the length: the written `len`, or the
+                                   element count as a literal */
             Expr **elems;
             int elem_count;
             const char *codegen_backing_name; /* non-NULL when a backing array was
@@ -355,6 +356,7 @@ struct Expr {
             Type *elem_type;    /* element type (e.g., uint8 for str) */
             Expr *ptr_expr;
             Expr *len_expr;
+            bool  is_const;     /* written `const T[] { ... }`: a read-only view */
             bool  len_nonneg;   /* pass2 proved len >= 0, so codegen skips the
                                  * negative-length runtime guard */
         } slice_lit;

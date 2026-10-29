@@ -1,4 +1,4 @@
 let main = (args: str[]) ->
-    let xs = u8[1]{200u8}
+    let xs = u8[]{200u8}
     let _ = checked (i8) xs[0]
     1   // not reached: the line above aborts

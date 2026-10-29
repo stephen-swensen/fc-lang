@@ -2,8 +2,8 @@
 // the bytes they point at, so the views stay read-only. Regression: the copy
 // was a `str[]`, and writes reached the source's read-only strings.
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[4] { })!
-    let ro = (const str[]) str[1] { buf }
+    let mut buf = alloc(u8[] { len = 4 })!
+    let ro = (const str[]) str[] { buf }
     let h = alloc(ro)!
     let w = h[0]
     w[0] = 5u8

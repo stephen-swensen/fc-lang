@@ -1,10 +1,10 @@
 // A trailing comma after the last element is accepted in every slice-literal
 // form, as it is after the last field of a struct literal.
 let main = (args: str[]) ->
-    let a = i32[3] { 1, 2, 3, }
-    let h = alloc(i32[3] { 4, 5, 6, })!
-    let s = alloca(i32[2] { 7, 8, })
-    let lines = i32[2] {
+    let a = i32[] { 1, 2, 3, }
+    let h = alloc(i32[] { 4, 5, 6, })!
+    let s = alloca(i32[] { 7, 8, })
+    let lines = i32[] { len = 2,
         9,
         10,
     }

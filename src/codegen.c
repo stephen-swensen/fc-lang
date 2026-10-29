@@ -529,7 +529,7 @@ static void collect_hoisted_bindings(Expr *e) {
         break;
     }
     case EXPR_ALLOC:
-        /* alloc(T[N]{...}) and alloc("...%d") build their init straight into the
+        /* alloc(T[] {...}) and alloc("...%d") build their init straight into the
          * heap buffer, so the init node itself gets no stack slot; its children
          * may still need theirs. */
         collect_hoisted_bindings(e->alloc_expr.size_expr);
@@ -3040,7 +3040,7 @@ static void emit_alloc(Expr *e, FILE *out) {
             emit_type(e->alloc_expr.alloc_type, out);
             fprintf(out, "))");
         } else if (e->alloc_expr.alloc_type && e->alloc_expr.size_expr) {
-            /* alloca(T[n] { }) yields T[] (zero-initialized runtime-sized slice) */
+            /* alloca(T[] { len = n }) yields T[] (zero-initialized runtime-sized slice) */
             int tid = g_temp_counter++;
             fprintf(out, "({ int64_t _asz%d = (int64_t)", tid);
             emit_expr(e->alloc_expr.size_expr, out);
@@ -3070,7 +3070,7 @@ static void emit_alloc(Expr *e, FILE *out) {
             emit_interp_string(e->alloc_expr.init_expr, out, NULL);
         } else if (e->alloc_expr.init_expr &&
                    e->alloc_expr.init_expr->kind == EXPR_ARRAY_LIT) {
-            /* alloca(T[N] { elems }): reuse the slice-literal stack emission.
+            /* alloca(T[] { elems }): reuse the slice-literal stack emission.
              * The hoist pass gives this literal no fixed slot, so it is
              * alloca'd. */
             emit_expr(e->alloc_expr.init_expr, out);
@@ -3160,7 +3160,7 @@ static void emit_alloc(Expr *e, FILE *out) {
         /* alloc("interp %d{x}") or alloc(c"interp %d{x}") yields str?/cstr? */
         emit_interp_string(e->alloc_expr.init_expr, out, e->type);
     } else if (e->alloc_expr.init_expr->kind == EXPR_ARRAY_LIT) {
-        /* alloc(T[N] { elems }) yields T[]? (direct to heap) */
+        /* alloc(T[] { elems }) yields T[]? (direct to heap) */
         int tid = g_temp_counter++;
         Expr *ie = e->alloc_expr.init_expr;
         Type *elem_type = ie->array_lit.elem_type;
@@ -4264,13 +4264,13 @@ static void emit_assign(Expr *e, FILE *out) {
     }
 }
 
-/* A slice literal T[N] { ... } over its hoisted backing array. */
+/* A slice literal T[] { ... } over its hoisted backing array. */
 static void emit_array_lit(Expr *e, FILE *out) {
     /* Module-scope const context: emit a slice header referencing the
      * static backing array that the pre-pass lifted to file scope.
      * Only zero-length literals have no backing (C rejects zero-length
-     * arrays); those emit a NULL/0 slice.  The empty form `T[N]{ }`
-     * with N > 0 references a `{0}`-initialized backing. */
+     * arrays); those emit a NULL/0 slice.  The zero-initialized form
+     * `T[] { len = n }` with n > 0 references a `{0}`-initialized backing. */
     if (g_const_context) {
         fprintf(out, "(");
         emit_type(e->type, out);
@@ -5919,8 +5919,8 @@ static void collect_const_backings(Expr *e, void *rodata) {
         for (int i = 0; i < e->array_lit.elem_count; i++)
             collect_const_backings(e->array_lit.elems[i], rodata);
         /* Zero-length literals don't need a backing: the use site emits a
-         * NULL/0 slice (C rejects zero-length arrays).  The empty form
-         * `T[N]{ }` with N > 0 means N zero-initialized elements and does
+         * NULL/0 slice (C rejects zero-length arrays).  The zero-initialized
+         * form `T[] { len = N }` with N > 0 means N zero elements and does
          * need one, emitted as `static T name[N] = {0};`, since a
          * null-backed slice whose .len says N would pass every bounds check
          * and fault on first access.  pass2 guarantees the size of a
@@ -7534,7 +7534,7 @@ static void emit_globals(FILE *out, Decl **all_decls, int all_count, EmittedCode
                          ? "static const " : "static ");
             emit_elem_type(al->array_lit.elem_type, out);
             if (al->array_lit.elem_count == 0) {
-                /* Empty form `T[N]{ }`: N zero-initialized elements. */
+                /* Zero-initialized form `T[] { len = N }`: N zero elements. */
                 fprintf(out, " %s[%" PRIu64 "] = {0};\n",
                         al->array_lit.codegen_backing_name,
                         al->array_lit.size_expr->int_lit.value);

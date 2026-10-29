@@ -145,9 +145,9 @@ module art =
     // ============================================================
 
     private let pic_town = (x: i32, gy: i32) ->
-        let fronts = i32[5] { 0, 26, 50, 78, 104 }
-        let heights = i32[5] { 22, 30, 18, 26, 20 }
-        let cols = (const str)[5] { "b", "t", "d", "o", "b" }
+        let fronts = i32[] { 0, 26, 50, 78, 104 }
+        let heights = i32[] { 22, 30, 18, 26, 20 }
+        let cols = (const str)[] { "b", "t", "d", "o", "b" }
         for i in 0..5 do
             let c = sprites.color(cols[i][0])
             rect(x + fronts[i], gy - heights[i], 22, heights[i], c)
@@ -447,9 +447,9 @@ module art =
 
     private let draw_supplies = (g: const world*) ->
         centered("Your supplies", 10, yellow)
-        let rows = (const str)[8] { "Oxen", "Food (pounds)", "Clothing (sets)", "Bullets",
+        let rows = (const str)[] { len = 8, "Oxen", "Food (pounds)", "Clothing (sets)", "Bullets",
                                     "Spare wheels", "Spare axles", "Spare tongues", "Cash" }
-        let vals = i32[8] { g.oxen, (i32) g.food, g.clothing, g.bullets, g.wheels, g.axles,
+        let vals = i32[] { len = 8, g.oxen, (i32) g.food, g.clothing, g.bullets, g.wheels, g.axles,
                             g.tongues, (i32) g.cash }
         for i in 0..8 do
             let y = 32 + i * 12
@@ -599,7 +599,7 @@ module art =
         prompt("Which will it be?")
 
     // The hunt: a field from above, a status line across the top.
-    private let hunt_decor = i32[20] { 30, 40, 90, 150, 140, 60, 250, 120, 280, 44,
+    private let hunt_decor = i32[] { len = 20, 30, 40, 90, 150, 140, 60, 250, 120, 280, 44,
                                        60, 130, 200, 160, 110, 100, 220, 70, 170, 40 }
 
     private let critter_art = (k: species) ->
@@ -688,8 +688,8 @@ module art =
                 font.right("%d{game.health_points(p.health)}", 280, y, 1, white)
                 y = y + 9
         let parts = (g.wheels + g.axles + g.tongues) * 3
-        let lines = (const str)[6] { "The wagon", "Oxen", "Spare parts", "Clothing", "Bullets and food", "Cash" }
-        let pts = i32[6] { 50, g.oxen * 5, parts, g.clothing * 2,
+        let lines = (const str)[] { "The wagon", "Oxen", "Spare parts", "Clothing", "Bullets and food", "Cash" }
+        let pts = i32[] { len = 6, 50, g.oxen * 5, parts, g.clothing * 2,
                            g.bullets / 40 + (i32) (g.food / 20.0), (i32) (g.cash / 4.0) }
         for i in 0..6 do
             text(lines[i], 40, y, dim)

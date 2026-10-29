@@ -2037,7 +2037,7 @@ static Expr *normalize_const_tree(CheckCtx *ctx, Expr *e, ConstSlot slot) {
 }
 
 /* The rule on a length known at compile time, shared by every construct that
- * states one: a slice literal's length (T[N] { } or a raw-parts len), a fixed
+ * states one: a slice literal's length (its `len` or element count), a fixed
  * array's size, which must also be positive, and a string literal's byte
  * count. A length must be non-negative, and it must fit the stored length of
  * --len-repr, because every one of them is viewed as a slice. NULL when `n` is
@@ -4309,8 +4309,7 @@ static void check_generic_array_size(Expr *e, GenericCheck *gc) {
         } else if (e->array_lit.elem_count > 0 &&
                    (int64_t)e->array_lit.elem_count != sz) {
             gen_inst_diag(gc->frame, e->loc,
-                "slice literal has %d element%s but declared length is %lld; "
-                "the element list must be exhaustive (or use `{ }` to zero-initialize)",
+                "slice literal has %d element%s but its len is %lld",
                 e->array_lit.elem_count,
                 e->array_lit.elem_count == 1 ? "" : "s", (long long)sz);
             gc->ok = false;
@@ -5665,7 +5664,7 @@ static Type *check_field(CheckCtx *ctx, Expr *e) {
     return check_value_field(ctx, e, obj_type);
 }
 
-/* alloca(...): a dynamic-stack buffer alloca(T, n) or alloca(T[n] {}), or a
+/* alloca(...): a dynamic-stack buffer alloca(T, n) or alloca(T[] { len = n }), or a
  * stack copy of an interpolated string, slice literal or unbounded (cstr)
  * cast. */
 static Type *check_alloca(CheckCtx *ctx, Expr *e) {
@@ -5686,7 +5685,7 @@ static Type *check_alloca(CheckCtx *ctx, Expr *e) {
             }
             e->type = e->alloc_expr.alloc_raw
                 ? type_pointer(ctx->arena, ty)   /* alloca(T, N): T* */
-                : type_slice(ctx->arena, ty);    /* alloca(T[n] { }): T[] */
+                : type_slice(ctx->arena, ty);    /* alloca(T[] { len = n }): T[] */
         } else {
             /* alloca(T): a fixed-size stack object, which is what an
              * ordinary local binding already is. alloca exists to make
@@ -5696,8 +5695,8 @@ static Type *check_alloca(CheckCtx *ctx, Expr *e) {
              * alloca(m.point), alloca('a), alloca(point). */
             diag_error(e->loc,
                 "alloca(%s) has no runtime size; use a plain let binding "
-                "for a fixed-size local, or alloca(T, n) / alloca(T[n] {}) "
-                "for a runtime-sized buffer", type_name(ty));
+                "for a fixed-size local, or alloca(T, n) / "
+                "alloca(T[] { len = n }) for a runtime-sized buffer", type_name(ty));
             return poison(e);
         }
         e->prov = PROV_STACK;
@@ -5730,7 +5729,7 @@ static Type *check_alloca(CheckCtx *ctx, Expr *e) {
         "alloca(expr) requires an interpolated string, a slice literal "
         "or an unbounded (cstr) cast; any other operand would be "
         "aliased rather than copied; use alloca(T, n) or "
-        "alloca(T[n] {}) for an uninitialized buffer");
+        "alloca(T[] { len = n }) for an uninitialized buffer");
     return poison(e);
 }
 
@@ -5901,7 +5900,7 @@ static Type *check_alloc_value(CheckCtx *ctx, Expr *e) {
     return e->type;
 }
 
-/* alloc(...) and alloca(...): a zero-initialized T, a slice T[N] { ... },
+/* alloc(...) and alloca(...): a zero-initialized T, a slice T[] { ... },
  * or a heap or dynamic-stack copy of a value. */
 static Type *check_alloc(CheckCtx *ctx, Expr *e) {
     /* A module-qualified name in the operand slot (alloc(shapes.point) vs
@@ -6609,7 +6608,7 @@ static Type *check_ident(CheckCtx *ctx, Expr *e) {
         } else if (type_from_name(e->ident.name, (int)strlen(e->ident.name))) {
             /* A type name used where a value is expected, e.g. a tuple type
              * {i32, str} in expression position instead of a value, or a
-             * slice literal element type without the [N]{ ... } body. */
+             * slice literal element type without the [] { ... } body. */
             diag_error(e->loc, "'%s' is a type, not a value", e->ident.name);
         } else {
             diag_error(e->loc, "undefined name '%s'", e->ident.name);
@@ -6785,15 +6784,16 @@ static Type *check_struct_lit(CheckCtx *ctx, Expr *e) {
     return e->type;
 }
 
-/* A slice literal T[N] { ... }: its size, which must be a compile-time
- * constant, and its elements against the element type. */
+/* A slice literal T[] { ... } that creates storage: its length (the written
+ * `len` or the element count), which must be a compile-time constant, and its
+ * elements against the element type. */
 static Type *check_array_lit(CheckCtx *ctx, Expr *e) {
     /* The node is EXPR_ARRAY_LIT after its backing array, but the literal
      * yields a slice. The length expression must be an integer. */
     Type *size_type = check_expr(ctx, e->array_lit.size_expr);
     if (type_is_error(size_type)) return poison(e);
     if (!type_is_integer(size_type)) {
-        diag_error(e->loc, "slice literal length must be integer, got %s", type_name(size_type));
+        diag_error(e->loc, "slice literal len must be an integer, got %s", type_name(size_type));
         return poison(e);
     }
     /* Length must be a compile-time constant (integer literal). A
@@ -6819,14 +6819,16 @@ static Type *check_array_lit(CheckCtx *ctx, Expr *e) {
             size_deferred = norm->kind != EXPR_INT_LIT;
         } else {
             diag_error(e->array_lit.size_expr->loc,
-                "slice literal length must be a compile-time constant");
+                "slice literal len must be a compile-time constant; a "
+                "runtime-sized slice is alloc(T[] { len = n }) or "
+                "alloca(T[] { len = n })");
             return poison(e);
         }
     }
     /* A statically-negative length is a compile error (spec: Slices &
      * Strings): the backing array would be dimensioned with the wrapped
      * u64 value, and a negative `len` defeats every later bounds check.
-     * Zero is legal: `i32[0] { }` is the empty-slice literal.
+     * Zero is legal: `i32[] { }` is the empty-slice literal.
      * validate_generic_body makes the same check per instance. */
     if (!size_deferred) {
         uint64_t raw = e->array_lit.size_expr->int_lit.value;
@@ -6844,18 +6846,17 @@ static Type *check_array_lit(CheckCtx *ctx, Expr *e) {
             return poison(e);
         }
     }
-    /* The element count must equal the declared length. The empty form
-     * `{ }` (elem_count == 0) zero-initializes all elements and is always
-     * allowed; an explicit element list must be exhaustive. A short list
-     * would leave elements uninitialized and an over-long one would write
-     * past the backing buffer. */
+    /* An element list must have exactly `len` elements when both are
+     * written (without a `len` the count is the length). The zero-initialized
+     * form `{ len = n }` (elem_count == 0) has none. A short list would leave
+     * elements uninitialized and an over-long one would write past the
+     * backing buffer. */
     if (!size_deferred) {
         uint64_t declared_size = e->array_lit.size_expr->int_lit.value;
         if (e->array_lit.elem_count > 0 &&
             (uint64_t) e->array_lit.elem_count != declared_size) {
             diag_error(e->loc,
-                "slice literal has %d element%s but declared length is %" PRIu64
-                "; the element list must be exhaustive (or use `{ }` to zero-initialize)",
+                "slice literal has %d element%s but its len is %" PRIu64,
                 e->array_lit.elem_count,
                 e->array_lit.elem_count == 1 ? "" : "s",
                 declared_size);
@@ -6888,7 +6889,7 @@ static Type *check_array_lit(CheckCtx *ctx, Expr *e) {
     if (elem_error) { return poison(e); }
     e->type = type_slice(ctx->arena, elem_type);
     /* The backing array lives in the function frame, so the slice itself
-     * is stack. What it holds is a separate question: `str[2] { "a", "b" }`
+     * is stack. What it holds is a separate question: `(const str)[] { "a", "b" }`
      * is a stack slice of static strings, and only the element provenance
      * decides whether a load out of it can dangle. */
     e->prov = PROV_STACK;
@@ -7094,7 +7095,7 @@ static Type *check_for(CheckCtx *ctx, Expr *e) {
         if (iter_type->kind == TYPE_SLICE) {
             /* The element binding is a copy of a stored value, so it takes
              * the container's element provenance (not the backing's):
-             * `for p in i32*[1] { &a }` yields a stack pointer, while
+             * `for p in i32*[] { &a }` yields a stack pointer, while
              * iterating a stack slice of heap slices does not. */
             ProvPair saved_bind = ctx->bind_prov;
             bool saved_ro = ctx->bind_readonly;
@@ -8103,15 +8104,18 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         if (type_is_error(pt) || type_is_error(lt)) {
             return poison(e);
         }
-        /* ptr must be T* (pointer to element type) */
-        Type *expected_ptr = type_pointer(ctx->arena, elem_type);
-        if (!type_eq(pt, expected_ptr) && !(pt->kind == TYPE_POINTER && type_eq(pt->pointer.pointee, elem_type))) {
-            /* Also allow const T*; the result is then a const slice */
-            if (!(pt->kind == TYPE_POINTER && pt->is_const && type_eq(pt->pointer.pointee, elem_type))) {
-                diag_error(e->slice_lit.ptr_expr->loc,
-                    "slice ptr field: expected %s*, got %s",
-                    type_name(elem_type), type_name(pt));
-            }
+        /* ptr must be a T*. The head is the slice type the literal yields, so
+         * a read-only view is written `const T[] { ... }` and takes a T* or a
+         * const T*, while a writable T[] cannot be built over a const T*. */
+        if (pt->kind != TYPE_POINTER || !type_eq(pt->pointer.pointee, elem_type)) {
+            diag_error(e->slice_lit.ptr_expr->loc,
+                "slice ptr field: expected %s*, got %s",
+                type_name(elem_type), type_name(pt));
+        } else if (pt->is_const && !e->slice_lit.is_const) {
+            diag_error(e->slice_lit.ptr_expr->loc,
+                "slice ptr field is read-only (%s), so the view must be the "
+                "read-only slice: write 'const %s[] { ptr = ..., len = ... }'",
+                type_name(pt), type_name(elem_type));
         }
         /* len must be i64 (or widen to i64) */
         Type *len_type = type_int64();
@@ -8152,10 +8156,8 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
             }
         }
         Type *slice_type = type_slice(ctx->arena, elem_type);
-        /* If ptr is const, result is const slice */
-        if (pt->is_const) {
+        if (e->slice_lit.is_const)
             slice_type = type_make_const(ctx->arena, slice_type);
-        }
         e->type = slice_type;
         inherit_prov(e, e->slice_lit.ptr_expr);   /* a view of ptr's elements */
         return e->type;

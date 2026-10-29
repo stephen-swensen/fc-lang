@@ -6,13 +6,13 @@ struct s =
     p: i32*
 
 let mk = (q: i32*) ->
-    s { buf = u8[4] { 1u8, 2u8, 3u8, 4u8 }, p = q }
+    s { buf = u8[] { 1u8, 2u8, 3u8, 4u8 }, p = q }
 
 let mk_str = (q: i32*) ->
     s { buf = "abcd", p = q }
 
 let mk_heap = (q: i32*) ->
-    alloc(s { buf = u8[4] { 1u8, 2u8, 3u8, 4u8 }, p = q })!
+    alloc(s { buf = u8[] { 1u8, 2u8, 3u8, 4u8 }, p = q })!
 
 let main = (args: str[]) ->
     let mut x = 1

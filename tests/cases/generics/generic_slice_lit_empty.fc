@@ -1,12 +1,12 @@
-// The empty slice-literal form 'a[N] { } zero-initializes every element, even
-// when the element type is a type variable. .len is the declared length and
+// The zero-initialized slice-literal form 'a[] { len = n } zeroes every
+// element, even when the element type is a type variable. .len is the len and
 // each element is the element type's zero value, across distinct monomorphs.
 let zlen = (x: 'a) ->
-    let buf = 'a[5] { }
+    let buf = 'a[] { len = 5 }
     (i32) buf.len
 
 let zfirst = (x: 'a) ->
-    let buf = 'a[2] { }
+    let buf = 'a[] { len = 2 }
     buf[0]                 // zero-initialized regardless of the argument
 
 let main = (args: str[]) ->

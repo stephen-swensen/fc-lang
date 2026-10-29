@@ -1833,7 +1833,7 @@ CP = (
     "\n"                                         # 4
     "// Companion tables for dir.\n"             # 5
     "module dir =\n"                             # 6  decl-site module name
-    "    let dx = i32[2] { 1, 0 }\n"             # 7
+    "    let dx = i32[] { 1, 0 }\n"              # 7
     "\n"                                         # 8
     "// Sound helpers.\n"                        # 9
     "module sfx =\n"                             # 10
@@ -2541,7 +2541,7 @@ check("a comma-list import reports its names in source order",
 # setting does not leak.
 LRSRC = (
     "let main = (args: str[]) ->\n"
-    "    let big = u8[40000] { }\n"
+    "    let big = u8[] { len = 40000 }\n"
     "    (i32) big.len\n"
 )
 lr16 = tmpdir("fc_lsp_lr16_")

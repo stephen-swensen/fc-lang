@@ -1,6 +1,6 @@
-// Test: slice literal whose element count exactly matches the declared length
+// Test: slice literal whose element count exactly matches its len
 let main = (args: str[]) ->
-    let buf = i32[3] { 10, 20, 30 }
+    let buf = i32[] { len = 3, 10, 20, 30 }
     let sum = buf[0] + buf[1] + buf[2]
     assert(sum == 60)
     assert(buf.len == 3)

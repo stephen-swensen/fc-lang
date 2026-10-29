@@ -1,0 +1,8 @@
+// The read-only view rule inside a generic body: a const 'a* needs the
+// read-only head, judged on the definition itself.
+let view = <'n>(p: const 'a*) ->
+    let v = 'a[] { ptr = p, len = 'n }
+    v.len
+
+let main = (args: str[]) ->
+    (i32) view<2>(c"hi")

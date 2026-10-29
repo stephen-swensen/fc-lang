@@ -9,5 +9,5 @@ let pick = <'n>() -> 0
 
 let main = (args: str[]) ->
     static_assert(1 / 0 == 0, "divides by zero")
-    let v = i32[1 % 0] { }
+    let v = i32[] { len = 1 % 0 }
     pick<2 / 0>()

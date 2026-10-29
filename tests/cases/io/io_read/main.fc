@@ -13,7 +13,7 @@ let main = (args: str[]) ->
             let f2 = io.open(path, "r")
             match f2 with
             | ok(rf) ->
-                let mut buf = u8[16] {}
+                let mut buf = u8[] { len = 16 }
                 let n = io.read(buf, 16, rf)
                 io.close(rf)!
                 if n == 5i64 then 42

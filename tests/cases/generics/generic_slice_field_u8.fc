@@ -30,13 +30,13 @@ let all = (h: holder<'a>) ->
 
 let main = (args: str[]) ->
     // 'a = u8 → the data field is u8[] == str
-    let bytes = wrap(u8[3] { 10u8, 20u8, 30u8 })
+    let bytes = wrap(u8[] { 10u8, 20u8, 30u8 })
     assert(head(bytes) == 10u8)
     assert(last(bytes) == 30u8)
     assert(all(bytes)!.len == 3)
 
     // 'a = i32 → a normal fc_slice_int32_t; guards the non-str path
-    let nums = wrap(i32[2] { 7, 9 })
+    let nums = wrap(i32[] { 7, 9 })
     assert(head(nums) == 7)
     assert(last(nums) == 9)
     assert(all(nums)!.len == 2)

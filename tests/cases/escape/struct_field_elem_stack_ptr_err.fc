@@ -6,7 +6,7 @@ struct holder =
 let bad = () ->
     let mut x = 41
     x = x + 1
-    let ptrs = i32*[1] { &x }
+    let ptrs = i32*[] { &x }
     let h = holder { data = ptrs }
     h.data[0]
 

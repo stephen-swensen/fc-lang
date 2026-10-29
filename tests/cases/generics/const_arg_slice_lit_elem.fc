@@ -1,5 +1,5 @@
 // A const-arg instantiation may be a slice literal's element type
-// (`wide<64>[2]{}`), like the type-arg form `box<i32>[2]{}`
+// (`wide<64>[] { len = 2 }`), like the type-arg form `box<i32>[] { len = 2 }`
 // (generics/qualified_type_arg_array_lit). Regression: it used to be a parse
 // error ("expected type, got int literal"), because the lookahead admitted an
 // int literal argument but the element-type parse did not.
@@ -7,7 +7,7 @@ struct wide =
     limbs: u32['n / 32]
 
 let main = (args: str[]) ->
-    let s = wide<64>[2]{}
+    let s = wide<64>[] { len = 2 }
     assert(s.len == 2)
     assert(s[0].limbs.len == 2)
     0

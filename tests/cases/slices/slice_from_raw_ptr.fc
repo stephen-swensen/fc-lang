@@ -1,5 +1,5 @@
 let main = (args: str[]) ->
-    let mut data = i32[4] { 10, 20, 30, 40 }
+    let mut data = i32[] { 10, 20, 30, 40 }
     let s = i32[] { ptr = data.ptr, len = 4i64 }
     assert(s.len == 4i64)
     assert(s[0] == 10)

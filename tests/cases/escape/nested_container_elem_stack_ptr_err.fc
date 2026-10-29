@@ -5,8 +5,8 @@
 let bad = () ->
     let mut x = 41
     x = x + 1
-    let inner = i32*[1] { &x }
-    let outer = ((i32*)[])[1] { inner }
+    let inner = i32*[] { &x }
+    let outer = ((i32*)[])[] { inner }
     outer[0][0]
 
 let main = (args: str[]) ->

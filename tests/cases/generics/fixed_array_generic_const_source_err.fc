@@ -6,8 +6,8 @@ struct g =
     d: 'a[1]
 
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[4] { })!
-    let ro = (const str[]) str[1] { buf }
+    let mut buf = alloc(u8[] { len = 4 })!
+    let ro = (const str[]) str[] { buf }
     let v = g { d = ro }
     let w = v.d[0]
     w[0] = 7u8

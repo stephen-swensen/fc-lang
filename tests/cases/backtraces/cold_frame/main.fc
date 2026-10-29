@@ -10,6 +10,6 @@ let probe = (xs: i32[], i: i32) ->
     xs[i] + 1
 
 let main = (args: str[]) ->
-    let xs = i32[2] { 10, 20 }
+    let xs = i32[] { 10, 20 }
     let _r = probe(xs, 5)
     0

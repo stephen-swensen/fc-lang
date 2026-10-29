@@ -5,9 +5,9 @@ struct book =
     titles: (const str)[]
 
 let main = (args: str[]) ->
-    let mut b = book { titles = const str[2] { "a", "bc" } }
+    let mut b = book { titles = (const str)[] { "a", "bc" } }
     b.titles[0] = "wxyz"
     assert(b.titles[0].len == 4)
-    b.titles = const str[1] { "z" }
+    b.titles = (const str)[] { "z" }
     assert(b.titles.len == 1)
     0

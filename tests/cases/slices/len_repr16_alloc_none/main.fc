@@ -4,7 +4,7 @@
 let main = (args: str[]) ->
     let mut n = 40000i64
     n = n + 0
-    match alloc(u8[n] { }) with
+    match alloc(u8[] { len = n }) with
     | some(s) ->
         free(s)
         1

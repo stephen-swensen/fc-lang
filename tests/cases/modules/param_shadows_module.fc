@@ -12,7 +12,7 @@ module net =
         (i32) data.len
 
 let main = (args: str[]) ->
-    let buf = u8[3] { 1u8, 2u8, 3u8 }
+    let buf = u8[] { 1u8, 2u8, 3u8 }
     assert(net.send(buf) == 3)
     assert(net.recv(buf) == 3)
     // Direct module access still works

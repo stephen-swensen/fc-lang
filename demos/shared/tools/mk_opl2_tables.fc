@@ -55,7 +55,7 @@ let main = (args: str[]) ->
     w("    // First-quadrant log-sin attenuation in fine units (1/16 env unit\n")
     w("    // = 0.01172 dB): logsin_table[i] attenuates a \"1.0\" reference to\n")
     w("    // |sin(x)| at x = (i + 0.5) * pi/512.\n")
-    w("    let logsin_table = i32[256]{\n")
+    w("    let logsin_table = i32[] { len = 256,\n")
     for i in 0..256 do
         if i % 8 == 0 then w("        ")
         let x = ((f64) i + 0.5) * pi / 512.0
@@ -67,7 +67,7 @@ let main = (args: str[]) ->
     w("    // Atten (1/16 env unit) -> linear amplitude scaled to op_peak:\n")
     w("    // gain_table[i] = op_peak * 10^(-i * 0.01172 / 20). Entries past\n")
     w("    // i = 6400 round to 0 (inaudibly quiet).\n")
-    w("    let gain_table = i32[16384]{\n")
+    w("    let gain_table = i32[] { len = 16384,\n")
     for i in 0..16384 do
         if i % 16 == 0 then w("        ")
         let atten_db = (f64) i * fine_unit_db
@@ -78,6 +78,6 @@ let main = (args: str[]) ->
     w("    // block -> 2^(block-1), the octave multiplier in the YM3812\n")
     w("    // frequency formula; fb -> 2^(9-fb), the feedback divisor. Exact\n")
     w("    // powers of two, written literally.\n")
-    w("    let block_scale = f64[8]{ 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0 }\n")
-    w("    let fb_div = f64[8]{ 512.0, 256.0, 128.0, 64.0, 32.0, 16.0, 8.0, 4.0 }\n")
+    w("    let block_scale = f64[] { 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0 }\n")
+    w("    let fb_div = f64[] { 512.0, 256.0, 128.0, 64.0, 32.0, 16.0, 8.0, 4.0 }\n")
     0

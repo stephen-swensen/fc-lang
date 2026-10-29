@@ -1,0 +1,6 @@
+// `str { ptr = .. }` over a const pointer needs the read-only head, as
+// `u8[] { .. }` does.
+let main = (args: str[]) ->
+    let cs = c"hello"
+    let s = str { ptr = cs, len = 5 }
+    (i32) s.len

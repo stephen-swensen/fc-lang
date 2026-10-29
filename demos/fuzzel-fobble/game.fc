@@ -540,7 +540,7 @@ module game =
         found
 
     let count_colors_in_play = (w: world*) ->
-        let mut seen = i32[6] { 0, 0, 0, 0, 0, 0 }
+        let mut seen = i32[] { 0, 0, 0, 0, 0, 0 }
         for i in 0..grid_cells do
             let v = w.grid[i]
             if is_color(v) then
@@ -793,7 +793,7 @@ module game =
     // Picks a colour for the launcher. Only colours actually on the board are
     // eligible — handing out a colour with nothing to match would be a dud shot.
     let pick_shot_color = (w: world*, rng: pcg_random*) ->
-        let mut avail = i32[6] { 0, 0, 0, 0, 0, 0 }
+        let mut avail = i32[] { 0, 0, 0, 0, 0, 0 }
         for i in 0..grid_cells do
             let v = w.grid[i]
             if is_color(v) then
@@ -1274,7 +1274,7 @@ module game =
         | some(hd) ->
             match io.open(alloca("%s{hd}/.fuzzel-fobble/highscore.txt"), "r") with
             | ok(fp) ->
-                let mut buf = u8[32] { }
+                let mut buf = u8[] { len = 32 }
                 let n = io.read(buf, 32, fp)
                 ignore io.close(fp)  // best-effort: contents already read
                 match text.parse_i32(text.trim((const str) buf[0..n])) with
@@ -1494,7 +1494,7 @@ module game =
     // thing here that can change what you are looking at.
     private let apply_save = (w: world*, r: pcg_random*, s: opl_audio.audio*,
                               src: const str) ->
-        let g = alloc(i32[grid_cells] { })!
+        let g = alloc(i32[] { len = grid_cells })!
         defer free(g)
         let mut st = default(game_state)
         let mut sh = default(shot)
@@ -1514,7 +1514,7 @@ module game =
             let line = text.trim(lines[li])
             if line.len == 0i64 || text.starts_with(line, "//") then
                 continue
-            let mut f = str[max_fields] { }
+            let mut f = str[] { len = max_fields }
             let n = words(line, f)
             if n == 0i64 then
                 continue
@@ -1690,13 +1690,13 @@ module game =
     // live inline in the struct and start zero-filled — alloc zero-fills.
     let create = (rng: pcg_random*) ->
         let w = alloc(world)!
-        w.grid = alloc(i32[grid_cells] { })!
-        w.mark = alloc(i32[grid_cells] { })!
-        w.anchor = alloc(i32[grid_cells] { })!
-        w.stack = alloc(i32[grid_cells] { })!
-        w.fallers = alloc(faller[max_fallers] { })!
-        w.particles = alloc(particle[max_particles] { })!
-        w.drifters = alloc(drifter[max_drifters] { })!
+        w.grid = alloc(i32[] { len = grid_cells })!
+        w.mark = alloc(i32[] { len = grid_cells })!
+        w.anchor = alloc(i32[] { len = grid_cells })!
+        w.stack = alloc(i32[] { len = grid_cells })!
+        w.fallers = alloc(faller[] { len = max_fallers })!
+        w.particles = alloc(particle[] { len = max_particles })!
+        w.drifters = alloc(drifter[] { len = max_drifters })!
 
         w.game.high_score = load_high_score()
         w.game.level = 1

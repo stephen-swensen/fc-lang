@@ -3,7 +3,7 @@ struct packet =
     id: i32
 
 let main = (args: str[]) ->
-    let src = u8[8] { 1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8 }
+    let src = u8[] { 1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8 }
     let p = alloc(packet { data = src, id = 42 })!
 
     assert(p.data[0] == 1u8)

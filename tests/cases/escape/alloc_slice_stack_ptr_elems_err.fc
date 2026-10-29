@@ -5,7 +5,7 @@
 // stack-use-after-return).
 let bad = () ->
     let mut x = 42
-    let ptrs = i32*[1] { &x }
+    let ptrs = i32*[] { &x }
     alloc(ptrs)!
 
 let clobber = (n: i32) ->

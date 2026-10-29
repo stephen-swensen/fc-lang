@@ -24,20 +24,20 @@ struct sized =
     data: i32['n]
 
 module m =
-    let exact = box { data = i32[3] { 1, 2, 3 } }
-    let shorter = box { data = i32[2] { 4, 5 } }
-    let zeroed = box { data = i32[3] { } }
-    let empty = box { data = i32[0] { } }
+    let exact = box { data = i32[] { 1, 2, 3 } }
+    let shorter = box { data = i32[] { 4, 5 } }
+    let zeroed = box { data = i32[] { len = 3 } }
+    let empty = box { data = i32[] { } }
     let dflt = box { data = default(i32[]) }
     let omitted = box { }
-    let nested = outer { inner = box { data = i32[1] { 6 } }, tag = 9 }
-    let boxes = box[2] { box { data = i32[3] { 7, 8, 9 } }, box { data = i32[1] { 10 } } }
-    let maybe = some(box { data = i32[2] { 11, 12 } })
-    let held = holder.full(box { data = i32[3] { 13, 14, 15 } })
-    let generic = gbox { data = u8[2] { 16u8, 17u8 } }
-    let const_sized = sized { w = default(wide<2>), data = i32[2] { 18, 19 } }
+    let nested = outer { inner = box { data = i32[] { 6 } }, tag = 9 }
+    let boxes = box[] { box { data = i32[] { 7, 8, 9 } }, box { data = i32[] { 10 } } }
+    let maybe = some(box { data = i32[] { 11, 12 } })
+    let held = holder.full(box { data = i32[] { 13, 14, 15 } })
+    let generic = gbox { data = u8[] { 16u8, 17u8 } }
+    let const_sized = sized { w = default(wide<2>), data = i32[] { 18, 19 } }
     let copy = exact
-    let mut writable = box { data = i32[1] { 20 } }
+    let mut writable = box { data = i32[] { 20 } }
 
 let sum = (b: box) -> b.data[0] + b.data[1] + b.data[2]
 

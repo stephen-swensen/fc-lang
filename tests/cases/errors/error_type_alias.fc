@@ -17,7 +17,7 @@ let main = (args: str[]) ->
     assert(sizeof(error) == 4)
 
     // slice of error codes
-    let codes = error[2]{ disk.full, 9 }
+    let codes = error[]{ disk.full, 9 }
     assert(codes[0] == disk.full)
     assert(codes[1] == 9)
 

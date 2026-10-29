@@ -38,7 +38,7 @@ let main = (args: str[]) ->
     assert(gen(2.5, 0) == 2.5)
 
     assert(apply((n: i32) -> n * 2, 5) == 10)
-    assert(each(i32[3] { 1, 2, 3 }, (n: i32) -> n * n) == 14)
+    assert(each(i32[] { 1, 2, 3 }, (n: i32) -> n * n) == 14)
 
     // Keyword-named bindings read from a deferred expression, which runs in a
     // separately emitted scope at block exit.

@@ -1,9 +1,9 @@
-// A slice literal's element type may start with `const`: `const str[2] { ... }`
-// is the only spelling that can hold string literals (`str[2] { "a" }` is
-// rejected, since a const str doesn't narrow to str). Regression: the
-// expression parser used to reject a const-prefixed slice-literal head.
+// A slice of string literals is written `(const str)[] { ... }`, slots holding
+// read-only views; `str[] { "a" }` is rejected, since a const str doesn't
+// narrow to str, and `const str[] { "a" }` is the read-only slice type, which
+// a literal that creates storage cannot have (slices/const_head_storage_err).
 let main = (args: str[]) ->
-    let names = const str[2] { "a", "bc" }
+    let names = (const str)[] { "a", "bc" }
     assert(names.len == 2)
     assert(names[1].len == 2)
     0

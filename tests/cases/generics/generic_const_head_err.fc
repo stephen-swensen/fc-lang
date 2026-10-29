@@ -1,0 +1,7 @@
+// The read-only head on a literal with a type-variable element type.
+let wrap = (x: 'a) ->
+    let one = const 'a[] { x }
+    one.len
+
+let main = (args: str[]) ->
+    (i32) wrap(3)

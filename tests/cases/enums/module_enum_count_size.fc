@@ -27,8 +27,8 @@ struct tables =
     sum: u8[gfx.mode.count + gfx.deep.chan.count]
 
 let main = (args: str[]) ->
-    let names = i32[gfx.mode.count]{ 10, 20, 30 }
-    let deep = i32[gfx.deep.chan.count]{ 1, 2, 3, 4 }
+    let names = i32[] { len = gfx.mode.count, 10, 20, 30 }
+    let deep = i32[] { len = gfx.deep.chan.count, 1, 2, 3, 4 }
     let t = tables { }
     assert(names[1] == 20)
     assert(deep[3] == 4)

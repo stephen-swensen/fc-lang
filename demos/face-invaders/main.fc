@@ -1061,7 +1061,7 @@ let load_high_score = () ->
     | some(hd) ->
         match io.open(alloca("%s{hd}/.face-invaders/highscore.txt"), "r") with
         | ok(fp) ->
-            let mut buf = u8[32] { }
+            let mut buf = u8[] { len = 32 }
             let n = io.read(buf, 32, fp)
             ignore io.close(fp)  // best-effort: contents already read
             // parse only the bytes read, minus the trailing newline —
@@ -1289,11 +1289,11 @@ let main = (args: str[]) ->
     // The game_state field lives inline inside the world struct
     // and starts zero-filled (alloc zero-fills heap allocations).
     let w = alloc(world)!
-    w.enemies = alloc(enemy[55] { })!
-    w.bullets = alloc(bullet[64] { })!
-    w.stars = alloc(star[120] { })!
-    w.particles = alloc(particle[256] { })!
-    w.bunker_bitmaps = alloc(i32[40] { })!
+    w.enemies = alloc(enemy[] { len = 55 })!
+    w.bullets = alloc(bullet[] { len = 64 })!
+    w.stars = alloc(star[] { len = 120 })!
+    w.particles = alloc(particle[] { len = 256 })!
+    w.bunker_bitmaps = alloc(i32[] { len = 40 })!
 
     // Audio setup
     let desired = default(audio_spec)

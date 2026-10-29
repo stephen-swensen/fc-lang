@@ -1,5 +1,5 @@
-// Test: slice literal with fewer elements than declared length is rejected
+// Test: slice literal with fewer elements than its len is rejected
 // (would otherwise leave trailing elements uninitialized)
 let main = (args: str[]) ->
-    let buf = i32[3] { 7, 8 }
+    let buf = i32[] { len = 3, 7, 8 }
     (i32) buf.len

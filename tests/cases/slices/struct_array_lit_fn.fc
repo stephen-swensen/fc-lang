@@ -10,6 +10,6 @@ let sum_x = (pts: point[]) ->
     total
 
 let main = (args: str[]) ->
-    let arr = point[3] { point { x = 10, y = 0 }, point { x = 20, y = 0 }, point { x = 12, y = 0 } }
+    let arr = point[] { point { x = 10, y = 0 }, point { x = 20, y = 0 }, point { x = 12, y = 0 } }
     assert(sum_x(arr) == 42)
     0

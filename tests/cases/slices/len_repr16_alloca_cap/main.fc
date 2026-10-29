@@ -3,5 +3,5 @@
 let main = (args: str[]) ->
     let mut n = 40000i64
     n = n + 0
-    let s = alloca(u8[n] { })
+    let s = alloca(u8[] { len = n })
     (i32) s.len

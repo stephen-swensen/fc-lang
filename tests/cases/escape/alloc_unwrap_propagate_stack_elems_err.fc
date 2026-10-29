@@ -4,7 +4,7 @@
 // provenance and the stack pointers escaped (ASan: stack-use-after-return).
 let bad = () ->
     let mut x = 42
-    let ptrs = i32*[1] { &x }
+    let ptrs = i32*[] { &x }
     let o = some(ptrs)
     let s = o?
     alloc(s)

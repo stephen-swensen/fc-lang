@@ -5,8 +5,8 @@ struct holder =
     s: str
 
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[2] { })!
-    let ro = (const holder[]) holder[1] { holder { s = buf } }
+    let mut buf = alloc(u8[] { len = 2 })!
+    let ro = (const holder[]) holder[] { holder { s = buf } }
     let q = ro[0]
     q.s[0] = 5u8
     (i32) buf[0]

@@ -4,7 +4,7 @@
 // checking its captures, so calling the closure after make() returned read a
 // dead frame (ASan: stack-use-after-return).
 let make = () ->
-    let buf = i32[2] { 7, 8 }
+    let buf = i32[] { 7, 8 }
     alloc(() -> buf[0])!
 
 let main = (args: str[]) ->

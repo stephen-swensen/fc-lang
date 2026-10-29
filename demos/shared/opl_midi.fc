@@ -509,11 +509,11 @@ module opl_midi =
             // encoding that yields an event is two bytes — a running-status
             // program change — so half a track's byte length, plus one, can
             // never be exceeded.
-            let offs = alloc(i64[ntracks] {})!
-            let caps = alloc(i64[ntracks] {})!
-            let cnts = alloc(i64[ntracks] {})!
-            let starts = alloc(i64[ntracks] {})!
-            let lens = alloc(i64[ntracks] {})!
+            let offs = alloc(i64[] { len = ntracks })!
+            let caps = alloc(i64[] { len = ntracks })!
+            let cnts = alloc(i64[] { len = ntracks })!
+            let starts = alloc(i64[] { len = ntracks })!
+            let lens = alloc(i64[] { len = ntracks })!
             defer free(lens)
             defer free(starts)
             defer free(cnts)
@@ -538,7 +538,7 @@ module opl_midi =
                     ti = ti + 1i64
                 skip(r, clen)
             // Pass two: decode. One scratch buffer, laid out track by track.
-            let scratch = alloc(event[total_cap] {})!
+            let scratch = alloc(event[] { len = total_cap })!
             defer free(scratch)
             let mut length = 0
             let mut bad = false
@@ -561,8 +561,8 @@ module opl_midi =
                 let mut total = 0i64
                 for i in 0i64..ntracks do
                     total = total + cnts[i]
-                let events = alloc(event[total] {})!
-                let cur = alloc(i64[ntracks] {})!
+                let events = alloc(event[] { len = total })!
+                let cur = alloc(i64[] { len = ntracks })!
                 defer free(cur)
                 for k in 0i64..total do
                     let mut pick = -1i64
@@ -681,9 +681,9 @@ module opl_midi =
     // such a bank plays its whole kit on melodic voices — correctly, just
     // without the chip's noise generator. Allocated rather than left null so
     // that `free_bank` needs no special case.
-    private let no_rhythm = () -> alloc(patch[0] {})!
+    private let no_rhythm = () -> alloc(patch[] { })!
     private let no_rhythm_map = () ->
-        let m = alloc(i32[128] {})!
+        let m = alloc(i32[] { len = 128 })!
         for i in 0..128 do
             m[i] = -1
         m
@@ -692,9 +692,9 @@ module opl_midi =
     // the single voice the file contained. Auditioning one patch is what that
     // format is for.
     private let bank_of_one = (pt: patch) ->
-        let ps = alloc(patch[1] { pt })!
-        let mel = alloc(i32[128] {})!
-        let drm = alloc(i32[128] {})!
+        let ps = alloc(patch[] { pt })!
+        let mel = alloc(i32[] { len = 128 })!
+        let drm = alloc(i32[] { len = 128 })!
         for i in 0..128 do
             mel[i] = 0
             drm[i] = 0
@@ -720,9 +720,9 @@ module opl_midi =
             for i in 0..175 do
                 if ((i32) bytes[8i64 + (i64) i * 36i64] & 4) != 0 then
                     extra = extra + 1
-            let ps = alloc(patch[175i64 + (i64) extra] {})!
-            let mel = alloc(i32[128] {})!
-            let drm = alloc(i32[128] {})!
+            let ps = alloc(patch[] { len = 175i64 + (i64) extra })!
+            let mel = alloc(i32[] { len = 128 })!
+            let drm = alloc(i32[] { len = 128 })!
             let mut nx = 175
             for i in 0..175 do
                 let rec = 8i64 + (i64) i * 36i64
@@ -769,9 +769,9 @@ module opl_midi =
         if bytes.len < 4i64 + 128i64 * 16i64 then err(bank, smf.bad_bank)
         else
             let mut r = make_reader(bytes)
-            let ps = alloc(patch[128] {})!
-            let mel = alloc(i32[128] {})!
-            let drm = alloc(i32[128] {})!
+            let ps = alloc(patch[] { len = 128 })!
+            let mel = alloc(i32[] { len = 128 })!
+            let drm = alloc(i32[] { len = 128 })!
             for i in 0..128 do
                 let v = 4i64 + (i64) i * 16i64
                 let mut pt = patch_interleaved(&r, v)
@@ -913,11 +913,11 @@ module opl_midi =
         for i in 0..256 do
             if wopl_is_dual((i32) bytes[entry(i) + 39i64]) then
                 extra = extra + 1
-        let ps = alloc(patch[256i64 + (i64) extra] {})!
-        let mel = alloc(i32[128] {})!
-        let drm = alloc(i32[128] {})!
-        let rmap = alloc(i32[128] {})!
-        let rh = alloc(patch[5] {})!
+        let ps = alloc(patch[] { len = 256i64 + (i64) extra })!
+        let mel = alloc(i32[] { len = 128 })!
+        let drm = alloc(i32[] { len = 128 })!
+        let rmap = alloc(i32[] { len = 128 })!
+        let rh = alloc(patch[] { len = 5 })!
         for i in 0..128 do
             mel[i] = i
             drm[i] = 128 + i
@@ -1045,7 +1045,7 @@ module opl_midi =
     // Equal: the comma spread evenly, every fifth 2 cents narrow, every third
     // 14 cents wide, every key identical. Here as the neutral element and as
     // the thing to A/B against.
-    private let cents_equal = f64[12] {
+    private let cents_equal = f64[] { len = 12,
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }
 
     // Werckmeister III (1691) — Andreas Werckmeister's "correct temperament
@@ -1053,7 +1053,7 @@ module opl_midi =
     // Four fifths (C-G, G-D, D-A, B-F#) narrow by a quarter comma each, the
     // other eight pure. C, F and G major come out calm, the sharp keys
     // Pythagorean and bright.
-    private let cents_werckmeister3 = f64[12] {
+    private let cents_werckmeister3 = f64[] { len = 12,
          0.000,  -9.775,  -7.820,  -5.865,  -9.775,  -1.955,
        -11.730,  -3.910,  -7.820, -11.730,  -3.910,  -7.820 }
 
@@ -1062,7 +1062,7 @@ module opl_midi =
     // is the strongest claim any of these has to being the actual tuning.
     // C-G-D-A-E narrow by a quarter of the *syntonic* comma, so C-E is a pure
     // major third; F#-C# absorbs the leftover schisma; the rest are pure.
-    private let cents_kirnberger3 = f64[12] {
+    private let cents_kirnberger3 = f64[] { len = 12,
          0.000,  -9.775,  -6.843,  -5.865, -13.686,  -1.955,
         -9.776,  -3.422,  -7.820, -10.265,  -3.910, -11.731 }
 
@@ -1070,14 +1070,14 @@ module opl_midi =
     // sixth of a comma; the other six pure. The gentlest of the four and the
     // one most used by modern period ensembles, because it flatters
     // everything and offends nothing.
-    private let cents_vallotti = f64[12] {
+    private let cents_vallotti = f64[] { len = 12,
          0.000,  -5.865,  -3.910,  -1.955,  -7.820,   1.955,
         -7.820,  -1.955,  -3.910,  -5.865,   0.000,  -9.775 }
 
     // Young II (1800) — Vallotti rotated one fifth sharper, so the six
     // narrowed fifths run C through F#. Same recipe, key colours shifted:
     // the sharp side pays a little more and the flat side a little less.
-    private let cents_young2 = f64[12] {
+    private let cents_young2 = f64[] { len = 12,
          0.000,  -9.775,  -3.910,  -5.865,  -7.820,  -1.955,
        -11.730,  -1.955,  -7.820,  -5.865,  -3.910,  -9.775 }
 
@@ -1088,7 +1088,7 @@ module opl_midi =
     // gorgeous in C, G, D, F and Bb and it is *why* well temperament was
     // invented: half the notebook — the E flat march, the C minor minuet —
     // reaches keys this tuning cannot play.
-    private let cents_meantone = f64[12] {
+    private let cents_meantone = f64[] { len = 12,
          0.000, -23.951,  -6.843,  10.265, -13.686,   3.422,
        -20.529,  -3.422, -27.373, -10.265,   6.843, -17.108 }
 
@@ -1110,7 +1110,7 @@ module opl_midi =
     // one that is a demonstration rather than an option. `temperament_named`
     // reads this, and so should anything that wants to list or cycle them —
     // it is the one place the set is written down.
-    let temperaments = temperament[6] {
+    let temperaments = temperament[] { len = 6,
         equal, werckmeister3, kirnberger3, vallotti, young2, meantone }
 
     // Look one up by the name it carries, for a command-line flag or a

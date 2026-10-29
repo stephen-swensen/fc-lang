@@ -13,9 +13,9 @@ let read_only_val = (s: const 'a[]) ->
 let main = (args: str[]) ->
     let mut x = 1
     let cx = (const i32*) &x
-    let ps = const i32*[2] { cx, cx }
+    let ps = (const i32*)[] { cx, cx }
 
     assert(elem_const(ps) == 2)
     assert(read_only(ps) == 2)
-    assert(read_only_val(const str[3] { "a", "bc", "def" }) == 3)
+    assert(read_only_val((const str)[] { "a", "bc", "def" }) == 3)
     0

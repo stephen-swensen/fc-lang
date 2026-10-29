@@ -1,0 +1,1 @@
+write 'u8[] { len = 256 }' for 256 zero-initialized elements

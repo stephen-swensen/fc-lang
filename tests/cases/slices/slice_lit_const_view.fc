@@ -1,0 +1,30 @@
+// A read-only view is written with the read-only slice type as the head,
+// `const T[] { ptr = .., len = .. }` (or `const str { .. }`), and takes a T*
+// or a const T*. The result is a const T[], as the head says.
+let total = (xs: const i32[]) ->
+    let mut sum = 0
+    for x in xs do
+        sum = sum + x
+    sum
+
+let first = <'n>(p: const 'a*) ->
+    let v = const 'a[] { ptr = p, len = 'n }
+    v[0]
+
+let main = (args: str[]) ->
+    let mut nums = i32[] { 1, 2, 3, 4 }
+    let ro = const i32[] { ptr = nums.ptr, len = 3 }
+    assert(total(ro) == 6)
+
+    let p = (const i32*) nums.ptr
+    let ro2 = const i32[] { len = 2, ptr = p }
+    assert(total(ro2) == 3)
+
+    let greeting = const str { ptr = c"hello", len = 5 }
+    assert(greeting == "hello")
+    let bytes = const u8[] { ptr = c"hey", len = 3 }
+    assert(bytes[2] == 121u8)
+
+    assert(first<2>(p) == 1)
+    assert(first<1>(c"z") == 122u8)
+    0

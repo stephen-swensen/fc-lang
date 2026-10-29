@@ -1449,7 +1449,7 @@ module game =
         | some(hd) ->
             match io.open(alloca("%s{hd}/.fario/%s{path_tail}"), "r") with
             | ok(fp) ->
-                let mut buf = u8[32] { }
+                let mut buf = u8[] { len = 32 }
                 let n = io.read(buf, 32, fp)
                 ignore io.close(fp)  // best-effort: contents already read
                 match text.parse_i32(text.trim((const str) buf[0..n])) with
@@ -1616,9 +1616,9 @@ module game =
         let mut seen = false
         let mut hold = false
         let mut grid_rows = 0
-        let g = alloc(u8[rows * max_level_w] { })!
+        let g = alloc(u8[] { len = rows * max_level_w })!
         defer free(g)
-        let scratch = alloc(ent[max_ents] { })!
+        let scratch = alloc(ent[] { len = max_ents })!
         defer free(scratch)
         let mut n_scratch = 0
         let mut lw = 0
@@ -1629,7 +1629,7 @@ module game =
             let line = text.trim(lines[li])
             if line.len == 0i64 || text.starts_with(line, "//") then
                 continue
-            let mut f = str[max_fields] { }
+            let mut f = str[] { len = max_fields }
             let n = words(line, f)
             if n == 0i64 then
                 continue
@@ -1813,13 +1813,13 @@ module game =
 
     let create = (rng: pcg_random*) ->
         let w = alloc(world)!
-        w.tiles = alloc(u8[rows * max_level_w] { })!
-        w.ents = alloc(ent[max_ents] { })!
-        w.fireballs = alloc(fireball[max_fire] { })!
-        w.particles = alloc(particle[max_particles] { })!
-        w.popups = alloc(popup[max_popups] { })!
-        w.coin_pops = alloc(coin_pop[max_coin_pops] { })!
-        w.bg_dirty = alloc(i32[max_bg_dirty] { })!
+        w.tiles = alloc(u8[] { len = rows * max_level_w })!
+        w.ents = alloc(ent[] { len = max_ents })!
+        w.fireballs = alloc(fireball[] { len = max_fire })!
+        w.particles = alloc(particle[] { len = max_particles })!
+        w.popups = alloc(popup[] { len = max_popups })!
+        w.coin_pops = alloc(coin_pop[] { len = max_coin_pops })!
+        w.bg_dirty = alloc(i32[] { len = max_bg_dirty })!
         w.bg_all = true
 
         w.game.high_score = load_high_score()

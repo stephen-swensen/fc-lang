@@ -1,0 +1,19 @@
+// `str { ... }` is the slice literal with the slice type str (u8[]) as its
+// head, in all of its forms: elements, a zero-initialized len, the empty
+// slice, and a view of raw parts.
+let main = (args: str[]) ->
+    let hi = str { 104u8, 105u8 }
+    assert(hi == "hi")
+
+    let mut buf = str { len = 3 }
+    assert(buf.len == 3 && buf[2] == 0u8)
+    buf[0] = 120u8
+    assert(buf[0] == 120u8)
+
+    let none_yet = str { }
+    assert(none_yet.len == 0)
+
+    let mut backing = u8[] { 97u8, 98u8, 99u8 }
+    let view = str { ptr = backing.ptr, len = 2 }
+    assert(view == "ab")
+    0

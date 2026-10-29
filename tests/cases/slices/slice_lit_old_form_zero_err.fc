@@ -1,0 +1,5 @@
+// The old zero-initialized spelling: the error spells the replacement with
+// the written length.
+let main = (args: str[]) ->
+    let buf = u8[256] { }
+    (i32) buf.len

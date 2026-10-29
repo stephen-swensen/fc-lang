@@ -69,7 +69,7 @@ let main = (args: str[]) ->
     let mut out_file = ""
     let mut body_data = ""
     let mut url_arg = ""
-    let mut custom_hdrs = str[16] {}
+    let mut custom_hdrs = str[] { len = 16 }
     let mut num_hdrs = 0
 
     let mut i = 1
@@ -179,10 +179,10 @@ let main = (args: str[]) ->
     | err(e) -> return fail("failed to send request", e)
 
     // --- Read response ---
-    let mut header_buf = u8[8192] {}
+    let mut header_buf = u8[] { len = 8192 }
     let mut header_len = 0i64
     let mut in_headers = true
-    let mut recv_buf = u8[4096] {}
+    let mut recv_buf = u8[] { len = 4096 }
 
     // Output handle
     let mut out = stdout

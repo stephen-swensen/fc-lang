@@ -1,5 +1,5 @@
 // Negative space of the slice-literal head scan: an index, a comparison, and a
-// comparison-then-index keep their ordinary readings — only `type [ ... ] {`
+// comparison-then-index keep their ordinary readings — only `type [] {`
 // (a brace directly after the closing bracket) is a slice literal.
 struct box =
     v: i32
@@ -7,7 +7,7 @@ struct box =
 let id = (x: i32) -> x
 
 let main = (args: str[]) ->
-    let xs = i32[3] { 1, 2, 3 }
+    let xs = i32[] { 1, 2, 3 }
     let a = 0
     let b = 2
     assert(a < xs[b])

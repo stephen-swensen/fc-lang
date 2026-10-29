@@ -31,7 +31,7 @@ let main = (args: str[]) ->
     // New name should be readable
     match io.open(dst, "r") with
     | ok(rf) ->
-        let mut buf = u8[16] {}
+        let mut buf = u8[] { len = 16 }
         let n = io.read(buf, 16, rf)
         assert(n == 4i64)
         io.close(rf)!

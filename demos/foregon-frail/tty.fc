@@ -62,11 +62,11 @@ module tty =
 
     let make = () ->
         let p = alloc(printout {
-            rows = alloc(u8[(i64) (keep * cols)] {})!,
-            lens = alloc(i32[(i64) keep] {})!,
-            cues = alloc(i32[(i64) keep] {})!,
-            fired = alloc(i32[8] {})!,
-            entry = alloc(u8[(i64) entry_cap] {})! })!
+            rows = alloc(u8[] { len = (i64) (keep * cols) })!,
+            lens = alloc(i32[] { len = (i64) keep })!,
+            cues = alloc(i32[] { len = (i64) keep })!,
+            fired = alloc(i32[] { len = 8 })!,
+            entry = alloc(u8[] { len = (i64) entry_cap })! })!
         p
 
     // Forget everything on the paper — a new journey on a fresh roll.

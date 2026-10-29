@@ -178,9 +178,10 @@ static int skip_group(Parser *p, int off, TokenKind open, TokenKind close) {
     return off;
 }
 
-/* Whether `[ ... ] {` starts at `off`: the size (or empty brackets) and the
- * opening brace of a slice literal. Nothing else puts a brace after a closing
- * ']' in expression position, which is what separates a literal from indexing. */
+/* Whether `[ ... ] {` starts at `off`: the brackets and opening brace of a
+ * slice literal, `[] {`, or of the length-in-brackets spelling that
+ * parse_array_lit_body reports. Nothing else puts a brace after a closing ']'
+ * in expression position, which is what separates a literal from indexing. */
 static bool at_slice_lit_brackets(Parser *p, int off) {
     return peek_at(p, off)->kind == TOK_LBRACKET &&
            peek_at(p, skip_group(p, off, TOK_LBRACKET, TOK_RBRACKET))->kind == TOK_LBRACE;
@@ -763,38 +764,30 @@ static Type *parse_type_suffix(Parser *p, Type *base) {
     return base;
 }
 
+/* Can `const` apply to t: a pointer or slice, or an option or result of one? */
+static bool const_applies(const Type *t) {
+    if (t->kind == TYPE_OPTION) t = t->option.inner;
+    else if (t->kind == TYPE_RESULT) t = t->result.inner;
+    return t && (t->kind == TYPE_POINTER || t->kind == TYPE_SLICE ||
+                 t->kind == TYPE_ANY_PTR);
+}
+
 static Type *apply_const(Arena *a, Type *inner, SrcLoc loc) {
-    if (inner->kind == TYPE_POINTER || inner->kind == TYPE_SLICE ||
-        inner->kind == TYPE_ANY_PTR) {
-        Type *c = arena_alloc(a, sizeof(Type));
-        *c = *inner;
-        c->is_const = true;
-        return c;
+    if (!const_applies(inner)) {
+        diag_error(loc, "'const' can only modify pointer (*) or slice ([]) types, got %s",
+                   type_name(inner));
+        return type_error();
     }
-    if (inner->kind == TYPE_OPTION &&
-        inner->option.inner &&
-        (inner->option.inner->kind == TYPE_POINTER ||
-         inner->option.inner->kind == TYPE_SLICE ||
-         inner->option.inner->kind == TYPE_ANY_PTR)) {
+    if (inner->kind == TYPE_OPTION || inner->kind == TYPE_RESULT) {
         Type *ci = arena_alloc(a, sizeof(Type));
-        *ci = *inner->option.inner;
+        *ci = inner->kind == TYPE_OPTION ? *inner->option.inner : *inner->result.inner;
         ci->is_const = true;
-        Type *opt = type_option(a, ci);
-        return opt;
+        return inner->kind == TYPE_OPTION ? type_option(a, ci) : type_result(a, ci);
     }
-    if (inner->kind == TYPE_RESULT &&
-        inner->result.inner &&
-        (inner->result.inner->kind == TYPE_POINTER ||
-         inner->result.inner->kind == TYPE_SLICE ||
-         inner->result.inner->kind == TYPE_ANY_PTR)) {
-        Type *ci = arena_alloc(a, sizeof(Type));
-        *ci = *inner->result.inner;
-        ci->is_const = true;
-        return type_result(a, ci);
-    }
-    diag_error(loc, "'const' can only modify pointer (*) or slice ([]) types, got %s",
-               type_name(inner));
-    return type_error();
+    Type *c = arena_alloc(a, sizeof(Type));
+    *c = *inner;
+    c->is_const = true;
+    return c;
 }
 
 static Type *parse_type(Parser *p) {
@@ -1667,10 +1660,10 @@ static int scan_type_head(Parser *p) {
     return off;
 }
 
-/* Is a slice literal, `type_expr [ size ] { ... }` or `type_expr [] { ... }`,
- * starting at the current token? The '{' after the matching ']' separates a
- * literal from indexing (`xs[i]`) or a comparison chain, neither of which is
- * followed by a brace here.
+/* Is a slice literal, `type_expr [] { ... }` (or the reported
+ * `type_expr [ size ] { ... }`), starting at the current token? The '{' after
+ * the matching ']' separates a literal from indexing (`xs[i]`) or a comparison
+ * chain, neither of which is followed by a brace here.
  *
  * This decides only the shape; parse_type then parses the element type (const,
  * dotted names, type and const arguments, the ? * ! suffixes). The two agree
@@ -1683,45 +1676,20 @@ static bool at_slice_literal(Parser *p) {
     return off >= 0 && at_slice_lit_brackets(p, off);
 }
 
-/* The fields of a raw-parts slice literal, after its '{': `ptr = e, len = e`
- * in either order, through the closing '}'. */
-static Expr *parse_raw_slice_fields(Parser *p, Type *elem_type, SrcLoc loc) {
-    Expr *ptr_val = NULL, *len_val = NULL;
-    while (!check(p, TOK_RBRACE) && !at_end_p(p)) {
-        int guard = p->pos;
-        Token *name = expect(p, TOK_IDENT);
-        expect(p, TOK_EQ);
-        Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
-        if (name->kind == TOK_IDENT) {
-            const char *fn = tok_intern(p, name);
-            if (strcmp(fn, "ptr") == 0) ptr_val = val;
-            else if (strcmp(fn, "len") == 0) len_val = val;
-            else diag_error(loc_from_token(name),
-                            "slice literal field must be 'ptr' or 'len', got '%s'", fn);
-        }
-        if (check(p, TOK_COMMA)) advance_p(p);
-        recover_progress(p, guard);
-    }
-    expect(p, TOK_RBRACE);
-    if (!ptr_val || !len_val) {
-        diag_error(loc, "slice literal requires both 'ptr' and 'len' fields");
-        return alloc_expr_error(p, loc);
-    }
-    Expr *e = alloc_expr(p, EXPR_SLICE_LIT, loc);
-    e->slice_lit.elem_type = elem_type;
-    e->slice_lit.ptr_expr = ptr_val;
-    e->slice_lit.len_expr = len_val;
-    return e;
-}
-
-/* The elements of a slice literal, after its '{': `e, e, ...` with an
- * optional trailing comma, through the closing '}'. */
+/* The elements of a slice literal, after its '{' and any `len =`: `e, e, ...`
+ * with an optional trailing comma, through the closing '}'. */
 static Expr **parse_slice_elems(Parser *p, int *count) {
     Expr **elems = NULL;
     int n = 0, cap = 0;
     while (!check(p, TOK_RBRACE)) {
         Expr *elem = parse_bracketed_expr(p, PREC_NONE + 1);
         DA_APPEND(elems, n, cap, elem);
+        if (elem->kind == EXPR_ASSIGN && elem->assign.target->kind == EXPR_IDENT) {
+            const char *fn = elem->assign.target->ident.name;
+            if (strcmp(fn, "len") == 0 || strcmp(fn, "ptr") == 0)
+                diag_error(elem->loc, "a slice literal's '%s' comes before its "
+                           "elements", fn);
+        }
         if (!check(p, TOK_COMMA)) break;
         advance_p(p);
     }
@@ -1732,33 +1700,138 @@ static Expr **parse_slice_elems(Parser *p, int *count) {
     return copy;
 }
 
-/* Parse the rest of a slice literal, from its '[', given the already-parsed
- * element type:
- *   T[]  { ptr = expr, len = expr }   raw parts: EXPR_SLICE_LIT
- *   T[N] { e0, e1, ... }              elements:  EXPR_ARRAY_LIT
- * Shared by the IDENT-typed and tuple-typed literal paths. */
-static Expr *parse_array_lit_body(Parser *p, Type *elem_type, SrcLoc loc) {
-    expect(p, TOK_LBRACKET);
+/* The braces of a slice literal whose head `T[]` has been parsed, from the
+ * '{' through the matching '}'. The head is the slice type the literal
+ * yields; the braces say what it holds:
+ *   { }                    the empty slice             EXPR_ARRAY_LIT
+ *   { e0, e1, ... }        elements, length counted    EXPR_ARRAY_LIT
+ *   { len = n }            n zero-initialized elements EXPR_ARRAY_LIT
+ *   { len = n, e0, ... }   elements, exactly n of them EXPR_ARRAY_LIT
+ *   { ptr = p, len = n }   a view of n elements at p   EXPR_SLICE_LIT
+ * The named fields come first. `const_head` says the head was written
+ * `const T[]`, the read-only slice type, which only a view can have: the other
+ * forms create storage, and the slots they create are writable. */
+static Expr *parse_slice_lit_braces(Parser *p, Type *elem_type, SrcLoc loc,
+                                    bool const_head) {
+    expect(p, TOK_LBRACE);
+    Expr *ptr_val = NULL, *len_val = NULL;
+    bool more = true;   /* no field yet, or the last one ended with ',' */
+    while (more && check(p, TOK_IDENT) && peek_at(p, 1)->kind == TOK_EQ) {
+        Token *name = advance_p(p);
+        advance_p(p); /* = */
+        Expr *val = parse_bracketed_expr(p, PREC_NONE + 1);
+        const char *fn = tok_intern(p, name);
+        Expr **slot = strcmp(fn, "ptr") == 0 ? &ptr_val
+                    : strcmp(fn, "len") == 0 ? &len_val : NULL;
+        if (!slot)
+            diag_error(loc_from_token(name),
+                       "slice literal field must be 'ptr' or 'len', got '%s'", fn);
+        else if (*slot)
+            diag_error(loc_from_token(name), "slice literal field '%s' given twice", fn);
+        else
+            *slot = val;
+        more = check(p, TOK_COMMA);
+        if (more) advance_p(p);
+    }
+    int elem_count = 0;
+    Expr **elems = NULL;
+    if (!more || check(p, TOK_RBRACE))
+        expect(p, TOK_RBRACE);
+    else
+        elems = parse_slice_elems(p, &elem_count);
 
-    /* T[] { ptr = expr, len = expr }: slice construction from raw parts */
+    if (ptr_val) {
+        if (elem_count > 0) {
+            diag_error(elems[0]->loc, "a slice literal with 'ptr' is a view of "
+                       "existing elements and lists none of its own");
+            return alloc_expr_error(p, loc);
+        }
+        if (!len_val) {
+            diag_error(loc, "slice literal with 'ptr' requires 'len'");
+            return alloc_expr_error(p, loc);
+        }
+        Expr *e = alloc_expr(p, EXPR_SLICE_LIT, loc);
+        e->slice_lit.elem_type = elem_type;
+        e->slice_lit.ptr_expr = ptr_val;
+        e->slice_lit.len_expr = len_val;
+        e->slice_lit.is_const = const_head;
+        return e;
+    }
+    if (const_head) {
+        const char *en = type_name(elem_type);
+        if (const_applies(elem_type))
+            diag_error(loc, "a slice literal creates writable slots, so its type "
+                       "cannot be the read-only slice 'const %s[]'; for slots "
+                       "holding read-only views write '(const %s)[] { ... }'", en, en);
+        else
+            diag_error(loc, "a slice literal creates writable slots, so its type "
+                       "cannot be the read-only slice 'const %s[]'; write "
+                       "'%s[] { ... }', which converts to 'const %s[]'", en, en, en);
+    }
+    Expr *size = len_val;
+    if (!size) {
+        size = alloc_expr(p, EXPR_INT_LIT, loc);
+        size->int_lit.value = (uint64_t) elem_count;
+        size->int_lit.lit_type = type_int32();
+    }
+    Expr *e = alloc_expr(p, EXPR_ARRAY_LIT, loc);
+    e->array_lit.elem_type = elem_type;
+    e->array_lit.size_expr = size;
+    e->array_lit.elems = elems;
+    e->array_lit.elem_count = elem_count;
+    return e;
+}
+
+/* Parse the rest of a slice literal, from its '[', given the already-parsed
+ * element type: `[]` and the braces (parse_slice_lit_braces). Shared by every
+ * literal head. */
+static Expr *parse_array_lit_body(Parser *p, Type *elem_type, SrcLoc loc,
+                                  bool const_head) {
+    expect(p, TOK_LBRACKET);
     if (check(p, TOK_RBRACKET)) {
-        advance_p(p); /* consume ] */
-        expect(p, TOK_LBRACE);
-        return parse_raw_slice_fields(p, elem_type, loc);
+        advance_p(p);
+        return parse_slice_lit_braces(p, elem_type, loc, const_head);
     }
 
+    /* T[N] { ... }: T[N] is the fixed-array type, never a literal head. Name
+     * the spellings that are, then read on as if the length were a `len`. */
+    Token *first = current(p);
     Expr *size_expr = parse_bracketed_expr(p, PREC_NONE + 1);
+    Token *last = p->pos > 0 ? &p->tokens[p->pos - 1] : first;
+    int text_len = (int) (last->start + last->length - first->start);
+    const char *en = type_name(elem_type);
+    diag_error(size_expr->loc,
+               "a slice literal's length goes inside its braces ('%s[%.*s]' is the "
+               "fixed-array type): write '%s[] { len = %.*s }' for %.*s "
+               "zero-initialized elements, or '%s[] { e0, e1, ... }' to list them",
+               en, text_len, first->start, en, text_len, first->start,
+               text_len, first->start, en);
     expect(p, TOK_RBRACKET);
     expect(p, TOK_LBRACE);
-
     int elem_count;
     Expr **elems = parse_slice_elems(p, &elem_count);
-
     Expr *e = alloc_expr(p, EXPR_ARRAY_LIT, loc);
     e->array_lit.elem_type = elem_type;
     e->array_lit.size_expr = size_expr;
     e->array_lit.elems = elems;
     e->array_lit.elem_count = elem_count;
+    return e;
+}
+
+/* An alloc/alloca operand that is a zero-initialized slice literal with a
+ * runtime length, `alloc(T[] { len = n })`, allocates n elements: it becomes
+ * alloc_type T with size_expr n, since only the heap and the dynamic stack can
+ * hold a runtime-sized slice. Any other operand is the initializer. */
+static Expr *alloc_of_operand(Parser *p, Expr *init, bool is_stack, SrcLoc loc) {
+    Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
+    e->alloc_expr.is_stack = is_stack;
+    if (init->kind == EXPR_ARRAY_LIT && init->array_lit.elem_count == 0 &&
+        init->array_lit.size_expr->kind != EXPR_INT_LIT) {
+        e->alloc_expr.alloc_type = init->array_lit.elem_type;
+        e->alloc_expr.size_expr = init->array_lit.size_expr;
+        return e;
+    }
+    e->alloc_expr.init_expr = init;
     return e;
 }
 
@@ -1769,23 +1842,23 @@ static Expr *parse_alloc(Parser *p, SrcLoc loc) {
     advance_p(p);
     expect(p, TOK_LPAREN);
 
-    /* Decide type vs expression. Built-in types, void, error, const and type
-     * variables can only begin a type. An unknown identifier followed by '['
-     * or ',' is a type (alloc(T[N] { }), alloc(T, n)); a bare one followed by
-     * ')' is parsed as an expression, and pass2 tells type names from
+    /* Decide type vs expression. A slice literal, `alloc(T[] { ... })`, is
+     * parsed as the expression it is (alloc_of_operand turns a runtime `len`
+     * into a runtime-sized allocation). Otherwise built-in types, void,
+     * error, const and type variables can only begin a type. An unknown
+     * identifier followed by ',' is a type (alloc(T, n)); a bare one followed
+     * by ')' is parsed as an expression, and pass2 tells type names from
      * variables. An unknown identifier followed by '<' or '.' gets a tentative
      * type parse that backtracks when no ')', '[' or ',' follows the type. */
     Token *first = current(p);
-    /* `alloc(const str[n] { })` allocates n slots holding read-only views,
-     * the heap twin of the `const str[N] { ... }` literal. Read as an
-     * expression it would be a nested slice literal, which needs a
-     * compile-time length. */
-    bool is_type = (first->kind == TOK_VOID || first->kind == TOK_TYPE_VAR ||
+    bool is_lit = at_slice_literal(p);
+    bool is_type = !is_lit &&
+                   (first->kind == TOK_VOID || first->kind == TOK_TYPE_VAR ||
                     first->kind == TOK_ERROR_KW || first->kind == TOK_CONST);
     bool try_type = false;
     int save = 0;
 
-    if (!is_type && first->kind == TOK_IDENT) {
+    if (!is_lit && !is_type && first->kind == TOK_IDENT) {
         if (type_from_name(first->start, first->length)) {
             is_type = true;
         } else {
@@ -1833,43 +1906,20 @@ static Expr *parse_alloc(Parser *p, SrcLoc loc) {
             return e;
         }
         if (check(p, TOK_LBRACKET)) {
-            /* alloc(T[N] { elems }): allocate a slice */
-            advance_p(p);
-            Expr *size = parse_bracketed_expr(p, PREC_NONE + 1);
-            expect(p, TOK_RBRACKET);
-            int elem_count = 0;
-            Expr **elems = NULL;
-            if (check(p, TOK_LBRACE)) {
-                advance_p(p);
-                elems = parse_slice_elems(p, &elem_count);
-            } else {
-                /* Read on as if the empty `{ }` were there. */
+            /* A slice literal over a head the literal scan does not cover
+             * (`void!`, `error`): alloc(error[] { len = n }). */
+            if (!at_slice_lit_brackets(p, 0)) {
                 diag_error(loc_from_token(current(p)),
-                           "expected '{' after alloc(T[N]; use alloc(T[N] { })");
+                           "alloc(T[N]) is not a form; allocate a slice with "
+                           "alloc(T[] { len = n })");
+                while (!check(p, TOK_RPAREN) && !at_end_p(p) && !check(p, TOK_NEWLINE))
+                    advance_p(p);
+                expect(p, TOK_RPAREN);
+                return alloc_expr_error(p, loc);
             }
+            Expr *lit = parse_array_lit_body(p, ty, loc, false);
             expect(p, TOK_RPAREN);
-            /* Runtime-sized alloc: alloc(T[n] { }) where n is not a literal */
-            if (size->kind != EXPR_INT_LIT) {
-                if (elem_count > 0)
-                    diag_error(loc, "alloc with runtime size cannot have explicit elements");
-                Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-                e->alloc_expr.alloc_type = ty;
-                e->alloc_expr.size_expr = size;
-                e->alloc_expr.init_expr = NULL;
-                e->alloc_expr.is_stack = is_stack;
-                return e;
-            }
-            Expr *arr = alloc_expr(p, EXPR_ARRAY_LIT, loc);
-            arr->array_lit.elem_type = ty;
-            arr->array_lit.size_expr = size;
-            arr->array_lit.elems = elems;
-            arr->array_lit.elem_count = elem_count;
-            Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-            e->alloc_expr.alloc_type = NULL;
-            e->alloc_expr.size_expr = NULL;
-            e->alloc_expr.init_expr = arr;
-            e->alloc_expr.is_stack = is_stack;
-            return e;
+            return alloc_of_operand(p, lit, is_stack, loc);
         }
         if (check(p, TOK_COMMA)) {
             /* alloc(T, N): raw buffer alloc */
@@ -1903,12 +1953,7 @@ static Expr *parse_alloc(Parser *p, SrcLoc loc) {
         init->interp_string.wrapped = true;
     else if (init->kind == EXPR_CAST && !init->cast.bounded)
         init->cast.licensed = true;
-    Expr *e = alloc_expr(p, EXPR_ALLOC, loc);
-    e->alloc_expr.alloc_type = NULL;
-    e->alloc_expr.size_expr = NULL;
-    e->alloc_expr.init_expr = init;
-    e->alloc_expr.is_stack = is_stack;
-    return e;
+    return alloc_of_operand(p, init, is_stack, loc);
 }
 
 /* Whether a cast target, parsed from parentheses that begin with a name
@@ -1930,14 +1975,14 @@ static bool name_suffix_only(Type *target, bool name_led) {
  * sequence. */
 static Expr *parse_paren_prefix(Parser *p, SrcLoc loc) {
     /* Slice literal with a parenthesized (grouped or function) element type:
-     * `((A) -> B)[N] { e0, ... }` or `((A) -> B)[] { ptr = .., len = .. }`.
+     * `((A) -> B)[] { e0, ... }` or `(const str)[] { len = n }`.
      * Detected by the shape "( ... ) [ ... ] {": the { after ] distinguishes
      * it from a cast or an indexed parenthesized expression, neither of which
      * is followed by a brace here (as in the tuple-element path of the
      * TOK_LBRACE case). */
     if (at_slice_lit_brackets(p, skip_group(p, 0, TOK_LPAREN, TOK_RPAREN))) {
         Type *elem_type = parse_type(p); /* parses the grouped/function type */
-        return parse_array_lit_body(p, elem_type, loc);
+        return parse_array_lit_body(p, elem_type, loc, false);
     }
 
     /* Disambiguate: function literal vs parenthesized expression */
@@ -2238,12 +2283,20 @@ static Expr *parse_for_expr(Parser *p, SrcLoc loc) {
 static Expr *parse_ident_prefix(Parser *p, Token *t, SrcLoc loc) {
     const char *name = tok_intern(p, t);
 
-    /* Slice literal: type_name[size] { ... }, for built-in, user-defined,
+    /* Slice literal: type_name[] { ... }, for built-in, user-defined,
      * module-qualified or generic element types alike. at_slice_literal
      * decides the shape; parse_type parses the element type. */
     if (at_slice_literal(p)) {
         Type *elem_type = parse_type(p);
-        return parse_array_lit_body(p, elem_type, loc);
+        return parse_array_lit_body(p, elem_type, loc, false);
+    }
+
+    /* str { ... }: a slice literal whose head is the slice type str (u8[]),
+     * in any of the slice literal's forms. `str` names no value, so a brace
+     * after it opens nothing else. */
+    if (strcmp(name, "str") == 0 && peek_at(p, 1)->kind == TOK_LBRACE) {
+        advance_p(p);  /* consume str */
+        return parse_slice_lit_braces(p, type_uint8(), loc, false);
     }
 
     /* Struct literal: name { field = expr, ... }, recognized by `IDENT =` or
@@ -2251,9 +2304,6 @@ static Expr *parse_ident_prefix(Parser *p, Token *t, SrcLoc loc) {
     if (at_struct_lit_brace(p, 1)) {
         advance_p(p);  /* consume ident */
         advance_p(p);  /* consume { */
-        /* str { ptr = expr, len = expr }: raw-parts literal of type str */
-        if (strcmp(name, "str") == 0)
-            return parse_raw_slice_fields(p, type_uint8(), loc);
         return parse_struct_literal(p, name, loc);
     }
     /* Check for module-qualified struct literal: mod.name { ... }, mod.sub.name { ... }
@@ -2353,13 +2403,13 @@ static Expr *parse_prefix(Parser *p) {
         return parse_paren_prefix(p, loc);
 
     case TOK_LBRACE: {
-        /* Slice literal with a tuple element type: {T1, T2}[N] { ... }.
+        /* Slice literal with a tuple element type: {T1, T2}[] { ... }.
          * Detected by the shape "{ ... } [ ... ] {": the { after ] distinguishes
          * it from an indexed tuple literal ({a, b}[i], which is never followed
          * by a brace). */
         if (at_slice_lit_brackets(p, skip_group(p, 0, TOK_LBRACE, TOK_RBRACE))) {
             Type *elem_type = parse_type(p);   /* parses the {T1, T2, ...} tuple type */
-            return parse_array_lit_body(p, elem_type, loc);
+            return parse_array_lit_body(p, elem_type, loc, false);
         }
 
         /* Bare positional braces: anonymous tuple literal { e0, e1, ... } (>= 2
@@ -2503,13 +2553,13 @@ static Expr *parse_prefix(Parser *p) {
         return parse_for_expr(p, loc);
 
     case TOK_VOID: {
-        /* void![N] {...}: slice literal with the payload-less result element
-         * type, like the built-in type names (error[N]{...}). */
+        /* void![] {...}: slice literal with the payload-less result element
+         * type, like the built-in type names (error[] {...}). */
         if (peek_at(p, 1)->kind == TOK_BANG &&
             peek_at(p, 2)->kind == TOK_LBRACKET) {
             advance_p(p); /* void */
             advance_p(p); /* ! */
-            return parse_array_lit_body(p, type_result(p->arena, type_void()), loc);
+            return parse_array_lit_body(p, type_result(p->arena, type_void()), loc, false);
         }
         /* `void()` is the void-typed expression. `void` alone is valid only
          * in type position, so the parentheses are required here, with a
@@ -2551,11 +2601,11 @@ static Expr *parse_prefix(Parser *p) {
 
     case TOK_ERROR_KW: {
         /* `error` in expression position: only as the element type of a
-         * slice literal (error[N]{...} / error[]{...}), like the built-in
+         * slice literal (error[] {...}), like the built-in
          * numeric type names. */
         if (peek_at(p, 1)->kind == TOK_LBRACKET) {
             advance_p(p);
-            return parse_array_lit_body(p, type_error_code(), loc);
+            return parse_array_lit_body(p, type_error_code(), loc, false);
         }
         diag_error(loc, "'error' is a type/declaration keyword and cannot "
             "appear bare in an expression");
@@ -2725,15 +2775,15 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_TYPE_VAR: {
-        /* Slice literal with a type-variable element type: 'a[N] { e0, ... }
-         * (or 'a[] { ptr =, len = }, and 'a?/'a* element-type suffixes). The
+        /* Slice literal with a type-variable element type: 'a[] { e0, ... }
+         * (and the 'a?/'a* element-type suffixes). The
          * element type is the abstract type var inside a generic body; it is
          * substituted per-monomorphization. A bare 'a[expr] with no following
          * '{' is not a value and falls through to the type-var-ref path, which
          * pass2 rejects. */
         if (at_slice_literal(p)) {
             Type *elem_type = parse_type(p);
-            return parse_array_lit_body(p, elem_type, loc);
+            return parse_array_lit_body(p, elem_type, loc, false);
         }
         /* Allow 'a in expression position for type-variable property access ('a.min etc.) */
         advance_p(p);
@@ -2743,14 +2793,23 @@ static Expr *parse_prefix(Parser *p) {
     }
 
     case TOK_CONST:
-        /* `const T[N] { ... }`: a slice literal over a const element type. It
-         * is the only spelling that can hold string literals (a string literal
-         * is a `const str`, which does not narrow to `str`). A `const`
-         * anywhere else in expression position is not a value and gets the
-         * default diagnostic. */
+        /* `const T[] { ... }` and `const str { ... }`: a slice literal headed
+         * by the read-only slice type. The `const` qualifies the whole head,
+         * as in any type, so the element type is what follows it;
+         * parse_slice_lit_braces admits only a view under such a head. A
+         * `const` anywhere else in expression position is not a value and
+         * gets the default diagnostic. */
         if (at_slice_literal(p)) {
+            while (check(p, TOK_CONST)) advance_p(p);
             Type *elem_type = parse_type(p);
-            return parse_array_lit_body(p, elem_type, loc);
+            return parse_array_lit_body(p, elem_type, loc, true);
+        }
+        if (peek_at(p, 1)->kind == TOK_IDENT && peek_at(p, 1)->length == 3 &&
+            memcmp(peek_at(p, 1)->start, "str", 3) == 0 &&
+            peek_at(p, 2)->kind == TOK_LBRACE) {
+            advance_p(p); /* const */
+            advance_p(p); /* str */
+            return parse_slice_lit_braces(p, type_uint8(), loc, true);
         }
         goto unexpected;
 

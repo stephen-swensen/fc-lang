@@ -9,7 +9,7 @@ module outer =
         (i32) data.len
 
 let main = (args: str[]) ->
-    let buf = u8[2] { 1u8, 2u8 }
+    let buf = u8[] { 1u8, 2u8 }
     assert(outer.process(buf) == 2)
     // Module chain access still works
     assert(outer.data.value == 99)

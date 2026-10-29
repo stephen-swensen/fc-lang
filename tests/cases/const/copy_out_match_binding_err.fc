@@ -7,8 +7,8 @@ struct box =
     maybe: holder?
 
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[2] { })!
-    let ro = (const box[]) box[1] { box { maybe = some(holder { s = buf }) } }
+    let mut buf = alloc(u8[] { len = 2 })!
+    let ro = (const box[]) box[] { box { maybe = some(holder { s = buf }) } }
     match ro[0].maybe with
     | some(h) -> h.s[0] = 5u8
     | none -> void()

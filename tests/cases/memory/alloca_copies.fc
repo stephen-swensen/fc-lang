@@ -14,13 +14,13 @@ let main = (args: str[]) ->
     assert(cs[0i64] == 88u8)
     assert(s[0i64] == 104u8)
 
-    let lit = alloca(i32[3] { 1, 2, 3 })
+    let lit = alloca(i32[] { 1, 2, 3 })
     lit[0i64] = 9
     assert(lit[0i64] == 9)
     assert(lit.len == 3)
 
     let n = 4i64
-    let buf = alloca(u8[n] { })
+    let buf = alloca(u8[] { len = n })
     buf[0i64] = 7u8
     assert(buf[0i64] == 7u8)
     assert(buf.len == 4)

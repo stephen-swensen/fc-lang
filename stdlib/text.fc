@@ -160,7 +160,7 @@ module text =
 
     // Returns a heap-allocated copy of a string. Caller must free.
     let copy = (s: const str) ->
-        let buf = alloc(u8[s.len] {})!
+        let buf = alloc(u8[] { len = s.len })!
         let mut i = 0i64
         loop
             if i >= s.len then break
@@ -255,7 +255,7 @@ module text =
     // Returns a heap-allocated copy with ASCII lowercase converted to uppercase.
     // Caller must free the returned string.
     let to_upper = (s: const str) ->
-        let result = alloc(u8[s.len] {})!
+        let result = alloc(u8[] { len = s.len })!
         let mut i = 0i64
         loop
             if i >= s.len then break
@@ -266,7 +266,7 @@ module text =
     // Returns a heap-allocated copy with ASCII uppercase converted to lowercase.
     // Caller must free the returned string.
     let to_lower = (s: const str) ->
-        let result = alloc(u8[s.len] {})!
+        let result = alloc(u8[] { len = s.len })!
         let mut i = 0i64
         loop
             if i >= s.len then break
@@ -286,7 +286,7 @@ module text =
                     count = count + 1i64
                     i = i + delim.len
                 else i = i + 1i64
-        let parts = alloc(str[count] {})!
+        let parts = alloc(str[] { len = count })!
         let mut idx = 0i64
         let mut start = 0i64
         if delim.len == 0i64 then
@@ -314,7 +314,7 @@ module text =
             if pi > 0i64 then total = total + delim.len
             total = total + parts[pi].len
             pi = pi + 1i64
-        let result = alloc(u8[total] {})!
+        let result = alloc(u8[] { len = total })!
         let mut pos = 0i64
         let mut pi = 0i64
         loop

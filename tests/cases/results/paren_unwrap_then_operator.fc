@@ -23,7 +23,7 @@ let main = (args: str[]) ->
     match f(some(5)) with
     | some(v) -> assert(v == 11)
     | none -> assert(false)
-    let mut recs = rec[1] { rec { x = 3 } }
+    let mut recs = rec[] { rec { x = 3 } }
     let raw = (any*) recs.ptr
     let p = (rec!*) raw
     assert((any*) p == raw)

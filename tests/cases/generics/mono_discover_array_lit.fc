@@ -7,7 +7,7 @@ struct box =
     v: 'a
 
 let total = (x: 'a) ->
-    let arr = box<'a>[3] { box { v = x }, box { v = x }, box { v = x } }
+    let arr = box<'a>[] { box { v = x }, box { v = x }, box { v = x } }
     arr[0].v + arr[1].v + arr[2].v
 
 let main = (args: str[]) ->

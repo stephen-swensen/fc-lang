@@ -615,7 +615,7 @@ let result = some_function(
 )
 
 // Multiline slice literal — elements can wrap freely inside {}
-let data = i32[6] {
+let data = i32[] {
     1, 2, 3,
     4, 5, 6
 }
@@ -1132,7 +1132,7 @@ Struct field assignment and slice element assignment are valid on both `let` and
 let p = point { x = 1.0, y = 2.0 }
 p.x = 3.0               // ok — mutating a field, not reassigning p
 
-let buf = i32[4] { 0, 1, 2, 3 }
+let buf = i32[] { 0, 1, 2, 3 }
 buf[2] = 99             // ok — mutating an element, not reassigning buf
 
 let mut q = point { x = 1.0, y = 2.0 }
@@ -1204,7 +1204,7 @@ Non-const implicitly widens to const (the safe direction), and a container that 
 ```fc
 let f = (s: const str) -> s.len
 
-let mut buf = alloc(u8[100] { })!
+let mut buf = alloc(u8[] { len = 100 })!
 f(buf)                     // ok — str widens to const str
 ```
 
@@ -1269,7 +1269,7 @@ Both writable forms widen to the read-only one, and neither widens to the other:
 ```fc
 let read_only = (s: const str[]) -> s.len
 
-let mut words = const str[3] { "a", "bc", "def" }   // (const str)[]
+let mut words = (const str)[] { "a", "bc", "def" }
 words[0] = "wxyz"          // ok — the slot is writable
 read_only(words)           // ok — widens to const str[]
 ```
@@ -1329,7 +1329,7 @@ When a `const 'a[]` or `const 'a*` parameter meets its argument, `'a` binds to t
 ```fc
 let first = (xs: const 'a[]) -> xs[0]
 
-let words = const str[2] { "ab", "cd" }
+let words = (const str)[] { "ab", "cd" }
 let w = first(words)                 // const str: the literal stays read-only
 let n = count_where(words, (s: const str) -> s.len > 1)   // callbacks take const str
 ```
@@ -1356,7 +1356,7 @@ Because a module-level non-function `let` is initialized from a constant express
 ```fc
 module cfg =
     let origin = point { x = 1, y = 2 }
-    let steps  = i32[4] { 1, 2, 4, 8 }
+    let steps  = i32[] { 1, 2, 4, 8 }
     let mut hits = 0                  // the writable global
 
 cfg.origin.x = 30       // compile error — cannot write to module constant 'origin'
@@ -1404,14 +1404,14 @@ let span = i32.max / 2 + 1    // ok — type property in const arithmetic
 let nan64 = f64.nan         // ok — float property (emitted as its C macro)
 // let bad = 1 / 0              // ERROR — division by zero in constant expression
 let origin = point { x = 0, y = 0 }       // ok — struct literal with constant fields
-let primes = i32[3] { 2, 3, 5 }         // ok — slice literal with constant elements
+let primes = i32[] { 2, 3, 5 }            // ok — slice literal with constant elements
 let answer = some(42)                     // ok — some wrapping a constant
 let flag = color.green                    // ok — no-payload variant constructor
 let tagged = shape.circle(5)              // ok — variant with constant payload
 
 // file-level only — not allowed in modules
-let buf = alloc(i32[100] { })!  // ok — alloc + unwrap
-let p = alloc(point2d)!           // ok — alloc + unwrap
+let buf = alloc(i32[] { len = 100 })!  // ok — alloc + unwrap
+let p = alloc(point2d)!                // ok — alloc + unwrap
 
 let x = 10
 let z = compute()               // ERROR — function call
@@ -1421,7 +1421,7 @@ module music =
     let getthem = 3
     let searchn = 11
     let pacman  = 26
-    let songs = i32[5] { getthem, searchn, getthem, searchn, pacman }
+    let songs = i32[] { getthem, searchn, getthem, searchn, pacman }
 ```
 
 Inside any expression context, `let` and `let mut` introduce bindings within a block. The binding is visible to all subsequent expressions in the same block — scoping and sequencing both follow directly from the block model:
@@ -1767,7 +1767,7 @@ h(ok(5i32))        // error — i32! is not an i64!
 
 Converting any of those would mean *constructing a second aggregate* and copying the parts across, which is a different operation from reinterpreting the one at hand. Spell the annotation as the value is spelled, or write the conversion out part by part (`ok((i64) 5)`).
 
-This is consistent with element and field widening rather than in tension with it, because building and converting are different acts. A struct or slice literal *places* each value into a slot whose type is written right at the literal, so every element is an ordinary anchored position and widens there — `i64[2] { 1, 2 }` and `point { x = small }` are fine. An aggregate that already exists has no such slots left to fill.
+This is consistent with element and field widening rather than in tension with it, because building and converting are different acts. A struct or slice literal *places* each value into a slot whose type is written right at the literal, so every element is an ordinary anchored position and widens there — `i64[] { 1, 2 }` and `point { x = small }` are fine. An aggregate that already exists has no such slots left to fill.
 
 The one place a widen does reach inward is the **option niche**, where it costs nothing: an option widens when its inner type widens *representation-preservingly*, changing no bits at all. So `i32*?` widens to `const i32*?` and to `any*?`, and `i32[]?` to `const i32[]?`. A *numeric* option still does not widen — `i32?` to `i64?` would have to rebuild the option (see §Option Types).
 
@@ -2341,7 +2341,7 @@ loop
     if done() then break
 
 // non-uniform step — for only supports step-by-one
-let buf = alloc(u8[256] { })!
+let buf = alloc(u8[] { len = 256 })!
 let mut i = 0
 loop
     if i >= buf.len then break
@@ -2406,9 +2406,9 @@ defer free(p)
 Multiple defers in one scope run in reverse order of registration:
 
 ```fc
-let a = alloc(i32[8] {})!
+let a = alloc(i32[] { len = 8 })!
 defer free(a)
-let b = alloc(i32[8] {})!
+let b = alloc(i32[] { len = 8 })!
 defer free(b)
 // at scope exit: free(b) runs first, then free(a)
 ```
@@ -2598,7 +2598,7 @@ Taking the address of a captured value's field is the same as taking a parameter
 The copy is **one level deep**, so whatever the captured value *refers to* is shared rather than snapshotted. Writing through a captured pointer, or into the backing of a captured slice, mutates the storage everyone else sees — those writes persist across calls and are visible outside the closure. The distinction cuts both ways: a change made to the captured *value* after the closure was created is not seen by it (the snapshot was already taken), while a change made through a reference it holds is.
 
 ```fc
-let buf = i32[2] { 1, 2 }
+let buf = i32[] { 1, 2 }
 let bump = () ->
     buf[0] = buf[0] + 1    // the fat pointer is copied; the backing array is not
 bump()
@@ -2762,7 +2762,7 @@ module c from "stdlib.h" =
 
 module ops =
     let double = (x: i32) -> x * 2
-    let table = ((i32) -> i32)[3] { double, c.abs, (x: i32) -> x * 10 }
+    let table = ((i32) -> i32)[] { double, c.abs, (x: i32) -> x * 10 }
     let mut hook = double      // a variable; reassign it with ops.hook = ...
 ```
 
@@ -2963,7 +2963,7 @@ let lock = match enum_of(door_lock, tile) with
 
 ### Sparse enums and tables
 
-The `E.count`-sized lookup table (`let dx = i32[dir.count]{ ... }` indexed by `dir` values) is the idiom for contiguous, auto-numbered enums — `count` equals every index bound exactly. A sparse enum (explicit, non-contiguous values, common in protocol code) still has a `count`, but it is the *variant* count, not the value range; sparse enums are matched and `enum_of`-checked, not table-indexed.
+The `E.count`-sized lookup table (`let dx = i32[] { len = dir.count, ... }` indexed by `dir` values) is the idiom for contiguous, auto-numbered enums — `count` equals every index bound exactly. A sparse enum (explicit, non-contiguous values, common in protocol code) still has a `count`, but it is the *variant* count, not the value range; sparse enums are matched and `enum_of`-checked, not table-indexed.
 
 > **Transpilation**
 > An enum transpiles to a fixed-width integer typedef — **never a C `enum`**, whose width is implementation-defined (and whose backing `int` is 16 bits on small embedded targets): `enum door_lock of u8` becomes `typedef uint8_t door_lock;`. Variant references emit as cast integer literals (`((door_lock)5)`), match arms compare scalar values, and `==` is C's native `==` — no tag struct, no generated equality function. `enum_of` compiles to a small static function containing a `switch` over the declared values, which C compilers reduce to a range check when the values are contiguous.
@@ -2976,7 +2976,7 @@ A **tuple** is an anonymous, positional product type — a lightweight way to gr
 
 ### Tuple values
 
-A tuple literal is a brace-delimited, comma-separated list of expressions with **no type name and no field names**. Struct and slice literals always carry a type prefix (`point { … }`, `i32[4] { … }`), so a bare `{ … }` is unambiguously a tuple.
+A tuple literal is a brace-delimited, comma-separated list of expressions with **no type name and no field names**. Struct and slice literals always carry a type prefix (`point { … }`, `i32[] { … }`), so a bare `{ … }` is unambiguously a tuple.
 
 ```fc
 let t = { 4, "hello" }     // type {i32, const str}
@@ -3093,8 +3093,8 @@ b[0] = 99                         // element mutation (contents — a `let` bind
 Tuples also work where structs do: as struct fields and union variant payloads, as the element type of a slice literal, in `option`, and as module- or file-level constants — all subject to the same rules as named structs.
 
 ```fc
-let xs = {i32, i32}[2] { { 1, 2 }, { 3, 4 } }   // array of tuples
-let origin = { 0, 0 }                               // module-level constant
+let xs = {i32, i32}[] { { 1, 2 }, { 3, 4 } }   // slice of tuples
+let origin = { 0, 0 }                          // module-level constant
 ```
 
 > **Transpilation**
@@ -3348,7 +3348,7 @@ validate(x)!               // assert success: a plain void statement, aborts wit
 - **No void value exists.** `r!` is a void expression (legal exactly where a void call is); `let x = r!` is the usual "cannot bind void" error. There is no `void?`, no void parameter, and `void` remains invalid as a generic type argument — `void!` is not a unit type, it is a result with a bare variant.
 - **Representation**: the `i32` tag alone — C's status integer reified as a type. `default(void!)` is `ok`, zero-filled memory is `ok`, equality compares the codes.
 
-`void!` composes like any type: struct fields, slice elements (`void![N] {}` zero-fills to `ok`), `void!?`, and generic instantiation (`identity(ok)`) all work.
+`void!` composes like any type: struct fields, slice elements (`void![] { len = N }` zero-fills to `ok`), `void!?`, and generic instantiation (`identity(ok)`) all work.
 
 ### Results cannot be silently ignored
 
@@ -3577,28 +3577,35 @@ The struct is two words. Passing a slice to a function copies those two words �
 Slices can be stack-allocated using literal initialization syntax, or heap-allocated with `alloc`. See §Memory Management for the full treatment. Slice-specific forms:
 
 ```fc
-let mut buf = i32[128] { }          // stack slice — zero-initialized
-let rgb = u8[3] { 255u8, 0u8, 128u8 }   // stack slice — exhaustive element list (element literals must already be u8)
-let buf = alloc(i32[128] { })       // heap slice — returns i32[]?
-let buf = alloc(i32[128] { })!     // heap slice — unwrap, crash on failure
+let mut buf = i32[] { len = 128 }       // stack slice — 128 zero-initialized elements
+let rgb = u8[] { 255u8, 0u8, 128u8 }    // stack slice — length 3, counted from the elements
+let buf = alloc(i32[] { len = 128 })    // heap slice — returns i32[]?
+let buf = alloc(i32[] { len = 128 })!   // heap slice — unwrap, crash on failure
 ```
 
-Two initialization forms for stack slices:
+A slice literal's head is the slice type it yields — `T[]`, just as a struct literal's head is its struct type — and its braces say what the slice holds:
 
-- `{ }` — all elements set to their default value, equivalent to zero-initializing the backing memory
-- `{ v1, v2, ... }` — exhaustive element list, count must match declared length exactly — compile error otherwise
+- `T[] { len = n }` — `n` elements, each set to its default value, equivalent to zero-initializing the backing memory.
+- `T[] { v1, v2, ... }` — the listed elements; the length is their count. With no elements, `T[] { }` is the empty slice, matching `default(T[])`.
+- `T[] { ptr = p, len = n }` — a view of `n` elements already at `p`; it creates no storage (§Slice construction from raw pointer).
+
+An element list may also state its length, before the elements, as an assertion: `T[] { len = n, v1, v2, ... }` must list exactly `n` elements and is a compile error otherwise. It earns its place where the length means something beyond the count — a table with one entry per enum variant, `i32[] { len = dir.count, 1, 0, -1, 0 }`, stops compiling when a variant is added and the table is not. Named fields come before the elements, and each is written at most once.
 
 There is no partial-list initialization. If you want all elements to hold a specific non-zero value, use a loop.
 
-The declared length must be a compile-time constant, and it must not be negative — `u8[-4] { }` and `u8[1 - 5] { }` are compile errors, whether the length is written concretely or reached through a const parameter (`u32['n - 4] { }` is judged per instantiation). Zero is legal: `i32[0] { }` is the empty-slice literal, matching `default(i32[])`.
+`T[N]`, with a length between the brackets, is never a literal head: it is the fixed-array type (§Fixed-Size Inline Arrays), which appears only as a struct field's type and as a `sizeof`/`alignof` operand. `T[N] { … }` is a compile error that names the two spellings above.
 
-The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[2] { … }`), or a parenthesized function type (`((i32) -> i32)[2] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[4] { x, x, x, x }`, and the suffixed forms `'a*[N]` / `'a?[N]`): each monomorphized instance emits its own correctly-typed backing array. A generic instantiation is equally usable as the element type, whether its arguments are types or const values (`box<i32>[2] { … }`, `wide<64>[2] { }`). The element type may also be `const`-qualified — `const str[3] { "a", "bc", "def" }` is the spelling a slice of string literals takes, since a string literal is a `const str` and does not narrow to `str`. The literal head names an *element* type, so what this builds is a `(const str)[]`: writable slots holding read-only views, which is also what `alloc(const str[n] { })` allocates. It widens to `const str[]` wherever a read-only slice is wanted (§Deep const).
+A written `len` must be a compile-time constant — under `alloc` and `alloca` the zero-initialized form's `len` may instead be a runtime value (§Memory Management) — and it must not be negative: `u8[] { len = -4 }` and `u8[] { len = 1 - 5 }` are compile errors, whether the length is written concretely or reached through a const parameter (`u32[] { len = 'n - 4 }` is judged per instantiation). Zero is legal.
 
-The declared element type is an **anchor**: each element is checked against it and widens to it under the usual rules (§Implicit Widening), exactly as a struct literal's fields widen to their declared field types. So `i64[3] { 1, 2, 3 }` takes `i32` literals, `f64[2] { 1.5f32, 2.5f32 }` takes `f32`s, `const str[2] { buf, "lit" }` mixes a `str` with a string literal, and `any*[2] { &a, &b }` takes typed pointers. Widening is one-directional as always — `i32[2] { 1i64, 2i64 }` and `str[2] { "a", "b" }` are errors, since narrowing and stripping `const` are not widens — and it does not descend into a composite element, so a slice of tuples needs its elements spelled exactly (`{i64, i64}[1] { { 1i64, 2i64 } }`). Inside a generic body a type-variable element type anchors nothing to widen toward: `'a` admits only `'a`.
+The element type may be any type — a primitive, struct, union, tuple (`{i32, i32}[] { … }`), or a parenthesized function type (`((i32) -> i32)[] { dbl, inc }`). Inside a generic function or type body the element type may also be a **type variable** (`'a[] { x, x, x, x }`, and the suffixed forms `'a*[]` / `'a?[]`): each monomorphized instance emits its own correctly-typed backing array. A generic instantiation is equally usable as the element type, whether its arguments are types or const values (`box<i32>[] { … }`, `wide<64>[] { len = 2 }`).
 
-A raw slice literal built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) additionally requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a *slice* of functions is built from a function *array* literal (which already yields a slice) rather than from raw parts.
+Because the head is a type, a `const` in it reads as it does in any type: `const str[]` is a read-only slice of `str`, and `(const str)[]` is a slice whose writable slots hold read-only views (§Deep const). A literal that creates storage creates writable slots, so its head is never a read-only slice type. A slice of string literals — which are `const str` and do not narrow to `str` — is therefore written `(const str)[] { "a", "bc", "def" }`, which is also what `alloc((const str)[] { len = n })` allocates, and it widens to `const str[]` wherever a read-only slice is wanted. `const str[] { "a" }` and `const i32[] { 1, 2 }` are compile errors (write `(const str)[]` and `i32[]`). A view creates no storage, so it may be read-only: `const u8[] { ptr = p, len = n }` (§Slice construction from raw pointer).
 
-The backing storage for a stack slice literal is a fixed C array — its length is always a compile-time literal — hoisted to the top of the enclosing function. The single slot is reused on every loop iteration, so constructing a slice literal inside a loop uses bounded stack rather than growing the frame each pass. The backing has function-frame lifetime: the slice it yields stays valid until the function returns, exactly like a pointer to a local. For storage that must outlive the function, or whose size is computed at runtime, use `alloc` (heap) instead.
+The declared element type is an **anchor**: each element is checked against it and widens to it under the usual rules (§Implicit Widening), exactly as a struct literal's fields widen to their declared field types. So `i64[] { 1, 2, 3 }` takes `i32` literals, `f64[] { 1.5f32, 2.5f32 }` takes `f32`s, `(const str)[] { buf, "lit" }` mixes a `str` with a string literal, and `any*[] { &a, &b }` takes typed pointers. Widening is one-directional as always — `i32[] { 1i64, 2i64 }` and `str[] { "a", "b" }` are errors, since narrowing and stripping `const` are not widens — and it does not descend into a composite element, so a slice of tuples needs its elements spelled exactly (`{i64, i64}[] { { 1i64, 2i64 } }`). Inside a generic body a type-variable element type anchors nothing to widen toward: `'a` admits only `'a`.
+
+A view built from parts (`T[] { ptr = .., len = .. }`, see §Slice construction from raw pointer) requires a `T*` for `ptr`; since `&f` on a function value yields an opaque `any*` rather than a function pointer, a slice of functions is built by listing the functions rather than from raw parts.
+
+The backing storage for a stack slice literal is a fixed C array — its length is always known at compile time — hoisted to the top of the enclosing function. The single slot is reused on every loop iteration, so constructing a slice literal inside a loop uses bounded stack rather than growing the frame each pass. The backing has function-frame lifetime: the slice it yields stays valid until the function returns, exactly like a pointer to a local. For storage that must outlive the function, or whose size is computed at runtime, use `alloc` (heap) instead.
 
 `free` accepts a slice directly — the compiler emits `free(buf.ptr)`. Only free slices returned by `alloc`. The compiler's escape analysis detects and rejects `free` on stack-allocated slices and string literals at compile time. Freeing a sub-slice or other non-heap memory that escapes detection is undefined behavior.
 
@@ -3628,7 +3635,7 @@ The maximum representable length is 2^63 − 1 (approximately 9.2 exabytes), whi
 
 The `i64` above is the length's **value domain** — the type the programmer sees, on every target, forever. The **stored representation** of the length field is a separate, build-time choice: `fcc --len-repr <16|32|64>` (default `64`) selects the width of the len field in every slice and string, and of the bounds-check comparisons that read it. The type system never sees this knob: `.len` is `i64` under every representation, all length arithmetic is `i64` arithmetic, and a program that compiles under one representation means exactly the same thing under another.
 
-What makes the narrow representations sound is a single invariant: **every stored length is proven to lie within the representation's capacity (`0..32767` for `--len-repr 16`, `0..2^31−1` for `32`) at the point the slice is constructed.** Lengths known at compile time — string literals, slice literals, fixed array sizes (including per-instance const-generic sizes), `(cstr[N])` buffer sizes — are judged statically: a length over capacity is a compile error on that build. Runtime lengths are guarded at the handful of construction sites that produce them, each of which aborts with a diagnostic when the length exceeds capacity (the slice would describe memory that cannot exist on such a target): a raw-parts construction; a runtime-sized `alloca`; a `(str)` cast of a `cstr`, whose length is measured when it runs; a `str` interpolation whose buffer size (§String Interpolation) exceeds capacity, checked before the buffer exists; and `main`'s `args`, where an argument longer than capacity, or more arguments than capacity, aborts before `main` runs. A heap slice allocation (`alloc(T[n] { })`) whose count exceeds capacity instead reports failure through its ordinary `none` result — an allocation that cannot succeed. A `cstr` has no stored length, so a `cstr` interpolation of any size is unaffected by the representation; only converting the result to a `str` is checked. After construction, every read of `.len` widens losslessly back to `i64`, so no check ever runs on a read.
+What makes the narrow representations sound is a single invariant: **every stored length is proven to lie within the representation's capacity (`0..32767` for `--len-repr 16`, `0..2^31−1` for `32`) at the point the slice is constructed.** Lengths known at compile time — string literals, slice literals, fixed array sizes (including per-instance const-generic sizes), `(cstr[N])` buffer sizes — are judged statically: a length over capacity is a compile error on that build. Runtime lengths are guarded at the handful of construction sites that produce them, each of which aborts with a diagnostic when the length exceeds capacity (the slice would describe memory that cannot exist on such a target): a raw-parts construction; a runtime-sized `alloca`; a `(str)` cast of a `cstr`, whose length is measured when it runs; a `str` interpolation whose buffer size (§String Interpolation) exceeds capacity, checked before the buffer exists; and `main`'s `args`, where an argument longer than capacity, or more arguments than capacity, aborts before `main` runs. A heap slice allocation (`alloc(T[] { len = n })`) whose count exceeds capacity instead reports failure through its ordinary `none` result — an allocation that cannot succeed. A `cstr` has no stored length, so a `cstr` interpolation of any size is unaffected by the representation; only converting the result to a `str` is checked. After construction, every read of `.len` widens losslessly back to `i64`, so no check ever runs on a read.
 
 This is the same trade C's large-file support and the JVM's compressed references make: a fixed semantic domain, a flag-selected stored width, and a fit check where values enter. Nothing about the language changes across representations — only capacity and cost. Because the semantics are identical, a program built with `--len-repr 16` runs identically on a 64-bit development host (capacity traps included), which is what lets the narrow configurations be exercised by the ordinary test suite rather than an emulator.
 
@@ -3664,21 +3671,24 @@ let s = "hello"          // s: const str — points to static read-only memory
 s[0] = 72u8              // compile error: cannot assign through const pointer/slice
 free(s)                  // compile error: cannot free const pointer/slice
 
-let mut buf = alloc(u8[5] { })!
+let mut buf = alloc(u8[] { len = 5 })!
 buf[0] = 72u8            // ok — heap-allocated, mutable (non-const str)
 free(buf)                // ok — heap-allocated
 ```
 
 ### Slice construction from raw pointer
 
-When interoperating with C, a slice can be constructed from a raw pointer and a known length using struct literal syntax:
+When interoperating with C, a slice can be constructed from a raw pointer and a known length, with the slice literal's named fields:
 
 ```fc
 let s = str { ptr = cs, len = (i64) libc.strlen(cs) }   // strlen returns usize; str.len is i64, so cast explicitly
 let buf = u8[] { ptr = some_ptr, len = 128 }
+let msg = const str { ptr = c"hello", len = 5 }         // a read-only view of read-only bytes
 ```
 
-The resulting slice shares memory with the original pointer — no allocation occurs. The programmer is responsible for ensuring the pointer remains live for the lifetime of the slice.
+The resulting slice shares memory with the original pointer — no allocation occurs. The programmer is responsible for ensuring the pointer remains live for the lifetime of the slice. `str { … }` is the same literal as `u8[] { … }`, spelled with the slice type's name.
+
+As with every slice literal, the head is the type the view has. `ptr` must be a `T*` for the element type `T`. A read-only view is written with the read-only slice type, `const T[] { ptr = p, len = n }` (or `const str { … }`), and takes either a `T*` or a `const T*`; a writable `T[]` cannot be built over a `const T*`, since writing through it would write read-only memory.
 
 A slice's length must be **non-negative**. The bounds checks for indexing and sub-slicing fuse the negative-index test into a single unsigned comparison (`(u64_t) idx >= (u64_t) len`), which relies on `len ≥ 0` — a negative length casts to an enormous unsigned value and would silently disable every later bounds check. A statically-negative length is therefore a **compile error**:
 
@@ -3711,10 +3721,10 @@ The `alloc(T, N)` form allocates a raw buffer directly without constructing a sl
 let buf = alloc(u8, 128)!        // u8* — raw buffer, no slice overhead
 ```
 
-Alternatively, `alloc(T[N] { })` creates a slice which the programmer can narrow to a raw pointer:
+Alternatively, `alloc(T[] { len = N })` creates a slice which the programmer can narrow to a raw pointer:
 
 ```fc
-let buf = alloc(u8[128] { })!.ptr    // u8* — 128 bytes allocated, slice header discarded
+let buf = alloc(u8[] { len = 128 })!.ptr    // u8* — 128 bytes allocated, slice header discarded
 ```
 
 The underlying heap allocation is identical in both cases — `calloc(128, sizeof(u8))`. What you lose is bounds checking — indexing via the raw pointer is unchecked, the same as C. To keep a bounds-checked slice but drop the check only on a measured hot path, prefer an `unguarded` block (§Unguarded blocks) over discarding the slice for a raw pointer.
@@ -3722,7 +3732,7 @@ The underlying heap allocation is identical in both cases — `calloc(128, sizeo
 Alternatively, take the pointer from a stack slice:
 
 ```fc
-let mut arr = u8[128] { }
+let mut arr = u8[] { len = 128 }
 let buf = arr.ptr               // u8* into stack memory — no fat pointer, no bounds checking
 ```
 
@@ -3789,7 +3799,7 @@ Assigning a slice to a fixed-array field copies data via `memcpy`. Because the s
 
 ```fc
 let mut p = packet { len = 0 }
-let msg = u8[4] { 0x48u8, 0x45u8, 0x4Cu8, 0x4Fu8 }
+let msg = u8[] { 0x48u8, 0x45u8, 0x4Cu8, 0x4Fu8 }
 p.data = msg   // copies 4 bytes, zeros remaining 252
 p.len = 4
 ```
@@ -3801,23 +3811,23 @@ p.len = 4
 Fixed-array fields in struct literals accept slice values. The data is copied inline:
 
 ```fc
-let src = u8[8] { 1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8 }
+let src = u8[] { 1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8 }
 let p = packet { data = src, len = 8 }
 ```
 
 Omitted fields are zero-initialized (the entire inline array is zeroed).
 
-In a module-level `let` (a constant or a `let mut` global), the struct is a static initializer with no run time in which the length check could abort, so the check moves to compile time: the field's value must be a slice literal (`T[n] { … }`, including the zero-filled `T[n] { }`), a string literal for a `u8[N]` field, or `default(T[])`, and a literal longer than the field is a compile error. A shorter one fills the leading elements and zeroes the rest, as at run time.
+In a module-level `let` (a constant or a `let mut` global), the struct is a static initializer with no run time in which the length check could abort, so the check moves to compile time: the field's value must be a slice literal (`T[] { … }`, including the zero-filled `T[] { len = n }`), a string literal for a `u8[N]` field, or `default(T[])`, and a literal longer than the field is a compile error. A shorter one fills the leading elements and zeroes the rest, as at run time.
 
 ```fc
 module m =
-    let p = packet { data = u8[2] { 1u8, 2u8 }, len = 2 }   // ok: 254 zero bytes follow
-    // let q = packet { data = u8[300] { }, len = 0 }       // ERROR: slice of length 300 overflows fixed-array field 'data' (u8[256])
+    let p = packet { data = u8[] { 1u8, 2u8 }, len = 2 }   // ok: 254 zero bytes follow
+    // let q = packet { data = u8[] { len = 300 }, len = 0 } // ERROR: slice of length 300 overflows fixed-array field 'data' (u8[256])
 ```
 
 ### Restrictions
 
-- `N` must be a compile-time integer literal (no expressions, no type variables for size).
+- `N` must be a positive compile-time constant: an integer literal or a constant expression, including one over const parameters in a generic definition (§Const Parameters).
 - `T[N]` is valid only in struct field declarations (including extern structs) and as a `sizeof`/`alignof` operand. It cannot appear as a function parameter type, return type, or binding type.
 - A fixed array must be the **outermost** type of the field it declares: `T[N]` cannot be the element, pointee, or payload of another type constructor. `u8[2][3]`, `u8[2][]`, `u8[2]*`, `u8[2]?` and `u8[2]!` are all compile errors. The element type is unrestricted, so a fixed array *of* a composite (`i32[][3]`, `i32*[2]`, `i32?[2]`) is fine — it is the fixed array that may not be nested, not the element that must be scalar. For a multi-dimensional buffer, declare the inner array as its own struct and make a fixed array of that.
 - `&s.data` is a compile error — use `s.data.ptr` for the raw pointer.
@@ -3993,7 +4003,7 @@ f64.bits    // 64
 - **Float `.nan`**: not-a-number
 - **`.bits`**: bit width of the type as `i32` (8, 16, 32, or 64; for `isize`/`usize`, the platform pointer width — 64 on a 64-bit target, 32 on a 32-bit target)
 
-Enum types add one property of their own: **`E.count`**, the number of declared variants as an `i32`. Like the fixed-width integer properties it folds to a literal, so it sizes slice literals (`i32[dir.count]{ … }`) and takes part in constant arithmetic (see §Enums).
+Enum types add one property of their own: **`E.count`**, the number of declared variants as an `i32`. Like the fixed-width integer properties it folds to a literal, so it gives a slice literal its length (`i32[] { len = dir.count, … }`) and takes part in constant arithmetic (see §Enums).
 
 > **Transpilation**
 > Type properties transpile to the appropriate C constants from `<stdint.h>`, `<float.h>`, and `<math.h>`. For example, `i32.max` becomes `INT32_MAX`, `f64.nan` becomes `((double) NAN)`. Because each is a constant expression, type properties may be used in module-level and file-level constant initializers (see §Statements vs. expressions); fixed-width integer properties additionally fold to a literal so they can take part in const division/modulo.
@@ -4026,7 +4036,7 @@ let identity = (x: 'a) -> x
 let fst = (a: 'a, b: 'b) -> a
 
 let map = (s: 'a[], f: ('a) -> 'b) ->
-    let mut result = alloc('b[s.len] { })!
+    let mut result = alloc('b[] { len = s.len })!
     let mut i = 0
     loop
         if i >= s.len then break result
@@ -4063,7 +4073,7 @@ However, some functions introduce type variables that do not appear in any param
 ```fc
 // 'a cannot be inferred from any argument — it only appears in the return type
 let make = <'a>() ->
-    arraylist { data = alloc('a[4] { })!, len = 0 }
+    arraylist { data = alloc('a[] { len = 4 })!, len = 0 }
 ```
 
 The `<'a>` prefix declares that `'a` is a type variable that must be explicitly supplied at every call site:
@@ -4255,7 +4265,7 @@ let mul_wide = (a: wide<'n>, b: wide<'n>) ->
 
 **In expression position**, a const parameter behaves exactly like an integer literal of its bound value: it is typed `i32`, participates in the usual implicit widening, and each instantiation checks the bound value fits (`for i in 0..'n`, `let words = 'n / 32`). A const parameter is a value, not a type — it has no properties (`'n.max` is an error) and cannot appear where a type is required.
 
-**Checking is per instantiation**, like all generic validation: the concrete value is substituted and every consequence is checked with the usual instantiation-chain diagnostics — a fixed array or slice literal sized by a const expression must come out positive, element lists must match the folded length, and a division by zero in a size expression is reported at the instantiating call site.
+**Checking is per instantiation**, like all generic validation: the concrete value is substituted and every consequence is checked with the usual instantiation-chain diagnostics — a fixed array sized by a const expression must come out positive and a slice literal's `len` non-negative, element lists must match the folded `len`, and a division by zero in a size expression is reported at the instantiating call site.
 
 **Instances are distinct types.** `wide<128>` and `wide<256>` are unrelated types: assignment, comparison, and calls do not convert between them. Each concrete instantiation is monomorphized once, program-wide, no matter how many sites name it.
 
@@ -4288,7 +4298,7 @@ let halve = <'n>() ->
 let hash = (a: wide<'n>) ->
     ...
     static_assert('n <= 1024, "scratch below caps at 1024 bits")
-    let scratch = u8['n / 8] { }             // co-located with what it justifies
+    let scratch = u8[] { len = 'n / 8 }      // co-located with what it justifies
     ...
 
 let f = <'n>() ->
@@ -5058,10 +5068,10 @@ Five built-in compile-time operators handle memory and runtime checking operatio
 | Operator | Description |
 |----------|-------------|
 | `alloc(T)` | Heap-allocate and zero-initialize a value of type `T`, returning `T*?`. |
-| `alloc(T[N] { })` | Heap-allocate a zero-initialized slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
-| `alloc(T[N] { elems })` | Heap-allocate a slice initialized with provided elements. `N` must be a literal. |
+| `alloc(T[] { len = N })` | Heap-allocate a zero-initialized slice of `N` elements, returning `T[]?`. `N` may be a runtime value. |
+| `alloc(T[] { elems })` | Heap-allocate a slice initialized with provided elements (an optional `len = N` assertion first must be a compile-time constant). |
 | `alloc(T, N)` | Heap-allocate a raw buffer of `N` elements of type `T`, returning `T*?`. No length tracking — caller must manage size manually. |
-| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), slice literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
+| `alloc(expr)` | Heap-allocate and initialize with the value of `expr`. Accepts: string/cstr literals, interpolated strings (str and cstr), slice literals (`T[] { ... }`), struct literals, union variant constructors, and slice expressions. Scalars and bare variables are a compile error — use `alloc(T)` for uninitialized heap allocation. |
 | `alloc(lambda)` | Heap closure: copy a capturing lambda's context to the heap, returning `F?` where `F` is the lambda's function type. The result may outlive its creator; `free(f)` releases the context. Accepts a capturing lambda literal or an immutable `let` bound directly to one. See §Closures & Capture. |
 | `free(ptr)` | Free a heap-allocated pointer, slice, or heap closure. When passed a slice, compiler emits `free(slice.ptr)`; when passed a function value, `free(f.ctx)`. |
 | `default(T)` | Produce the default (zero-initialized) value of type `T` on the stack. |
@@ -5170,16 +5180,16 @@ Stack memory is allocated implicitly when a binding is declared. All stack bindi
 let x = 42                           // stack i32, initialized to 42
 let p = point { x = 1.0, y = 2.0 }  // stack struct, explicitly initialized
 let p = default(point)               // stack struct, zero-initialized
-let buf = i32[128] { }             // stack slice, zero-initialized
-let rgb = u8[3] { 255u8, 0u8, 128u8 }  // stack slice, exhaustive element list
+let buf = i32[] { len = 128 }        // stack slice, zero-initialized
+let rgb = u8[] { 255u8, 0u8, 128u8 } // stack slice, the listed elements
 ```
 
 Stack slices are backed by a compiler-generated C array. The slice binding is the only thing the programmer interacts with — the backing array is an implementation detail.
 
-`N` in `T[N] { }` must be a compile-time integer constant for stack-allocated slices — a literal or a constant expression the compiler folds to one (`i32[1 + 2]`, `bool[i32.bits]`, `i32[dir.count]`). FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[N] { })`), `N` may be a runtime value since `calloc` accepts a runtime count.
+`N` in `T[] { len = N }` must be a compile-time integer constant for stack-allocated slices — a literal or a constant expression the compiler folds to one (`len = 1 + 2`, `len = i32.bits`, `len = dir.count`). FC does not emit C variable-length arrays (VLAs) — they were made optional in C11 and are absent or unreliable on many embedded compilers. For heap-allocated slices (`alloc(T[] { len = N })`), `N` may be a runtime value since `calloc` accepts a runtime count.
 
 > **Transpilation**
-> `i32[128] { }` transpiles to `i32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
+> `i32[] { len = 128 }` transpiles to `i32_t _buf[128] = {0}` plus a slice struct `{ .ptr = _buf, .len = 128 }`. `default(point)` transpiles to `point p = {0}`.
 
 #### Dynamic stack (`alloca`)
 
@@ -5188,10 +5198,10 @@ When a stack temporary's size is only known at runtime, the `alloca` operator al
 ```fc
 let n = parse(arg)                   // runtime length
 
-let buf = alloca(u8, n)           // u8*  — raw runtime-sized buffer (unchecked)
-let sl  = alloca(u8[n] { })       // u8[] — zeroed, bounds-checked slice
-let msg = alloca("status: %s{name}") // str     — unbounded interpolation on the stack
-let cs  = alloca((cstr) path)        // cstr    — runtime str→cstr copy on the stack
+let buf = alloca(u8, n)              // u8*  — raw runtime-sized buffer (unchecked)
+let sl  = alloca(u8[] { len = n })   // u8[] — zeroed, bounds-checked slice
+let msg = alloca("status: %s{name}") // str  — unbounded interpolation on the stack
+let cs  = alloca((cstr) path)        // cstr — runtime str→cstr copy on the stack
 ```
 
 `alloca` exists so that runtime-sized stack allocation is always a deliberate, visible choice — the constructs that would otherwise allocate it implicitly (an unbounded `%s` interpolation, a bare `(cstr) str` cast) are instead compile errors that point here. Wrapping such a cast — `alloca((cstr) s)` — *is* that deliberate choice, licensing the otherwise-illegal bare cast by giving it a home. It is reached only through the keyword; there is no hidden `alloca` anywhere in emitted code.
@@ -5214,7 +5224,7 @@ let bad = () ->
     &x                              // compile error: cannot return stack-allocated i32*
 
 let also_bad = () ->
-    i32[4] { 1, 2, 3, 4 }        // compile error: cannot return stack-allocated i32[]
+    i32[] { 1, 2, 3, 4 }            // compile error: cannot return stack-allocated i32[]
 ```
 
 - **Freeing non-heap memory** — calling `free` on a string literal (static memory) or stack-allocated memory:
@@ -5240,19 +5250,19 @@ h.data = &x                        // compile error: cannot store stack-allocate
 
 The destination is judged by its **root** storage: a local stack binding is exempt (it shares the frame), while a heap or static root is rejected. A write *through* a pointer of unknown provenance (a function parameter, an extern result) is not rejected — see the intraprocedural limitation below.
 
-The same judgment covers every way `alloc` performs that store implicitly, since a heap promotion copies exactly one level and whatever it copies keeps pointing where it always did: a union payload (`alloc(carrier.held(&x))`), the elements of a container (`alloc(i32*[1] { &x })`), and a promoted closure's captured values (`alloc(() -> buf[0])` where `buf` is a stack slice — including a captured closure, whose own context is stack memory).
+The same judgment covers every way `alloc` performs that store implicitly, since a heap promotion copies exactly one level and whatever it copies keeps pointing where it always did: a union payload (`alloc(carrier.held(&x))`), the elements of a container (`alloc(i32*[] { &x })`), and a promoted closure's captured values (`alloc(() -> buf[0])` where `buf` is a stack slice — including a captured closure, whose own context is stack memory).
 
 ##### Containers and their contents
 
 A container's provenance describes its **backing store**; the provenance of the values it *holds* is tracked separately. A slice literal always lives on the stack, but what it holds may be static, heap, or stack data — and it is that second tag an element load carries:
 
 ```fc
-let bufs = (i32[])[2] { }           // the container is stack-backed…
-bufs[0] = alloc(i32[4] { })!        // …but this element is heap
+let bufs = (i32[])[] { len = 2 }    // the container is stack-backed…
+bufs[0] = alloc(i32[] { len = 4 })! // …but this element is heap
 free(bufs[0])                       // OK — the load carries the element's provenance
 
 let mut x = 42
-let ptrs = i32*[1] { &x }
+let ptrs = i32*[] { &x }
 ptrs[0]                             // compile error: this element is stack memory
 &bufs[0]                            // stack — taking an element's address reads the backing
 ```
@@ -5318,7 +5328,7 @@ The same limitation applies to indirect calls (function pointers, callbacks, clo
 
 ```fc
 let make_slice = () ->
-    let arr = i32[3] { 10, 20, 30 }
+    let arr = i32[] { 10, 20, 30 }
     alloc(arr)!                     // OK — deep copy to heap, safe to return
 ```
 
@@ -5329,15 +5339,15 @@ let make_slice = () ->
 ```fc
 let n = alloc(node)              // returns node*? — may fail
 let n = alloc(node)!             // unwrap — crash on failure
-let buf = alloc(node[128] { })   // heap-allocated slice of 128 nodes, returns node[]?
+let buf = alloc(node[] { len = 128 }) // heap-allocated slice of 128 nodes, returns node[]?
 let raw = alloc(u8, 256)      // raw buffer of 256 bytes, returns u8*?
 free(ptr)                        // free a heap-allocated pointer
 free(buf)                        // free a heap-allocated slice — compiler emits free(buf.ptr)
 ```
 
-`alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[N] { })` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. `alloc(T, N)` transpiles to `calloc(N, sizeof(T))` and returns the raw pointer without wrapping it in a slice — the caller is responsible for tracking the buffer size. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
+`alloc(T)` transpiles to `calloc(1, sizeof(T))`. `alloc(T[] { len = N })` transpiles to `calloc(N, sizeof(T))` and wraps the result in a slice with `len = N`. `alloc(T, N)` transpiles to `calloc(N, sizeof(T))` and returns the raw pointer without wrapping it in a slice — the caller is responsible for tracking the buffer size. Memory is always zero-initialized. `free` on a slice transpiles to `free(slice.ptr)`.
 
-**A zero-size request is not a failure.** `alloc(T, 0)`, `alloc(T[0] { })`, and a heap copy of an empty slice all succeed and yield a `some` — a unique, freeable pointer whose FC-level length is `0`, so nothing may be read through it. C leaves a zero-size `malloc`/`calloc` implementation-defined (it may return null, which would be indistinguishable from exhaustion), so FC requests one unit in that case rather than letting the same program abort on one libc and succeed on another. The cost is a single comparison beside the allocator call, and it folds away entirely when the count is a compile-time constant.
+**A zero-size request is not a failure.** `alloc(T, 0)`, `alloc(T[] { })`, and a heap copy of an empty slice all succeed and yield a `some` — a unique, freeable pointer whose FC-level length is `0`, so nothing may be read through it. C leaves a zero-size `malloc`/`calloc` implementation-defined (it may return null, which would be indistinguishable from exhaustion), so FC requests one unit in that case rather than letting the same program abort on one libc and succeed on another. The cost is a single comparison beside the allocator call, and it folds away entirely when the count is a compile-time constant.
 
 **Why `alloc` is an option, not a result.** Allocation failure is one bit — the allocator returned null — with no discriminable reason to branch on (C11 does not even guarantee `errno` is set on failure). That is exactly `T?`'s contract under the signature-legibility rule (§Result Types): `v?` says absence, one bit; `handle!` says failure has a *reason*. Typing `alloc` as `T!` would promise a reason and deliver a lone constant — at strictly higher cost, since `T*?` is the zero-overhead null-sentinel representation while `T*!` is a two-field struct, paid on `alloc(...)!`, the most common idiom in the language. Every serious precedent agrees the failure carries no menu: Rust's `AllocError` is a zero-field unit struct, Zig's is the single-member `error{OutOfMemory}`, kernel C returns NULL and the *caller* synthesizes `-ENOMEM`. One consequence is deliberate: a function returning a result cannot write `alloc(...)?` — option propagation into a result-returning function is a compile error, because converting `none` into some invented error code is exactly the hidden conversion FC refuses (§Propagation). The site that decides what an allocation failure *means* spells it — `match alloc(...) with | some(p) -> ... | none -> err(T, code)` — or unwraps with `!` to abort.
 
@@ -5346,8 +5356,8 @@ free(buf)                        // free a heap-allocated slice — compiler emi
 | Form | Returns | Behavior |
 |------|---------|----------|
 | `alloc(T)` | `T*?` | Zero-initialized single value |
-| `alloc(T[N] { })` | `T[]?` | Zero-initialized array of `N` elements; `N` may be runtime |
-| `alloc(T[N] { elems })` | `T[]?` | Heap array initialized with provided elements; `N` must be literal |
+| `alloc(T[] { len = N })` | `T[]?` | Zero-initialized array of `N` elements; `N` may be runtime |
+| `alloc(T[] { elems })` | `T[]?` | Heap array initialized with provided elements; a `len = N` assertion must be a compile-time constant |
 | `alloc(T, N)` | `T*?` | Raw buffer of `N` elements, zero-initialized (no length tracking) |
 | `alloc("literal")` | `str?` | Heap copy of string literal |
 | `alloc(c"literal")` | `cstr?` | Heap copy of cstr literal |
@@ -5357,7 +5367,7 @@ free(buf)                        // free a heap-allocated slice — compiler emi
 | `alloc(union.variant(val))` | `T*?` | Heap union initialized from variant |
 | `alloc(slice_expr)` | `T[]?` | **Deep-copy** — allocates `len * sizeof(elem)` and copies data |
 
-`alloc(expr)` accepts: string/cstr literals, interpolated strings (str and cstr), slice literals (`T[N] { ... }`), struct literals, union variant constructors, and slice expressions. The bare form `alloc(T[N])` is not valid — the `{ }` initializer is always required, even when empty. This keeps `T[N]` unambiguously a type and `T[N] { }` unambiguously a value expression. For runtime-sized allocation, `N` may be any integer expression but explicit element values are not allowed (the array is zero-initialized). Other expressions — scalars, bare pointer variables, and other non-literal forms — are a compile error. The error message directs users to `alloc(T)` for uninitialized heap allocation. This restriction prevents accidental pointer-to-pointer semantics and makes alloc intent explicit.
+`alloc(expr)` accepts: string/cstr literals, interpolated strings (str and cstr), slice literals (`T[] { ... }`), struct literals, union variant constructors, and slice expressions. `alloc(T[N])` is not a form: `T[N]` is the fixed-array type, and a slice is allocated from a slice literal. For runtime-sized allocation, the zero-initialized form's `len` may be any integer expression (`alloc(T[] { len = n })`); an element list's `len` assertion must still be a compile-time constant. Other expressions — scalars, bare pointer variables, and other non-literal forms — are a compile error. The error message directs users to `alloc(T)` for uninitialized heap allocation. This restriction prevents accidental pointer-to-pointer semantics and makes alloc intent explicit.
 
 The slice deep-copy form is the idiomatic way to promote a stack slice or string to heap-owned memory:
 
@@ -5365,7 +5375,7 @@ The slice deep-copy form is the idiomatic way to promote a stack slice or string
 let s = "hello %d{n}"       // stack-allocated (alloca) — unsafe to return
 let owned = alloc(s)!        // heap copy — safe to return, caller must free
 
-let mut buf = i32[3] { }
+let mut buf = i32[] { len = 3 }
 buf.ptr[0] = 10
 let heap_buf = alloc(buf)!   // deep-copies the 3 int32s to heap
 ```
@@ -5385,7 +5395,7 @@ When `alloc` wraps a literal expression — string literals, cstr literals, inte
 
 #### Raw buffer allocation
 
-`alloc(T, N)` allocates a raw buffer of `N` elements of type `T`, returning `T*?`. Unlike `alloc(T[N] { })`, it does not wrap the result in a slice — the caller must track the buffer size manually. This is useful for manual buffer construction (cstr buffers, C interop) and cases where slice overhead is unwanted.
+`alloc(T, N)` allocates a raw buffer of `N` elements of type `T`, returning `T*?`. Unlike `alloc(T[] { len = N })`, it does not wrap the result in a slice — the caller must track the buffer size manually. This is useful for manual buffer construction (cstr buffers, C interop) and cases where slice overhead is unwanted.
 
 ```fc
 let buf = alloc(u8, 256)!    // u8*? — raw buffer, no length tracking
@@ -5413,17 +5423,18 @@ let s = alloc(shape.circle(3.14))!
 let r = alloc(parse_outcome.success(42))!
 ```
 
-**Slice literal** — same rules as stack slice initialization. Length is always required and the element count must match exactly:
+**Slice literal** — same rules as stack slice initialization, except that a zero-initialized slice's `len` may be a runtime value:
 
 ```fc
-let buf = alloc(i32[4] { 1, 2, 3, 4 })!   // heap slice, length 4
-let buf = alloc(i32[4] { })!               // heap slice, all zeros (the `{ }` is required)
+let buf = alloc(i32[] { 1, 2, 3, 4 })!   // heap slice, length 4
+let buf = alloc(i32[] { len = 4 })!      // heap slice, all zeros
+let buf = alloc(i32[] { len = n })!      // heap slice, n zeros
 ```
 
 In all cases the return type follows from the value's type — `T*?` for structs and unions; `T[]?` for slices (deep-copied).
 
 > **Transpilation**
-> `alloc(point3d { x = 2, z = 4 })` transpiles to `malloc(sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d) { .x = 2, .z = 4 }`. `alloc(i32[4] { 1, 2, 3, 4 })` transpiles to `malloc(4 * sizeof(i32_t))` followed by element assignments. (`malloc` rather than `calloc`, since the initializer overwrites every byte; the bare-type form `alloc(T)`, the raw-buffer form `alloc(T, N)`, and the empty slice-literal form `alloc(i32[4] { })` use `calloc` instead.) All are conditional on the allocation succeeding.
+> `alloc(point3d { x = 2, z = 4 })` transpiles to `malloc(sizeof(point3d))` followed by a compound literal assignment `*_p = (point3d) { .x = 2, .z = 4 }`. `alloc(i32[] { 1, 2, 3, 4 })` transpiles to `malloc(4 * sizeof(i32_t))` followed by element assignments. (`malloc` rather than `calloc`, since the initializer overwrites every byte; the bare-type form `alloc(T)`, the raw-buffer form `alloc(T, N)`, and the zero-initialized slice-literal form `alloc(i32[] { len = 4 })` use `calloc` instead.) All are conditional on the allocation succeeding.
 
 ### Initialization after alloc
 
@@ -6076,7 +6087,7 @@ let int_compare = (a: const any*, b: const any*) ->
     ia - ib
 
 let main = (args: str[]) ->
-    let mut nums = i32[5] { 5, 2, 8, 1, 9 }
+    let mut nums = i32[] { 5, 2, 8, 1, 9 }
 
     // Pass a named function — trampoline bridges FC's (a, b, _ctx) to C's (a, b)
     libc.qsort(nums.ptr, 5usize, (usize) sizeof(i32), int_compare)

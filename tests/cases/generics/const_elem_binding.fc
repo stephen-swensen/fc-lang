@@ -13,9 +13,9 @@ let count_where = (xs: const 'a[], pred: ('a) -> bool) ->
     n
 
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[2] { 1u8, 2u8 })!
+    let mut buf = alloc(u8[] { 1u8, 2u8 })!
     defer free(buf)
-    let writable = str[1] { buf }
+    let writable = str[] { buf }
     let w = first(writable)
     w[0] = 9u8
     assert(buf[0] == 9u8)
@@ -24,11 +24,11 @@ let main = (args: str[]) ->
     q[1] = 8u8
     assert(buf[1] == 8u8)
 
-    assert(first(i32[2] { 4, 5 }) == 4)
+    assert(first(i32[] { 4, 5 }) == 4)
     let x = 7
     assert(deref(&x) == 7)
 
-    let words = const str[3] { "ab", "cde", "fghi" }
+    let words = (const str)[] { "ab", "cde", "fghi" }
     assert(first(words).len == 2)
     assert(count_where(words, (s: const str) -> s.len > 2) == 2)
     assert(count_where(writable, (s: str) -> s.len == 2) == 1)

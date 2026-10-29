@@ -222,7 +222,7 @@ module io =
         seek(handle, 0i64, seek_end)?
         let size = tell(handle)?
         seek(handle, 0i64, seek_set)?
-        let buf = alloc(u8[size] {})!
+        let buf = alloc(u8[] { len = size })!
         read(buf, size, handle)
         ok(buf)
 
@@ -332,7 +332,7 @@ module io =
         // FindFirstFileA wants a search pattern, not a directory path.
         // Build "<path>\*" as a NUL-terminated buffer.
         let plen = path.len
-        let pat = alloc(u8[plen + 3] {})!
+        let pat = alloc(u8[] { len = plen + 3 })!
         defer free(pat)
         for j in 0..plen do
             pat[j] = path[j]
@@ -348,7 +348,7 @@ module io =
             defer win.find_close(h)
             let mut cap = 16i64
             let mut count = 0i64
-            let mut names = alloc(str[cap] {})!
+            let mut names = alloc(str[] { len = cap })!
             loop
                 let mut nlen = 0i64
                 loop
@@ -361,19 +361,19 @@ module io =
                 if !is_dot && !is_dotdot then
                     if count >= cap then
                         let new_cap = cap * 2
-                        let new_names = alloc(str[new_cap] {})!
+                        let new_names = alloc(str[] { len = new_cap })!
                         for j in 0..count do
                             new_names[j] = names[j]
                         free(names)
                         names = new_names
                         cap = new_cap
-                    let name_buf = alloc(u8[nlen] {})!
+                    let name_buf = alloc(u8[] { len = nlen })!
                     for j in 0..nlen do
                         name_buf[j] = fd.cFileName[j]
                     names[count] = name_buf
                     count = count + 1
                 if win.find_next(h, &fd) == 0 then break
-            let result = alloc(str[count] {})!
+            let result = alloc(str[] { len = count })!
             for j in 0..count do
                 result[j] = names[j]
             free(names)
@@ -405,7 +405,7 @@ module io =
             defer dir.closedir(d)
             let mut cap = 16i64
             let mut count = 0i64
-            let mut names = alloc(str[cap] {})!
+            let mut names = alloc(str[] { len = cap })!
             loop
                 match dir.readdir(d) with
                 | none -> break
@@ -423,18 +423,18 @@ module io =
                     if !is_dot && !is_dotdot then
                         if count >= cap then
                             let new_cap = cap * 2
-                            let new_names = alloc(str[new_cap] {})!
+                            let new_names = alloc(str[] { len = new_cap })!
                             for j in 0..count do
                                 new_names[j] = names[j]
                             free(names)
                             names = new_names
                             cap = new_cap
-                        let name_buf = alloc(u8[nlen] {})!
+                        let name_buf = alloc(u8[] { len = nlen })!
                         for j in 0..nlen do
                             name_buf[j] = e.d_name[j]
                         names[count] = name_buf
                         count = count + 1
-            let result = alloc(str[count] {})!
+            let result = alloc(str[] { len = count })!
             for j in 0..count do
                 result[j] = names[j]
             free(names)

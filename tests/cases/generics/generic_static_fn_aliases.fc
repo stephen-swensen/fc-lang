@@ -17,7 +17,7 @@ let gen = (n: 'a) ->
     assert(&g == &inc)
     let cmp = (a: const any*, b: const any*) -> (i32) sizeof('a) - (i32) sizeof('a)
     let cmp2 = cmp
-    let mut xs = i32[2] { 2, 1 }
+    let mut xs = i32[] { 2, 1 }
     c.qsort(xs.ptr, 2usize, (usize) sizeof(i32), cmp2)
     f(0 - 2) + g(1)
 

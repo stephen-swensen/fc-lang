@@ -16,11 +16,11 @@ let main = (args: str[]) ->
     assert(c.cb_invoke(&c.negate, 4) == -4)
     assert(c.cb_invoke(&neg_alias, 5) == -5)
     assert(&c.negate == &neg_alias)
-    let mut nums = i32[3] { 3, 1, 2 }
+    let mut nums = i32[] { 3, 1, 2 }
     libc.qsort(nums.ptr, 3usize, (usize) sizeof(i32), c.cmp_i32)
     assert(nums[0] == 1 && nums[2] == 3)
     let by = c.cmp_i32
-    let mut more = i32[2] { 9, 8 }
+    let mut more = i32[] { 9, 8 }
     libc.qsort(more.ptr, 2usize, (usize) sizeof(i32), by)
     assert(more[0] == 8)
     0

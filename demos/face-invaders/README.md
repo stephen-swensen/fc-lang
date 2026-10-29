@@ -70,8 +70,8 @@ WSL2 experience is to just use the default (don't hit F11).
 - **Fullscreen + high-DPI SDL2 setup**: `SDL_WINDOW_FULLSCREEN_DESKTOP`,
   `SDL_WINDOW_ALLOW_HIGHDPI`, `SDL_RenderSetLogicalSize`, accelerated
   renderer with vsync, blend-mode alpha.
-- **Rich file-level initializers**: heap buffers (`alloc(enemy[55] {})!`,
-  `alloc(bullet[64] {})!`, `alloc(game_state)!`, etc.) are allocated
+- **Rich file-level initializers**: heap buffers (`alloc(enemy[] { len = 55 })!`,
+  `alloc(bullet[] { len = 64 })!`, `alloc(game_state)!`, etc.) are allocated
   *at file scope* — a feature that lets the whole game share mutable
   state without threading pointers through every function.
 - **Union types for game phases**: `splash`, `playing`, `paused`,

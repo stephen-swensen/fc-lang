@@ -5,7 +5,7 @@ module c from "string.h" =
     extern strlen: (const cstr) -> usize
 
 let main = (args: str[]) ->
-    match alloc(u8[20000] { }) with
+    match alloc(u8[] { len = 20000 }) with
     | some(a) ->
         for i in 0..a.len do a[i] = 'x'
         let s = alloca(c"%s{a}%s{a}!")

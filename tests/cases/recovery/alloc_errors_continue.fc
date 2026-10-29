@@ -2,7 +2,7 @@
 let main = (args: str[]) ->
     let n = 3
     let a = alloc(i32[3])
-    let b = alloc(i32[n] { 1, 2 })
+    let b = alloc(i32[] { size = 3 })
     let c = alloc(i32 5)
     let late = struct
     0

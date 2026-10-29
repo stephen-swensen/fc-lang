@@ -2,7 +2,7 @@
 // --len-repr 16 one longer than 32767 bytes cannot exist, so it traps
 // before its buffer is dimensioned; a shorter one is built as usual.
 let main = (args: str[]) ->
-    match alloc(u8[20000] { }) with
+    match alloc(u8[] { len = 20000 }) with
     | some(a) ->
         for i in 0..a.len do a[i] = 'x'
         let short = alloca("%s{a[0..10]}!")

@@ -264,7 +264,7 @@ let load_high_score = () ->
     | some(hd) ->
         match io.open(alloca("%s{hd}/.fibbles/highscore.txt"), "r") with
         | ok(fp) ->
-            let mut buf = u8[32] { }
+            let mut buf = u8[] { len = 32 }
             let n = io.read(buf, 32, fp)
             ignore io.close(fp)  // best-effort: contents already read
             // parse only the bytes read, minus the trailing newline —
@@ -393,13 +393,13 @@ let main = (args: str[]) ->
     let mut high_score = load_high_score()
 
     // Game state
-    let mut body = vec2[512] { }
+    let mut body = vec2[] { len = 512 }
     let mut head_idx = 2
     let mut length = 3
     let mut dir_x = 1
     let mut dir_y = 0
-    let mut q_dx = i32[2] { }
-    let mut q_dy = i32[2] { }
+    let mut q_dx = i32[] { len = 2 }
+    let mut q_dy = i32[] { len = 2 }
     let mut q_len = 0
     let mut score = 0
     let mut speed = 300
@@ -642,7 +642,7 @@ let main = (args: str[]) ->
                         dcount = dcount + 1
                         tmp = tmp / 10
                 let sox = 16 - dcount * 2
-                let mut digits = i32[8] { }
+                let mut digits = i32[] { len = 8 }
                 let mut dtmp = score
                 for si in 0..dcount do
                     digits[dcount - 1 - si] = dtmp % 10

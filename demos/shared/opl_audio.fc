@@ -232,7 +232,7 @@ module opl_audio =
     // block is an octave. The F-numbers are one equal-tempered octave at
     // A = 440, rounded for the YM3812's
     //     f = fnum * 2^(block-1) * 49716 / 2^19.
-    private let fnum_of = i32[12] {
+    private let fnum_of = i32[] { len = 12,
         345, 365, 387, 410, 434, 460, 488, 517, 547, 580, 614, 651 }
 
     // Strike a note on a channel. The key-off first is not optional: the

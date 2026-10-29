@@ -15,7 +15,7 @@ struct holder =
 let main = (args: str[]) ->
     let mut x = 4
     let mut y = 9
-    let cs = const i32*[2] { (const i32*) &x, (const i32*) &y }
+    let cs = (const i32*)[] { (const i32*) &x, (const i32*) &y }
 
     // the widen itself: read-only slots absorb into a read-only slice
     assert(ro_slice(cs) == 2)

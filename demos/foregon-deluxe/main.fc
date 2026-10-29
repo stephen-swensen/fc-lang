@@ -28,7 +28,7 @@ import sys from std::
 // The engine plays a tune under the effects; this game's tunes are effects
 // themselves, so its player gets a song with nothing in it.
 let silent_song = () ->
-    opl_midi.song { events = alloc(opl_midi.event[0] {})!,
+    opl_midi.song { events = alloc(opl_midi.event[] { })!,
                     division = 480, length = 0 }
 
 let main = (args: str[]) ->

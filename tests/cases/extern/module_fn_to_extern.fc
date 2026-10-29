@@ -12,7 +12,7 @@ module cmp =
     let desc = (a: const any*, b: const any*) -> *((const i32*) b) - *((const i32*) a)
 
 let main = (args: str[]) ->
-    let mut nums = i32[4] { 3, 1, 4, 2 }
+    let mut nums = i32[] { 3, 1, 4, 2 }
     libc.qsort(nums.ptr, 4usize, (usize) sizeof(i32), cmp.asc)
     assert(nums[0] == 1 && nums[3] == 4)
     libc.qsort(nums.ptr, 4usize, (usize) sizeof(i32), desc)

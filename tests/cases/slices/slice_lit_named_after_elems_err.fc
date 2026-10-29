@@ -1,0 +1,4 @@
+// A slice literal's named fields come before its elements.
+let main = (args: str[]) ->
+    let xs = i32[] { 1, 2, len = 2 }
+    xs[0]

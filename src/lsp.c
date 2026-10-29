@@ -868,7 +868,7 @@ static void find_in_expr(Expr *e, void *find_ctx) {
             }
             break;
         case EXPR_ARRAY_LIT:
-            /* The literal starts with its written element type (`dir[8] {`). */
+            /* The literal starts with its written element type (`dir[] {`). */
             consider_type_annotation(c, e->array_lit.elem_type, e->loc.line, e->loc.col);
             break;
         case EXPR_SLICE_LIT:

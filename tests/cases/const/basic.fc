@@ -8,5 +8,5 @@ let main = (args: str[]) ->
     let mut x = 42
     let p = &x
     let v1 = read_val(p)
-    let v2 = read_first(i32[3] { 10, 20, 30 })
+    let v2 = read_first(i32[] { 10, 20, 30 })
     v1 + v2 - 42 - 10

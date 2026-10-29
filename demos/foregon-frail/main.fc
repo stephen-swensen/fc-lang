@@ -26,7 +26,7 @@ import sys from std::
 // The engine plays a tune under the effects; this game has none, so its
 // player is handed a song with nothing in it.
 let silent_song = () ->
-    opl_midi.song { events = alloc(opl_midi.event[0] {})!,
+    opl_midi.song { events = alloc(opl_midi.event[] { })!,
                     division = 480, length = 0 }
 
 let main = (args: str[]) ->
@@ -52,7 +52,7 @@ let main = (args: str[]) ->
     game.begin(g, p)
 
     let mut inp = default(input)
-    let answer = alloc(u8[32] {})!
+    let answer = alloc(u8[] { len = 32 })!
     let mut frame = 0
     let mut last = gfx.now()
 

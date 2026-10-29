@@ -6,7 +6,7 @@ let first_match = (xs: 'a[], target: 'a) ->
     none('a)
 
 let main = (args: str[]) ->
-    let ints = i32[4] { 10, 20, 30, 40 }
+    let ints = i32[] { 10, 20, 30, 40 }
     let hit = first_match(ints, 30)
     assert(hit.is_some)
     assert(hit! == 30)
@@ -14,7 +14,7 @@ let main = (args: str[]) ->
     let miss = first_match(ints, 99)
     assert(miss.is_none)
 
-    let bools = bool[4] { false, false, true, false }
+    let bools = bool[] { false, false, true, false }
     let found_true = first_match(bools, true)
     assert(found_true!)
     0

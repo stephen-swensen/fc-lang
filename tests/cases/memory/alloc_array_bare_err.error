@@ -1,1 +1,1 @@
-alloc(T[N] { })
+alloc(T[N]) is not a form

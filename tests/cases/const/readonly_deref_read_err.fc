@@ -8,7 +8,7 @@ let poke = (h: const holder*) ->
     t[0] = 5u8
 
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[2] { })!
+    let mut buf = alloc(u8[] { len = 2 })!
     let h = holder { s = buf }
     poke(&h)
     (i32) buf[0]

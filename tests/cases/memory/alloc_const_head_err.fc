@@ -1,0 +1,6 @@
+// The read-only head under alloc: the allocation's slots are writable too.
+let main = (args: str[]) ->
+    let n = (i64) args.len
+    let names = alloc(const str[] { len = n })!
+    free(names)
+    0

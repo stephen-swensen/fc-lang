@@ -17,7 +17,7 @@ let inner = (x: 'a) ->
         match o with
         | present(v) -> v
         | absent -> default(box<'a>).v      // default(box<'a>) discovered via dead arm
-    let arr = box<'a>[2] { box { v = picked }, box { v = picked } }
+    let arr = box<'a>[] { box { v = picked }, box { v = picked } }
     arr[0].v + arr[1].v                     // 2 * x
 
 let outer = (x: 'a) ->

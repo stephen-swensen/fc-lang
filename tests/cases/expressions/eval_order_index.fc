@@ -10,8 +10,8 @@ struct holder =
 struct bank =
     vals: i64[3]
 
-let mut gs = i64[3] { 10, 20, 30 }
-let mut other = i64[3] { 40, 50, 60 }
+let mut gs = i64[] { 10, 20, 30 }
+let mut other = i64[] { 40, 50, 60 }
 let mut counter = 0i64
 
 // Points gs elsewhere and returns 1.
@@ -28,8 +28,8 @@ let next_ptr = (p: i64*) ->
     p
 
 let main = (args: str[]) ->
-    let a = i64[3] { 10, 20, 30 }
-    let b = i64[3] { 40, 50, 60 }
+    let a = i64[] { 10, 20, 30 }
+    let b = i64[] { 40, 50, 60 }
 
     // a slice local reassigned by the index, read and written
     let mut s = a
@@ -57,8 +57,8 @@ let main = (args: str[]) ->
     assert(hp.items[(hp.items = b; 2)] == 30 && h.items[2] == 60)
 
     // a fixed-array field through a pointer the index moves
-    let mut b1 = bank { vals = i64[3] { 1, 2, 3 } }
-    let mut b2 = bank { vals = i64[3] { 4, 5, 6 } }
+    let mut b1 = bank { vals = i64[] { 1, 2, 3 } }
+    let mut b2 = bank { vals = i64[] { 4, 5, 6 } }
     let mut bp = &b1
     assert(bp.vals[(bp = &b2; 1)] == 2 && bp.vals[1] == 5)
     bp.vals[(bp = &b1; 0)] = 9
@@ -69,7 +69,7 @@ let main = (args: str[]) ->
 
     // the index reads counter after the container's call has bumped it
     counter = 0
-    let c = i64[3] { 7, 8, 9 }
+    let c = i64[] { 7, 8, 9 }
     assert(next_slice(c)[counter] == 8 && counter == 1)
     assert(next_ptr(&c[0])[counter] == 9 && counter == 2)
     0

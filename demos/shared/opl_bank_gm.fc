@@ -199,7 +199,7 @@ module opl_bank_gm =
     // cymbals are one crash, the bongos and congas and timbales are one hand
     // drum. Sixty voices do not stretch to a full drum kit, and the notes
     // that share are the ones a listener is least likely to hear as wrong.
-    private let drum_map = i32[94] {
+    private let drum_map = i32[] { len = 94,
         35, kick,       36, kick,       37, rimshot,    38, snare,
         39, clap,       40, snare,      41, tom_lo,     42, hat_shut,
         43, tom_lo,     44, hat_shut,   45, tom_lo,     46, hat_open,
@@ -227,7 +227,7 @@ module opl_bank_gm =
     // and there is no cowbell, conga, tambourine or woodblock whatever.
     // Every note not named here keeps the melodic voice it had, which is why
     // the two paths coexist instead of competing.
-    private let rhythm_notes = i32[30] {
+    private let rhythm_notes = i32[] { len = 30,
         35, 0,   36, 0,                         // bass drum
         38, 1,   40, 1,                         // snare
         41, 2,   43, 2,   45, 2,                // toms, low to high
@@ -248,7 +248,7 @@ module opl_bank_gm =
     // melodic-voice fakes they replace: snare 0.49 -> 0.81, hi-hat
     // 0.49 -> 0.72, where 1.0 is white noise.
     private let rhythm_kit = () ->
-        alloc(opl_midi.patch[6] {
+        alloc(opl_midi.patch[] { len = 6,
             // Bass drum. A 0.5x pair with feedback and a soft modulator
             // attack — the thump is the envelope, since the chip cannot
             // sweep pitch down the way a real kick does.
@@ -292,7 +292,7 @@ module opl_bank_gm =
     // Every General MIDI program, 0-based as the wire format numbers them —
     // so program 0 is the Acoustic Grand Piano that a printed GM chart calls
     // number 1.
-    private let program_map = i32[128] {
+    private let program_map = i32[] { len = 128,
         // 0-7    pianos
         piano, piano, piano, piano, epiano, epiano, harpsi, clav,
         // 8-15   chromatic percussion
@@ -337,7 +337,7 @@ module opl_bank_gm =
     // rule for both authored and loaded banks is worth one small startup
     // allocation.
     let make = () ->
-        let ps = alloc(opl_midi.patch[60] {
+        let ps = alloc(opl_midi.patch[] { len = 60,
 
         // ---------- 0-3  pianos ----------
 
@@ -830,8 +830,8 @@ module opl_bank_gm =
             c_char = 0x0E, c_scale = 0x00, c_atk = 0xFA, c_sus = 0x09, c_wave = 0x03,
             n_conn = 0x0A, fixed_note = 78 } })!
 
-        let mel = alloc(i32[128] {})!
-        let drm = alloc(i32[128] {})!
+        let mel = alloc(i32[] { len = 128 })!
+        let drm = alloc(i32[] { len = 128 })!
         for i in 0..128 do
             mel[i] = program_map[i]
             drm[i] = -1
@@ -839,7 +839,7 @@ module opl_bank_gm =
             drm[drum_map[i * 2i64]] = drum_map[i * 2i64 + 1i64]
 
         let rk = rhythm_kit()
-        let rmap = alloc(i32[128] {})!
+        let rmap = alloc(i32[] { len = 128 })!
         for i in 0..128 do
             rmap[i] = -1
         for i in 0..(rhythm_notes.len / 2i64) do

@@ -3,6 +3,6 @@
 let main = (args: str[]) ->
     let mut x = 1i32
     let cp = (const i32*) &x
-    let ps = any*[2] { cp, cp }
+    let ps = any*[] { cp, cp }
     assert(ps.len == 2)
     0

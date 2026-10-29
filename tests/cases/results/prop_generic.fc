@@ -13,9 +13,9 @@ let first_of_pair = (xs: 'a[], ys: 'a[]) ->
     if xs.len > ys.len then ok(x) else ok(y)
 
 let main = (args: str[]) ->
-    let is = i32[2] { 4, 9 }
-    let empty_is = i32[0] {}
-    let bs = bool[1] { true }
+    let is = i32[] { 4, 9 }
+    let empty_is = i32[] { }
+    let bs = bool[] { true }
 
     match first_of_pair(is, is) with
     | ok(v) -> assert(v == 4)

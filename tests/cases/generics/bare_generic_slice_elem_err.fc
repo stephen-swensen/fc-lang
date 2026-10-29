@@ -4,5 +4,5 @@ struct box =
     value: 'a
 
 let main = (args: str[]) ->
-    let a = box[2] { }
+    let a = box[] { len = 2 }
     0

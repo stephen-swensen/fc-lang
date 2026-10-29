@@ -220,7 +220,7 @@ word size, not the compiler's parser:
    Soundness rides one invariant — every stored len proven in
    `[0, FC_LEN_MAX]` at slice construction (compile-time lens judged
    statically; runtime lens via `fc_chk_len`/`fc_len_cap` aborts, and
-   `alloc(T[n] { })` over capacity answers `none`). A narrow index type at a
+   `alloc(T[] { len = n })` over capacity answers `none`). A narrow index type at a
    narrow repr yields a single native-width fused compare; `fc_str` at
    `--len-repr 16` is `{ uint8_t*; int16_t }`. Because semantics are identical,
    the whole suite runs under the narrow configs on the host

@@ -13,6 +13,6 @@ let main = (args: str[]) ->
     | ok(p) -> assert(p.x == 0 && p.y == 0)
     | err(_) -> assert(false)
     // zero-filled slice literal of results — every element is ok(0)
-    let arr = i32![4] {}
+    let arr = i32![] { len = 4 }
     for r in arr do assert(r.is_ok && r! == 0)
     0

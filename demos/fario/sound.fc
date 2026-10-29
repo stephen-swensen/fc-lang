@@ -34,7 +34,7 @@ module snd =
     private let i_brass   = 9     // fanfares
     private let i_grind   = 10    // the bridge going down
 
-    private let instruments = opl_audio.instrument[11] {
+    private let instruments = opl_audio.instrument[] { len = 11,
         // Chirp: 4:1, deep modulation, feedback — spat out of a tube and
         // gone in 150 ms.
         opl_audio.instrument {
@@ -138,7 +138,7 @@ module snd =
     // Every effect's steps, end to end: (note, ticks) pairs, note -1 a
     // rest, 48 middle C. The table below slices this up; each script sits
     // on its own line in the same order so the counts can be checked.
-    private let script = i32[196] {
+    private let script = i32[] { len = 196,
         60,1, 67,1, 72,3,                                       // jump      3
         55,1, 60,2,                                             // stroke    2
         81,1, 88,9,                                             // coin      2
@@ -163,7 +163,7 @@ module snd =
         36,2, 31,3                                              // thud      2
     }
 
-    private let sounds = opl_audio.sound[20] {
+    private let sounds = opl_audio.sound[] { len = 20,
         opl_audio.sound { instr = i_chirp,  first = 0,  steps = 3 },
         opl_audio.sound { instr = i_chirp,  first = 3,  steps = 2 },
         opl_audio.sound { instr = i_bell,   first = 5,  steps = 2 },

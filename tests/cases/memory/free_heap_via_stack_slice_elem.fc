@@ -5,9 +5,9 @@
 // pattern. escape/free_stack_slice_elem_err pins the other side: a container
 // that has actually held a stack slice stays tainted.
 let main = (args: str[]) ->
-    let ss = (i32[])[2] { }
-    ss[0] = alloc(i32[2] { 4, 5 })!
-    ss[1] = alloc(i32[3] { 6, 7, 8 })!
+    let ss = (i32[])[] { len = 2 }
+    ss[0] = alloc(i32[] { 4, 5 })!
+    ss[1] = alloc(i32[] { 6, 7, 8 })!
     assert(ss[0][1] == 5)
     assert(ss[1][2] == 8)
     free(ss[0])

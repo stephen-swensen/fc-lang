@@ -7,7 +7,7 @@
 let main = (args: str[]) ->
     let mut acc = 0i64
     for i in 0..100000 do
-        let buf = i32[512] { }
+        let buf = i32[] { len = 512 }
         buf[0] = i
         buf[511] = i
         acc = acc + (i64) (buf[0] + buf[511])

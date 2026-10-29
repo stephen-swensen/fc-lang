@@ -138,8 +138,8 @@ let load_notebook = (dir: const str, first: opl_midi.song, first_title: const st
                   // is. Not an error — a first run with no network reaches
                   // here, and the game is complete without it.
                   io.write(alloca("Music: no notebook in %s{default_notebook} — the minuet plays every level (run fetch-music.sh)\n"), stdout)
-                  return playlist { songs = alloc(opl_midi.song[1] { first })!,
-                                    titles = alloc(const str[1] { first_title })! }
+                  return playlist { songs = alloc(opl_midi.song[] { first })!,
+                                    titles = alloc((const str)[] { first_title })! }
 
     // `src` is deliberately never freed. `text.split` hands back slices of it
     // rather than copies, so the titles below *are* this buffer, and they are
@@ -155,8 +155,8 @@ let load_notebook = (dir: const str, first: opl_midi.song, first_title: const st
     // caller's literal at entry 0, and `text.split`'s slices of `src` after
     // it — without copying either. A plain `str[]` would take the slices and
     // refuse the literal.
-    let songs = alloc(opl_midi.song[lines.len + 1i64] {})!
-    let titles = alloc(const str[lines.len + 1i64] {})!
+    let songs = alloc(opl_midi.song[] { len = lines.len + 1i64 })!
+    let titles = alloc((const str)[] { len = lines.len + 1i64 })!
     songs[0] = first
     titles[0] = first_title
     let mut n = 1i64
@@ -597,17 +597,17 @@ let open_music = (args: str[]) ->
         match load_song(path) with
         | some(sg) ->
             io.write(alloca("Music: %s{path}\n"), stdout)
-            playlist { songs = alloc(opl_midi.song[1] { sg })!,
-                       titles = alloc(const str[1] { "" })! }
-        | none -> playlist { songs = alloc(opl_midi.song[0] {})!,
-                             titles = alloc(const str[0] {})! }
+            playlist { songs = alloc(opl_midi.song[] { sg })!,
+                       titles = alloc((const str)[] { "" })! }
+        | none -> playlist { songs = alloc(opl_midi.song[] { })!,
+                             titles = alloc((const str)[] { })! }
     | none ->
         match load_song(default_music) with
         | some(sg) ->
             io.write(alloca("Music: %s{default_music}\n"), stdout)
             load_notebook(default_notebook, sg, "MINUET IN G - BWV ANH. 114")
-        | none -> playlist { songs = alloc(opl_midi.song[0] {})!,
-                             titles = alloc(const str[0] {})! }
+        | none -> playlist { songs = alloc(opl_midi.song[] { })!,
+                             titles = alloc((const str)[] { })! }
 
 let main = (args: str[]) ->
 #if backend != "sdl2" && backend != "raylib"
@@ -672,7 +672,7 @@ let main = (args: str[]) ->
     let first = if pl.songs.len > 0i64 then pl.songs[0]
                 else
                     io.write("Audio: running without music\n", stdout)
-                    opl_midi.song { events = alloc(opl_midi.event[0] {})!,
+                    opl_midi.song { events = alloc(opl_midi.event[] { })!,
                                     division = 480, length = 0 }
     // Tuned before the device opens, which is the last moment this thread may
     // touch the player at all — from `audio_start` on it belongs to the audio

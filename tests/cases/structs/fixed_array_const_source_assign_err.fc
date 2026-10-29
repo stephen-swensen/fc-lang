@@ -4,8 +4,8 @@ struct box =
     names: str[1]
 
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[2] { })!
-    let ro = (const str[]) str[1] { buf }
+    let mut buf = alloc(u8[] { len = 2 })!
+    let ro = (const str[]) str[] { buf }
     let mut b = box { }
     b.names = ro
     (i32) b.names.len

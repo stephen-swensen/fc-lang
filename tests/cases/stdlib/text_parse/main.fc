@@ -24,7 +24,7 @@ let main = (args: str[]) ->
 
     // an embedded NUL is not part of any number (the C parser would stop
     // there silently and validate only the prefix)
-    let nul = u8[3] { '1', '2', 0u8 }
+    let nul = u8[] { '1', '2', 0u8 }
     assert(text.parse_i32(nul) == err(i32, text.parse.invalid))
 
     // parse_i32 — overflow: the i32-range check the wrapper applies, and the
@@ -80,7 +80,7 @@ let main = (args: str[]) ->
     // over-length input fails with too_long rather than overflowing the
     // stack. build a 600-byte run of '0' digits — a "valid" number far past
     // the max_parse_len cap, so every parse_* must reject it.
-    let big = alloc(u8[600] {})!
+    let big = alloc(u8[] { len = 600 })!
     defer free(big)
     let mut i = 0i64
     loop

@@ -14,10 +14,10 @@ let main = (args: str[]) ->
     free(q)
 
     // zero-length slice literal, literal and runtime length
-    let s = alloc(i32[0] { })!
+    let s = alloc(i32[] { })!
     assert(s.len == 0)
     free(s)
-    let t = alloc(i32[n] { })!
+    let t = alloc(i32[] { len = n })!
     assert(t.len == 0)
     free(t)
 
@@ -27,13 +27,13 @@ let main = (args: str[]) ->
     free(e)
 
     // heap copy of an empty slice
-    let src = i32[0] { }
+    let src = i32[] { }
     let c = alloc(src)!
     assert(c.len == 0)
     free(c)
 
     // the non-degenerate cases are unchanged
-    let big = alloc(i32[3] { 7, 8, 9 })!
+    let big = alloc(i32[] { 7, 8, 9 })!
     assert(big.len == 3)
     assert(big[2] == 9)
     free(big)

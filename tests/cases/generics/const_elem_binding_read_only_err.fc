@@ -5,8 +5,8 @@
 let first = (xs: const 'a[]) -> xs[0]
 
 let main = (args: str[]) ->
-    let mut buf = alloc(u8[2] { })!
-    let ro = (const str[]) str[1] { buf }
+    let mut buf = alloc(u8[] { len = 2 })!
+    let ro = (const str[]) str[] { buf }
     let w = first(ro)
     w[0] = 5u8
     (i32) buf[0]

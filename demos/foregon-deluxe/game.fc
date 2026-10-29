@@ -256,10 +256,10 @@ module game =
     // Prices climb with the miles from Missouri.
     let price_factor = (w: const world*) -> 1.0 + w.miles / 1000.0 * 0.8
 
-    let item_names = (const str)[7] {
+    let item_names = (const str)[] { len = 7,
         "Oxen (a yoke of two)", "Food (pounds)", "Clothing (sets)",
         "Ammunition (boxes of 20)", "Wagon wheels", "Wagon axles", "Wagon tongues" }
-    let item_price = f64[7] { 40.0, 0.20, 10.0, 2.0, 10.0, 10.0, 10.0 }
+    let item_price = f64[] { 40.0, 0.20, 10.0, 2.0, 10.0, 10.0, 10.0 }
 
     let item_have = (w: const world*, i: i32) ->
         match i with
@@ -272,7 +272,7 @@ module game =
         | _ -> w.tongues
 
     // What the wagon can hold of each, in the store's units.
-    private let item_cap = i32[7] { 10, 2000, 50, 99, 3, 3, 3 }
+    private let item_cap = i32[] { 10, 2000, 50, 99, 3, 3, 3 }
 
     // ============================================================
     // Setting out
@@ -280,7 +280,7 @@ module game =
 
     let make = (seed: u64) ->
         let w = alloc(world {
-            msg = alloc(u8[(i64) (max_msgs * msg_cap)] {})!,
+            msg = alloc(u8[] { len = (i64) (max_msgs * msg_cap) })!,
             rng = pcg_random.make(seed),
             sound_on = true })!
         records.load(&w.archive)
@@ -329,9 +329,9 @@ module game =
     // Weather
     // ============================================================
 
-    private let month_temp = i32[12] { 24, 30, 42, 55, 65, 75, 82, 80, 70, 56, 42, 30 }
-    private let month_wet = f64[12] { 0.12, 0.14, 0.2, 0.24, 0.22, 0.16, 0.1, 0.1, 0.1, 0.12, 0.16, 0.16 }
-    private let region_temp = i32[4] { 0, -6, -18, -4 }
+    private let month_temp = i32[] { 24, 30, 42, 55, 65, 75, 82, 80, 70, 56, 42, 30 }
+    private let month_wet = f64[] { 0.12, 0.14, 0.2, 0.24, 0.22, 0.16, 0.1, 0.1, 0.1, 0.12, 0.16, 0.16 }
+    private let region_temp = i32[] { 0, -6, -18, -4 }
 
     let region = (w: const world*) -> lore.places[w.place].region
 
@@ -348,7 +348,7 @@ module game =
     // A day on the trail
     // ============================================================
 
-    private let pace_miles = f64[4] { 0.0, 16.0, 20.0, 24.0 }
+    private let pace_miles = f64[] { 0.0, 16.0, 20.0, 24.0 }
 
     // How many miles today, as things stand.
     let day_miles = (w: const world*) ->
@@ -458,7 +458,7 @@ module game =
     // Things that happen
     // ============================================================
 
-    private let part_names = (const str)[4] { "", "wheel", "axle", "tongue" }
+    private let part_names = (const str)[] { "", "wheel", "axle", "tongue" }
 
     // The spares on hand for a part (1 wheel, 2 axle, 3 tongue): the
     // wagon's own counter, to read or spend.
@@ -560,7 +560,7 @@ module game =
         else if r < 64 && summer then
             let n = 20 + pick(w, 40)
             w.food = w.food + (f64) n
-            let fruit = (const str)[3] { "wild currants", "chokecherries", "wild plums" }
+            let fruit = (const str)[] { "wild currants", "chokecherries", "wild plums" }
             say(w, "You find %.14s{fruit[pick(w, 3)]} and gather %d{n} pounds.")
             sound(w, snd.sfx_good)
         else if r < 67 then
@@ -680,7 +680,7 @@ module game =
     // Rivers
     // ============================================================
 
-    private let river_season = f64[12] { 0.8, 0.85, 1.1, 1.25, 1.35, 1.3, 1.0, 0.8, 0.7, 0.7, 0.8, 0.9 }
+    private let river_season = f64[] { 0.8, 0.85, 1.1, 1.25, 1.35, 1.3, 1.0, 0.8, 0.7, 0.7, 0.8, 0.9 }
 
     private let open_river = (w: world*) ->
         let pl = lore.places[w.place]
@@ -873,7 +873,7 @@ module game =
         | _ -> w.tongues = w.tongues + n
         mend_if_spare(w)
 
-    let trade_names = (const str)[6] { "oxen", "pounds of food", "sets of clothing", "bullets",
+    let trade_names = (const str)[] { len = 6, "oxen", "pounds of food", "sets of clothing", "bullets",
                                        "wagon wheels", "wagon axles" }
 
     private let have_trade = (w: const world*, item: i32) ->

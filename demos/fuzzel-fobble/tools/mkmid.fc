@@ -70,7 +70,7 @@ module tune =
     // (note, duration) pairs, played end to end with no rests, so the bar
     // lines below are a reading aid rather than something the data encodes.
     // Middle C is 60, so this half sits between F#4 (66) and G5 (79).
-    let melody_a = i32[128] {
+    let melody_a = i32[] { len = 128,
         74, 480,  67, 240,  69, 240,  71, 240,  72, 240,   // 1   d' | g a b c
         74, 480,  67, 480,  67, 480,                       // 2   d' | g | g
         76, 480,  72, 240,  74, 240,  76, 240,  78, 240,   // 3   e' | c d e f#
@@ -93,7 +93,7 @@ module tune =
     // The second half opens an octave above where the first one lives —
     // B5 (83) is the top note of the piece — works down through a rising
     // scale in bar 21, and comes home through the running eighths of bar 29.
-    let melody_b = i32[124] {
+    let melody_b = i32[] { len = 124,
         83, 480,  79, 240,  81, 240,  83, 240,  79, 240,   // 17  b' | g a b g
         81, 480,  74, 240,  76, 240,  78, 240,  74, 240,   // 18  a  | d e f# d
         79, 480,  76, 240,  78, 240,  79, 240,  74, 240,   // 19  g  | e f# g d
@@ -118,7 +118,7 @@ module tune =
     // The score's own left hand, not a root-and-fifth reduction of it: it
     // walks in bars 8 and 12 and steps down to the low G at the cadence,
     // and those are the moments that make the half sound finished.
-    let bass_a = i32[70] {
+    let bass_a = i32[] { len = 70,
         55, 960,  57, 480,                                 // 1   G . | A
         59, 1440,                                          // 2   B
         60, 1440,                                          // 3   C
@@ -140,7 +140,7 @@ module tune =
     //
     // A rest in bar 28 — the one place the bass stops — which is why
     // `lay_line` understands a negative note as a rest.
-    let bass_b = i32[72] {
+    let bass_b = i32[] { len = 72,
         55, 1440,                                          // 17  G
         54, 1440,                                          // 18  F#
         52, 480,  55, 480,  52, 480,                       // 19  E G E
@@ -166,13 +166,13 @@ module tune =
     // chord would cover, and where the bass and melody are busy enough on
     // their own. Written low note first, both between F#3 (54) and G4 (67)
     // so the part sits under the melody and over the bass.
-    let pad_a = i32[32] {
+    let pad_a = i32[] { len = 32,
         59, 62,   62, 67,   64, 67,   62, 67,              // 1-4    G  G/B C  G/B
         62, 66,   59, 62,   59, 62,   54, 60,              // 5-8    D  G   G  D7
         62, 67,   59, 62,   64, 67,   62, 67,              // 9-12   G  G   C  G/B
         62, 66,   59, 62,    0,  0,   59, 62 }             // 13-16  D  G   -  G
 
-    let pad_b = i32[32] {
+    let pad_b = i32[] { len = 32,
         59, 62,   57, 62,   59, 64,   61, 64,              // 17-20  G  D  Em  A
         61, 64,    0,  0,   57, 62,   54, 60,              // 21-24  A  -  D   D7
         62, 67,   64, 67,    0,  0,   57, 62,              // 25-28  G/B C  -  D
@@ -216,7 +216,7 @@ struct track =
     n: i64
 
 let track_new = () ->
-    track { evs = alloc(ev[4096] {})!, n = 0i64 }
+    track { evs = alloc(ev[] { len = 4096 })!, n = 0i64 }
 
 let emit = (t: track*, tick: i32, status: i32, d1: i32, d2: i32, size: i32) ->
     assert(t.n < t.evs.len)
@@ -262,7 +262,7 @@ struct writer =
     n: i64
 
 let writer_new = (cap: i64) ->
-    writer { b = alloc(u8[cap] {})!, n = 0i64 }
+    writer { b = alloc(u8[] { len = cap })!, n = 0i64 }
 
 let put8 = (w: writer*, v: i32) ->
     assert(w.n < w.b.len)

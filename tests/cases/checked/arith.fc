@@ -28,7 +28,7 @@ let main = (args: str[]) ->
 
     // signed negation (non-min). Runtime operand: `-(literal)` would constant-fold
     // to a literal, leaving `checked` with no governed op.
-    let ns = i8[1]{100i8}
+    let ns = i8[]{100i8}
     let n = checked -(ns[0])
     assert(n == -100i8)
 
@@ -49,9 +49,9 @@ let main = (args: str[]) ->
     assert((checked (i8) (-100i32)) == -100i8)    // signed negative in range
 
     // platform-width types (isize/usize): bounds via PTRDIFF_*/SIZE_MAX, width-agnostic
-    let i64s = i64[1]{100i64}
+    let i64s = i64[]{100i64}
     assert((i64)(checked (isize) i64s[0]) == 100i64)   // -> isize, in range
-    let us = usize[1]{50usize}
+    let us = usize[]{50usize}
     assert((checked (u8) us[0]) == 50u8)              // usize -> u8, in range
 
     // a widening cast is not trapped: pair it with a governed op so `checked`

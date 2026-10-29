@@ -5,7 +5,7 @@ struct box =
     data: i32[2]
 
 module m =
-    let b = box { data = i32[3] { 1, 2, 3 } }
+    let b = box { data = i32[] { 1, 2, 3 } }
 
 let main = (args: str[]) ->
     (i32) m.b.data.len

@@ -6,7 +6,7 @@ module h from "fixed_array_box.h" =
         filled: i32
 
 module m =
-    let b = h.fc_box { name = u8[3] { 104u8, 200u8, 105u8 }, filled = 3 }
+    let b = h.fc_box { name = u8[] { 104u8, 200u8, 105u8 }, filled = 3 }
 
 let main = (args: str[]) ->
     let v = m.b.name

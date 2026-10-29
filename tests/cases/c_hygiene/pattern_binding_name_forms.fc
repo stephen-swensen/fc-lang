@@ -52,7 +52,7 @@ let main = (args: str[]) ->
     let { x = signed, y = abort } = p
     assert(signed + abort == 3)
 
-    let pts = pt[2] { pt { x = 3, y = 4 }, pt { x = 5, y = 6 } }
+    let pts = pt[] { pt { x = 3, y = 4 }, pt { x = 5, y = 6 } }
     let mut sum = 0
     for { x = snprintf, y = _subj0 } in pts do
         sum = sum + snprintf * _subj0

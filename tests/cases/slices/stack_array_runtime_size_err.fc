@@ -2,5 +2,5 @@
 let main = (args: str[]) ->
     let mut n = 3
     n = n + 1
-    let s = i32[n] { }
+    let s = i32[] { len = n }
     (i32) s.len

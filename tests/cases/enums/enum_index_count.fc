@@ -6,8 +6,8 @@ enum dir =
     | south
 
 let main = (args: str[]) ->
-    let dx = i32[dir.count]{ 1, 0, -1, 0 }
-    let dy = i32[dir.count]{ 0, -1, 0, 1 }
+    let dx = i32[] { len = dir.count, 1, 0, -1, 0 }
+    let dy = i32[] { len = dir.count, 0, -1, 0, 1 }
     assert(dx[dir.east] == 1)
     assert(dx[dir.west] == -1)
     assert(dy[dir.south] == 1)

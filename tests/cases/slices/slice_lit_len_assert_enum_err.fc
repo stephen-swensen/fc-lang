@@ -1,0 +1,11 @@
+// A len assertion over an enum's variant count catches a table that is
+// missing an entry.
+enum dir =
+    | north
+    | east
+    | south
+    | west
+
+let main = (args: str[]) ->
+    let dy = i32[] { len = dir.count, -1, 0, 1 }
+    dy[0]

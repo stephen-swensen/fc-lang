@@ -9,7 +9,7 @@ union pick =
     | nothing
 
 let main = (args: str[]) ->
-    let cs = color[3]{ color.red, color.green, color.blue }
+    let cs = color[]{ color.red, color.green, color.blue }
     let mut n = 0
     for c in cs do
         n = n + match c with

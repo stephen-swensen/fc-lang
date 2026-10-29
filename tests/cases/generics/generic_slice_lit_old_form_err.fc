@@ -1,0 +1,7 @@
+// The old form with a type-variable element type and a const-parameter length.
+let make = <'n>(x: 'a) ->
+    let buf = 'a['n] { }
+    buf.len
+
+let main = (args: str[]) ->
+    (i32) make<4>(1)

@@ -813,7 +813,7 @@ let load_high_score = () ->
     | some(hd) ->
         match io.open(alloca("%s{hd}/.fasteroids/highscore.txt"), "r") with
         | ok(fp) ->
-            let mut buf = u8[32] { }
+            let mut buf = u8[] { len = 32 }
             let n = io.read(buf, 32, fp)
             ignore io.close(fp)  // best-effort: contents already read
             // parse only the bytes read, minus the trailing newline —
@@ -1065,10 +1065,10 @@ let main = (args: str[]) ->
     let mut rng = pcg_random.make((u64) sys.time())
 
     let w = alloc(world)!
-    w.asteroids = alloc(asteroid[64] { })!
-    w.bullets = alloc(bullet[32] { })!
-    w.particles = alloc(particle[384] { })!
-    w.stars = alloc(star[160] { })!
+    w.asteroids = alloc(asteroid[] { len = 64 })!
+    w.bullets = alloc(bullet[] { len = 32 })!
+    w.particles = alloc(particle[] { len = 384 })!
+    w.stars = alloc(star[] { len = 160 })!
 
     // Audio
     let desired = default(audio_spec)

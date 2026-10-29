@@ -1,5 +1,5 @@
 // Array literal of a generic struct instantiated with a qualified type
-// argument: slot<m.cmd>[N] { ... }. Exercises the slice-literal lookahead
+// argument: slot<m.cmd>[] { ... }. Exercises the slice-literal lookahead
 // scan, which shares the <> type-arg token predicate with the call scan.
 module m =
     struct cmd =
@@ -10,7 +10,7 @@ struct slot =
     used: bool
 
 let main = (args: str[]) ->
-    let arr = slot<m.cmd>[2] {
+    let arr = slot<m.cmd>[] { len = 2,
         slot { item = m.cmd { x = 1 }, used = true },
         slot { item = m.cmd { x = 2 }, used = false }
     }

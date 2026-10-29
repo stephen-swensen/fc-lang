@@ -5,11 +5,11 @@
 let ptr_elems = (x: 'a) ->
     let mut a = x
     let mut b = x
-    let buf = 'a*[2] { &a, &b }
+    let buf = 'a*[] { &a, &b }
     if buf[0] == buf[1] then 0 else 1   // &a and &b are distinct -> 1
 
 let opt_elems = (x: 'a) ->
-    let buf = 'a?[3] { some(x), none('a), some(x) }
+    let buf = 'a?[] { some(x), none('a), some(x) }
     let mut n = 0
     for o in buf do
         match o with
