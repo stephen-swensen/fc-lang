@@ -1,0 +1,22 @@
+// Two generic structs that hold each other with a doubled const argument:
+// a<1> leads to b<2>, which leads to a<4>, and so on until the values wrap
+// round to 0, where a<0> and b<0> hold each other.
+struct cbox =
+    v: u8['n]
+
+struct a =
+    b: b<'n * 2>*?
+    d: cbox<('n & 7) + 1>
+
+struct b =
+    a: a<'n * 2>*?
+    d: cbox<('n & 3) + 1>
+
+let main = (args: str[]) ->
+    let x = default(a<1>)
+    assert(x.d.v[1] == 0u8)
+    let y = default(b<2>)
+    assert(y.d.v[2] == 0u8)
+    let z = default(a<0>)
+    assert(z.d.v[0] == 0u8)
+    0

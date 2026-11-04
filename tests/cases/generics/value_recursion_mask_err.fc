@@ -1,5 +1,0 @@
-// And a masked one, which settles at once.
-let low_bit = <'n>() ->
-    if 'n > 100 then 0 else low_bit<('n & 1)>()
-
-let main = (args: str[]) -> low_bit<64>()

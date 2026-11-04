@@ -83,76 +83,62 @@ static void detect_generic_union(Arena *arena, Decl *d, Symbol *sym) {
     detect_generic(arena, d, g, union_member_type, d->unio.variant_count, sym);
 }
 
-/* ---- Reject non-uniform recursive type definitions ----
+/* ---- Reject recursive type definitions that grow without end ----
  *
- * A generic type may refer to itself only uniformly: applied to its own type
- * parameters, in order (`next: node<'a>*` inside `struct node<'a>`). That is an
- * ordinary recursive data structure, one instance per concrete `'a`. A
- * non-uniform self-reference (`node<node<'a>>`, `node<i32>`, or reordered params
- * `pair<'b, 'a>`) needs a different instance at every depth, an infinite family
- * that monomorphization cannot lay out. It is rejected at the definition site,
- * which gives a precise diagnostic; mutual or indirect non-uniform recursion that
- * this direct check misses is caught by the instantiation caps in monomorph.c.
+ * A generic type may refer to itself with any arguments, and the instances it
+ * makes are the ones those arguments reach: its own parameters (`next:
+ * node<'a>*`, or reordered, `flip: pair<'b, 'a>*`) and fixed arguments
+ * (`spill: chunk<64>*`) reach finitely many. Const arguments are values, which
+ * monomorphization follows (`next: s<'n / 2>*` reaches s<0>, and one that never
+ * comes round, `s<'n + 1>`, is rejected there). What never closes is a type
+ * parameter wrapped in another type that comes back round to itself:
+ * `node<node<'a>>` puts 'a inside node<...> at every step, and so does
+ * `pair<'b?, 'a>`, whose 'b feeds 'a and 'a feeds 'b. Each step is an instance
+ * one constructor deeper, an infinite family that monomorphization cannot lay
+ * out. It is rejected at the definition site, which gives a precise
+ * diagnostic; mutual or indirect growth through other types, which this
+ * direct check does not see, is caught by the instantiation limits in
+ * monomorph.c.
  *
  * Runs on raw parser output before any name mangling, so self-references (still
  * TYPE_STUB with the source name) compare equal to the type's own source name. */
 
-/* The uniform form: args are params[0..pc) as type vars, in order. */
-static bool self_ref_is_uniform(Type **args, int argc, const char **params, int pc) {
-    if (argc != pc) return false;
-    for (int i = 0; i < argc; i++) {
-        if (!args[i] || args[i]->kind != TYPE_TYPE_VAR) return false;
-        if (args[i]->type_var.name != params[i]) return false;
-    }
-    return true;
-}
-
-/* Return the offending node if `t` contains a non-uniform reference to
- * `self_name`, else NULL. Recurses through every type constructor and into
+/* Append to `refs` every self-reference to `self_name` (with arguments) in
+ * `t`, nested ones included. Recurses through every type constructor and into
  * generic type arguments, but not into a referenced struct/union's fields
  * (those belong to that type's own definition), so the walk stays within the
  * finite syntactic type tree and terminates even for recursive types. */
-static Type *find_nonuniform_self_ref(Type *t, const char *self_name,
-                                      const char **params, int pc) {
-    if (!t) return NULL;
-    Type *r;
+static void collect_self_refs(Type *t, const char *self_name,
+                              Type ***refs, int *n, int *cap) {
+    if (!t) return;
+    Type **args = NULL;
+    int argc = 0;
+    const char *name = NULL;
     switch (t->kind) {
-    case TYPE_POINTER:     return find_nonuniform_self_ref(t->pointer.pointee, self_name, params, pc);
-    case TYPE_SLICE:       return find_nonuniform_self_ref(t->slice.elem, self_name, params, pc);
-    case TYPE_OPTION:      return find_nonuniform_self_ref(t->option.inner, self_name, params, pc);
-    case TYPE_RESULT:      return find_nonuniform_self_ref(t->result.inner, self_name, params, pc);
-    case TYPE_FIXED_ARRAY: return find_nonuniform_self_ref(t->fixed_array.elem, self_name, params, pc);
+    case TYPE_POINTER:     collect_self_refs(t->pointer.pointee, self_name, refs, n, cap); return;
+    case TYPE_SLICE:       collect_self_refs(t->slice.elem, self_name, refs, n, cap); return;
+    case TYPE_OPTION:      collect_self_refs(t->option.inner, self_name, refs, n, cap); return;
+    case TYPE_RESULT:      collect_self_refs(t->result.inner, self_name, refs, n, cap); return;
+    case TYPE_FIXED_ARRAY: collect_self_refs(t->fixed_array.elem, self_name, refs, n, cap); return;
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
-            if ((r = find_nonuniform_self_ref(t->func.param_types[i], self_name, params, pc))) return r;
-        return find_nonuniform_self_ref(t->func.return_type, self_name, params, pc);
+            collect_self_refs(t->func.param_types[i], self_name, refs, n, cap);
+        collect_self_refs(t->func.return_type, self_name, refs, n, cap);
+        return;
     case TYPE_STUB:
-        if (t->stub.name == self_name && t->stub.type_arg_count > 0 &&
-            !self_ref_is_uniform(t->stub.type_args, t->stub.type_arg_count, params, pc))
-            return t;
-        for (int i = 0; i < t->stub.type_arg_count; i++)
-            if ((r = find_nonuniform_self_ref(t->stub.type_args[i], self_name, params, pc))) return r;
-        return NULL;
+        name = t->stub.name; args = t->stub.type_args; argc = t->stub.type_arg_count;
+        break;
     case TYPE_STRUCT:
         if (t->struc.is_tuple) {
             for (int i = 0; i < t->struc.field_count; i++)
-                if ((r = find_nonuniform_self_ref(t->struc.fields[i].type, self_name, params, pc)))
-                    return r;
-            return NULL;
+                collect_self_refs(t->struc.fields[i].type, self_name, refs, n, cap);
+            return;
         }
-        if (t->struc.name == self_name && t->struc.type_arg_count > 0 &&
-            !self_ref_is_uniform(t->struc.type_args, t->struc.type_arg_count, params, pc))
-            return t;
-        for (int i = 0; i < t->struc.type_arg_count; i++)
-            if ((r = find_nonuniform_self_ref(t->struc.type_args[i], self_name, params, pc))) return r;
-        return NULL;
+        name = t->struc.name; args = t->struc.type_args; argc = t->struc.type_arg_count;
+        break;
     case TYPE_UNION:
-        if (t->unio.name == self_name && t->unio.type_arg_count > 0 &&
-            !self_ref_is_uniform(t->unio.type_args, t->unio.type_arg_count, params, pc))
-            return t;
-        for (int i = 0; i < t->unio.type_arg_count; i++)
-            if ((r = find_nonuniform_self_ref(t->unio.type_args[i], self_name, params, pc))) return r;
-        return NULL;
+        name = t->unio.name; args = t->unio.type_args; argc = t->unio.type_arg_count;
+        break;
     CASE_TYPE_PRIMITIVES:
     case TYPE_ENUM:
     case TYPE_ANY_PTR:
@@ -163,18 +149,89 @@ static Type *find_nonuniform_self_ref(Type *t, const char *self_name,
     case TYPE_NEVER:
     case TYPE_UNRESOLVED:
     case TYPE_COUNT:
-        break;
+        return;
     }
-    return NULL;
+    if (name == self_name && argc > 0) DA_APPEND(*refs, *n, *cap, t);
+    for (int i = 0; i < argc; i++)
+        collect_self_refs(args[i], self_name, refs, n, cap);
 }
 
-/* Build the one legal self-reference form, "name<'a, 'b>", for the diagnostic.
- * Caller frees. */
-static char *uniform_self_form(const char *name, const char **params, int pc) {
-    char *buf = str_sprintf("%s<", name);
-    for (int i = 0; i < pc; i++)
-        buf = str_appendf(buf, "%s%s", i ? ", " : "", params[i]);
-    return str_appendf(buf, ">");
+/* Visit each type parameter `t` uses as a type, with whether it is wrapped in
+ * a type built around it rather than being `t` itself: `visit(q, wrapped)`
+ * with q its index in `params`. Array sizes and const expressions are values,
+ * not walked. */
+typedef struct {
+    const char **params;
+    int pc;
+    void (*visit)(int q, bool wrapped, void *ctx);
+    void *ctx;
+} ParamUseWalk;
+
+static void walk_param_uses(Type *t, bool wrapped, const ParamUseWalk *w) {
+    if (!t) return;
+    switch (t->kind) {
+    case TYPE_TYPE_VAR:
+        for (int q = 0; q < w->pc; q++)
+            if (w->params[q] == t->type_var.name) w->visit(q, wrapped, w->ctx);
+        return;
+    case TYPE_POINTER:     walk_param_uses(t->pointer.pointee, true, w); return;
+    case TYPE_SLICE:       walk_param_uses(t->slice.elem, true, w); return;
+    case TYPE_OPTION:      walk_param_uses(t->option.inner, true, w); return;
+    case TYPE_RESULT:      walk_param_uses(t->result.inner, true, w); return;
+    case TYPE_FIXED_ARRAY: walk_param_uses(t->fixed_array.elem, true, w); return;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            walk_param_uses(t->func.param_types[i], true, w);
+        walk_param_uses(t->func.return_type, true, w);
+        return;
+    case TYPE_STUB:
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            walk_param_uses(t->stub.type_args[i], true, w);
+        return;
+    case TYPE_STRUCT:
+        if (t->struc.is_tuple) {
+            for (int i = 0; i < t->struc.field_count; i++)
+                walk_param_uses(t->struc.fields[i].type, true, w);
+            return;
+        }
+        for (int i = 0; i < t->struc.type_arg_count; i++)
+            walk_param_uses(t->struc.type_args[i], true, w);
+        return;
+    case TYPE_UNION:
+        for (int i = 0; i < t->unio.type_arg_count; i++)
+            walk_param_uses(t->unio.type_args[i], true, w);
+        return;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        return;
+    }
+}
+
+/* flows[q * pc + i]: parameter q's argument flows into position i of the next
+ * instance, through some self-reference. */
+typedef struct { bool *flows; int pc; int pos; } FlowCtx;
+
+static void note_flow(int q, bool wrapped, void *ctx) {
+    (void)wrapped;
+    FlowCtx *f = ctx;
+    f->flows[q * f->pc + f->pos] = true;
+}
+
+/* The first parameter found wrapped in an argument and coming back round to
+ * itself (reaches[pos * pc + q]: position pos flows on to q). */
+typedef struct { const bool *reaches; int pc; int pos; int grows; } GrowCtx;
+
+static void note_growth(int q, bool wrapped, void *ctx) {
+    GrowCtx *g = ctx;
+    if (wrapped && g->grows < 0 && (q == g->pos || g->reaches[g->pos * g->pc + q]))
+        g->grows = q;
 }
 
 static void check_type_def_recursion(Decl *d) {
@@ -194,31 +251,80 @@ static void check_type_def_recursion(Decl *d) {
     } else {
         return;
     }
-    if (pc == 0) { free(params); return; }  /* not generic: no non-uniform form possible */
+    if (pc == 0) { free(params); return; }  /* not generic: no self-reference with arguments */
 
-    /* Scan each field/variant type for a non-uniform self-reference. */
-    Type *bad = NULL;
-    if (d->kind == DECL_STRUCT) {
-        for (int i = 0; i < d->struc.field_count && !bad; i++)
-            bad = find_nonuniform_self_ref(d->struc.fields[i].type, self_name, params, pc);
-    } else {
-        for (int i = 0; i < d->unio.variant_count && !bad; i++)
-            bad = find_nonuniform_self_ref(d->unio.variants[i].payload, self_name, params, pc);
+    /* Every self-reference, and the field or variant each is in. */
+    Type **refs = NULL;
+    const char **members = NULL;
+    int nrefs = 0, rcap = 0, mn = 0, mcap = 0;
+    int nmembers = d->kind == DECL_STRUCT ? d->struc.field_count : d->unio.variant_count;
+    for (int m = 0; m < nmembers; m++) {
+        if (d->kind == DECL_STRUCT)
+            collect_self_refs(d->struc.fields[m].type, self_name, &refs, &nrefs, &rcap);
+        else
+            collect_self_refs(d->unio.variants[m].payload, self_name, &refs, &nrefs, &rcap);
+        const char *member = d->kind == DECL_STRUCT ? d->struc.fields[m].name
+                                                    : d->unio.variants[m].name;
+        while (mn < nrefs) DA_APPEND(members, mn, mcap, member);
     }
-    if (bad) {
-        char *form = uniform_self_form(self_name, params, pc);
+
+    /* Which positions each parameter's argument reaches, over any number of
+     * steps through the self-references (a transitive closure). A reference
+     * with the wrong number of arguments is reported where it is resolved. */
+    bool *reaches = calloc((size_t)(pc * pc), sizeof(bool));
+    FlowCtx flow = { reaches, pc, 0 };
+    ParamUseWalk fw = { params, pc, note_flow, &flow };
+    for (int r = 0; r < nrefs; r++) {
+        Type **args = refs[r]->kind == TYPE_STUB ? refs[r]->stub.type_args
+                    : refs[r]->kind == TYPE_STRUCT ? refs[r]->struc.type_args
+                    : refs[r]->unio.type_args;
+        int argc = refs[r]->kind == TYPE_STUB ? refs[r]->stub.type_arg_count
+                 : refs[r]->kind == TYPE_STRUCT ? refs[r]->struc.type_arg_count
+                 : refs[r]->unio.type_arg_count;
+        if (argc != pc) continue;
+        for (flow.pos = 0; flow.pos < pc; flow.pos++)
+            walk_param_uses(args[flow.pos], false, &fw);
+    }
+    for (int k = 0; k < pc; k++)
+        for (int i = 0; i < pc; i++)
+            if (reaches[i * pc + k])
+                for (int j = 0; j < pc; j++)
+                    if (reaches[k * pc + j]) reaches[i * pc + j] = true;
+
+    /* A parameter wrapped in a position whose argument flows back round to it. */
+    const char *bad = NULL;
+    GrowCtx grow = { reaches, pc, 0, -1 };
+    ParamUseWalk gw = { params, pc, note_growth, &grow };
+    for (int r = 0; r < nrefs && !bad; r++) {
+        Type **args = refs[r]->kind == TYPE_STUB ? refs[r]->stub.type_args
+                    : refs[r]->kind == TYPE_STRUCT ? refs[r]->struc.type_args
+                    : refs[r]->unio.type_args;
+        int argc = refs[r]->kind == TYPE_STUB ? refs[r]->stub.type_arg_count
+                 : refs[r]->kind == TYPE_STRUCT ? refs[r]->struc.type_arg_count
+                 : refs[r]->unio.type_arg_count;
+        if (argc != pc) continue;
+        for (grow.pos = 0; grow.pos < pc && grow.grows < 0; grow.pos++)
+            walk_param_uses(args[grow.pos], false, &gw);
+        if (grow.grows >= 0) bad = members[r];
+    }
+    if (bad)
         diag_error(d->loc,
-            "non-uniform recursive type '%s' is not supported: a generic type may "
-            "only refer to itself uniformly as '%s'; a self-reference with any other "
-            "type arguments would require infinitely many monomorphized instances",
-            self_name, form);
-        free(form);
-    }
+            "recursive type '%s' would need infinitely many instances: %s '%s' "
+            "refers to '%s' with %s wrapped in another type, and that argument comes "
+            "back round to %s, so each instance holds a deeper one. A generic type may "
+            "refer to itself with fixed arguments or its own parameters in any order, "
+            "but not with a parameter built into a type that leads back to it",
+            self_name, d->kind == DECL_STRUCT ? "field" : "variant", bad, self_name,
+            params[grow.grows], params[grow.grows]);
+    free(reaches);
+    free(refs);
+    free(members);
     free(params);
 }
 
-/* Walk all struct/union definitions (descending into modules) for non-uniform
- * self-reference. Called before pass1 mangles any names. */
+/* Walk all struct/union definitions (descending into modules) for a
+ * self-reference that grows without end. Called before pass1 mangles any
+ * names. */
 static void check_recursion_in_decls(Decl **decls, int count) {
     for (int i = 0; i < count; i++) {
         Decl *d = decls[i];
@@ -2160,8 +2266,8 @@ void pass1_collect(Program *prog, SymbolTable *symtab, InternTable *intern,
     check_imports_first(prog);
 
     /* Both read declaration names as written, so they run before mangling:
-     * non-uniform recursive type definitions, and types or modules named after
-     * a built-in type. */
+     * recursive type definitions that grow without end, and types or modules
+     * named after a built-in type. */
     check_recursion_in_decls(prog->decls, prog->decl_count);
     check_builtin_type_name_decls(prog->decls, prog->decl_count);
 

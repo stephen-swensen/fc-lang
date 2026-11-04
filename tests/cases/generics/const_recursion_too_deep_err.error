@@ -1,0 +1,1 @@
+'f' instantiates itself more than 1024 levels deep: f<0> leads to f<1>

@@ -1,1 +1,1 @@
-non-uniform recursive type
+recursive type 'tree' would need infinitely many instances: variant 'branch'

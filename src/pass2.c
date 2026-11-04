@@ -2080,23 +2080,6 @@ static Expr *normalize_const_tree(CheckCtx *ctx, Expr *e, ConstSlot slot) {
     }
 }
 
-/* The rule on a length known at compile time, shared by every construct that
- * states one: a slice literal's length (its `len` or element count), a fixed
- * array's size, which must also be positive, and a string literal's byte
- * count. A length must be non-negative, and it must fit the stored length of
- * --len-repr, because every one of them is viewed as a slice. NULL when `n` is
- * valid, else the diagnostic (malloc'd), naming the length as `what`. */
-static char *static_length_error(const char *what, int64_t n, bool must_be_positive) {
-    if (must_be_positive && n <= 0)
-        return str_sprintf("%s must be positive, got %lld", what, (long long)n);
-    if (n < 0)
-        return str_sprintf("%s cannot be negative, got %lld", what, (long long)n);
-    if (n > fc_len_max())
-        return str_sprintf("%s %lld exceeds --len-repr %d length capacity %lld",
-                           what, (long long)n, g_len_repr, (long long)fc_len_max());
-    return NULL;
-}
-
 /* A string literal's decoded byte count is a slice's len, so it obeys the
  * length rule. Escapes only shrink a literal, so its source length gates the
  * decode. */
@@ -2441,12 +2424,13 @@ static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fm
 
 /* The generic instances one size check enters. A type can hold itself
  * through a pointer, so the walk stops at an instance it has entered. A
- * family of instances may never close (`a<'n>` holding `b<'n * 2>*`, which
- * holds `a<'n * 2>*`), which pass1 or monomorphization rejects; the walk
- * stops at an instance whose template is twice on its path already, so it
- * neither runs on nor reports the overflowing sizes of such a family. It also
- * stops after INST_SIZE_WALK_MAX instances, and, as mono_register does, once
- * any error has been reported. */
+ * family of instances may run far (`a<'n>` holding `b<'n * 2>*`, which holds
+ * `a<'n * 2>*`, takes 65 steps to come round) or never close (`'n + 1`); the
+ * walk stops at an instance whose template is twice on its path already, so
+ * it never runs on with such a family, and monomorphization checks the sizes
+ * of the instances past that (check_instance_sizes) and rejects a family that
+ * never closes. It also stops after INST_SIZE_WALK_MAX instances, and, as
+ * mono_register does, once any error has been reported. */
 enum { INST_SIZE_WALK_MAX = 2048 };
 typedef struct {
     SymbolTable *symtab;
@@ -4107,13 +4091,6 @@ static const char *fmt_generic_inst(const char *func_name, Arena *arena,
     return result;
 }
 
-/* Bounds transitive (cross-function-body) generic validation so a pathological
- * type-growing recursion can't loop forever. This is the absolute recursion net;
- * GEN_INST_DEPTH_MAX (the depth backstop below) and the instantiation memo halt
- * real divergence well before it. Set above GEN_INST_DEPTH_MAX so the backstop
- * fires (with a precise diagnostic) before this silent cutoff. */
-#define GEN_XBODY_DEPTH_MAX 192
-
 /* Depth backstop for infinite generic instantiation. A divergent generic
  * function instantiates itself with an ever-deeper type argument:
  * f(wrap{v=x}) forces f<wrap<'a>> -> f<wrap<wrap<'a>>> -> ..., naming an infinite
@@ -4136,14 +4113,27 @@ static const char *fmt_generic_inst(const char *func_name, Arena *arena,
  * independent top-level entry. */
 typedef struct { const Symbol *sym; const char *key; } GenSeen;
 
-/* What one top-level validation shares with every cross-body descent it
- * makes: the descent depth, whether the infinite-instantiation error has been
- * reported, and the memo of instantiations already validated. */
+/* An instantiation a validation has yet to walk: a generic callee a walked
+ * body calls, under its concrete bindings, `depth` calls from the entry. */
 typedef struct {
+    Symbol *callee;
+    Type **bindings;
+    int ntp;
+    const InstFrame *frame;
     int depth;
+} GenPending;
+
+/* What one top-level validation shares with every cross-body descent it
+ * makes: whether the infinite-instantiation error has been reported, the memo
+ * of instantiations already validated, and the queue of those still to walk.
+ * The queue is walked in order, so each instance is reached by its shortest
+ * chain of calls, as monomorphization reaches it (MONO_MAX_CHAIN_DEPTH). */
+typedef struct {
     bool inf_reported;
     GenSeen *seen;
     int seen_n, seen_cap;
+    GenPending *pending;
+    int pending_n, pending_cap, pending_next;
     SymbolTable *symtab;    /* for per-instance type queries (writable_ref_path, sizes) */
 } GenValidation;
 
@@ -4175,13 +4165,13 @@ static bool gen_seen_add(GenValidation *run, Arena *arena, const Symbol *sym,
 
 /* One frame of a generic-instantiation chain: a concrete instantiation and the
  * call site that required it. Linked outward via `parent` (NULL at the entry
- * call). Frames are stack-allocated during the validate_generic_body recursion,
- * so they live as long as the descent that built them. */
-typedef struct InstFrame {
+ * call). The entry frame lives on the stack of the call that validates; the
+ * frames of the instantiations it reaches are in the arena. */
+struct InstFrame {
     const char *desc;               /* "inner(i32)", fmt_generic_inst output */
     SrcLoc site;                    /* the call expression that triggered this instantiation */
     const struct InstFrame *parent; /* enclosing instantiation, NULL at the entry */
-} InstFrame;
+};
 
 /* The entry (outermost) frame; its site is the user's actionable call. */
 static const InstFrame *inst_frame_root(const InstFrame *f) {
@@ -4253,8 +4243,8 @@ static bool check_inst_type_operand(const InstFrame *frame, Arena *arena,
 }
 
 /* One per-instance validation of a generic body: the concrete bindings it is
- * checked under, the chain of instantiations that led to it, and whether it
- * has passed so far. */
+ * checked under, the chain of instantiations that led to it (`depth` calls
+ * long), and whether it has passed so far. */
 typedef struct {
     Arena *arena;
     const char **type_params;
@@ -4263,6 +4253,7 @@ typedef struct {
     const InstFrame *frame;
     bool ok;
     GenValidation *run;
+    int depth;
 } GenericCheck;
 
 static void validate_generic_expr(Expr *e, void *check);
@@ -4513,7 +4504,9 @@ static void check_generic_array_size(Expr *e, GenericCheck *gc) {
  * unsupported operation on the instantiated type is reported at the
  * originating call site rather than leaking to the C compiler. (A generic
  * that fails only for some types would otherwise type-check at its own
- * definition but emit invalid C when reached through a wrapper.) */
+ * definition but emit invalid C when reached through a wrapper.) The callee
+ * is queued (drain_generic_validations walks it), up to the depth past which
+ * monomorphization rejects a chain. */
 static void validate_generic_callee(Expr *e, GenericCheck *gc) {
     Arena *arena = gc->arena;
     Symbol *callee = e->call.resolved_callee;
@@ -4522,7 +4515,7 @@ static void validate_generic_callee(Expr *e, GenericCheck *gc) {
         !callee->decl || callee->decl->kind != DECL_LET || !callee->decl->let.init ||
         callee->decl->let.init->kind != EXPR_FUNC ||
         !cft || cft->kind != TYPE_FUNC || cft->func.param_count != e->call.arg_count ||
-        gc->run->depth >= GEN_XBODY_DEPTH_MAX)
+        gc->depth >= MONO_MAX_CHAIN_DEPTH)
         return;
 
     int cntp = callee->type_param_count;
@@ -4563,23 +4556,36 @@ static void validate_generic_callee(Expr *e, GenericCheck *gc) {
     }
 
     /* cdesc is the human-readable substitution context threaded into
-     * diagnostics; it lives in the arena, so it stays valid across the
-     * recursive descent. Validate each distinct instantiation once:
-     * recursive or diamond generic calls otherwise re-descend exponentially. */
+     * diagnostics; it lives in the arena, so it stays valid until the queued
+     * walk. Validate each distinct instantiation once: recursive or diamond
+     * generic calls otherwise re-descend exponentially. */
     const char *cdesc = fmt_generic_inst(callee->name, arena, cft,
         callee->type_params, cbind, cntp);
     if (!gen_seen_add(gc->run, arena, callee, maxd, cdesc)) return;
 
-    /* Push a chain frame: this callee instantiation, required by the call
-     * expression `e`. Stack-allocated; it lives for this descent. */
-    InstFrame child = { cdesc, e->loc, gc->frame };
-    GenericCheck sub = { arena, callee->type_params, cbind, cntp, &child, true, gc->run };
-    Expr *cfn = callee->decl->let.init;
-    gc->run->depth++;
-    for (int i = 0; i < cfn->func.body_count; i++)
-        validate_generic_expr(cfn->func.body[i], &sub);
-    gc->run->depth--;
-    if (!sub.ok) gc->ok = false;
+    /* A chain frame: this callee instantiation, required by the call
+     * expression `e`. */
+    InstFrame *child = arena_alloc(arena, sizeof *child);
+    *child = (InstFrame){ cdesc, e->loc, gc->frame };
+    GenPending p = { callee, cbind, cntp, child, gc->depth + 1 };
+    DA_APPEND(gc->run->pending, gc->run->pending_n, gc->run->pending_cap, p);
+}
+
+/* Walk the instantiations queued so far, and those they queue in turn.
+ * Returns false if any failed. */
+static bool drain_generic_validations(GenValidation *run, Arena *arena) {
+    bool ok = true;
+    while (run->pending_next < run->pending_n) {
+        /* A copy: walking a body can grow (and move) the queue. */
+        GenPending p = run->pending[run->pending_next++];
+        GenericCheck sub = { arena, p.callee->type_params, p.bindings, p.ntp,
+                             p.frame, true, run, p.depth };
+        Expr *cfn = p.callee->decl->let.init;
+        for (int i = 0; i < cfn->func.body_count; i++)
+            validate_generic_expr(cfn->func.body[i], &sub);
+        if (!sub.ok) ok = false;
+    }
+    return ok;
 }
 
 /* A call to a function that is not itself generic (a declared function, a
@@ -4683,7 +4689,7 @@ static bool validate_generic_body(Expr *e, Arena *arena,
     const char **type_params, Type **bindings, int ntp,
     const InstFrame *frame, GenValidation *run)
 {
-    GenericCheck gc = { arena, type_params, bindings, ntp, frame, true, run };
+    GenericCheck gc = { arena, type_params, bindings, ntp, frame, true, run, 0 };
     if (e) validate_generic_expr(e, &gc);
     return gc.ok;
 }
@@ -5304,10 +5310,13 @@ static Type *check_generic_call(CheckCtx *ctx, Expr *e, Type *ft, Symbol *callee
                  * the user's call `e`. Transitive descents push children. */
                 InstFrame root = { inst_desc, e->loc, NULL };
                 bool ok = true;
-                for (int i = 0; i < func_expr->func.body_count && ok; i++)
+                for (int i = 0; i < func_expr->func.body_count && ok; i++) {
                     ok = validate_generic_body(func_expr->func.body[i], ctx->arena,
                             callee_sym->type_params, bindings, ntp, &root, &run);
+                    if (!drain_generic_validations(&run, ctx->arena)) ok = false;
+                }
                 free(run.seen);
+                free(run.pending);
                 if (!ok) return poison(e);
             }
         }

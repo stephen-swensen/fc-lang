@@ -1,0 +1,41 @@
+// A generic may refer to itself with its parameters reordered: pair<u8, i64>
+// makes pair<i64, u8>, which makes pair<u8, i64> again. Type and const
+// parameters alike, in types and functions, directly and through another
+// generic.
+struct pair =
+    a: 'a
+    b: 'b
+    flip: pair<'b, 'a>*?
+
+struct matrix =
+    cells: i32['r * 'c]
+    transposed: matrix<'c, 'r>*?
+
+struct rows =
+    v: u8['r]
+    w: u8['c]
+    cols: cols<'c, 'r>*?
+
+struct cols =
+    v: u8['r]
+    w: u8['c]
+    rows: rows<'r, 'c>*?
+
+let alt = (a: 'a, b: 'b, k: i32) -> if k <= 0 then sizeof('a) else alt(b, a, k - 1)
+
+let dims = <'r, 'c>(k: i32) -> if k <= 0 then 'r * 10 + 'c else dims<'c, 'r>(k - 1)
+
+let main = (args: str[]) ->
+    let p = default(pair<u8, i64>)
+    assert(p.a == 0u8)
+    let q = default(pair<i64, u8>)
+    assert(q.b == 0u8)
+    let m = default(matrix<2, 3>)
+    assert(m.cells[5] == 0)
+    let r = default(rows<2, 3>)
+    assert(r.w[2] == 0u8)
+    assert(alt(1u8, 2i64, 1) == 8)
+    assert(alt(1u8, 2i64, 2) == 1)
+    assert(dims<2, 3>(0) == 23)
+    assert(dims<2, 3>(1) == 32)
+    0

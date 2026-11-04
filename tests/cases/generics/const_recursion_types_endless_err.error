@@ -1,0 +1,1 @@
+'b' instantiates itself more than 1024 levels deep: b<3> leads to b<5>

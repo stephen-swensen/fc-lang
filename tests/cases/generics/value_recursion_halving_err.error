@@ -1,1 +1,0 @@
-'shrink' instantiates itself with a changed const argument: shrink<64> leads to shrink<32>

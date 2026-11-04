@@ -1,5 +1,5 @@
-// A type already rejected as non-uniformly recursive is not walked again for
-// the sizes of the instances it would make.
+// A family whose sizes go wrong (s<1> leads to s<0>, s<-1>, ...) reports one
+// bad size, not one for each instance it would make.
 struct cbox =
     v: u8['n]
 

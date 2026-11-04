@@ -1,0 +1,9 @@
+// The sizes of an instance far down a family are checked as it is made: s<1>
+// leads to s<2>, s<4>, ..., s<64>, whose array has no elements.
+struct s =
+    d: u8[64 - 'n]
+    next: s<'n * 2>*?
+
+let main = (args: str[]) ->
+    let x = default(s<1>)
+    0

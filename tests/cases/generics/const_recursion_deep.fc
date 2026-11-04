@@ -1,0 +1,14 @@
+// A chain 999 steps deep is within the limit: f(cbox<1>) makes f(cbox<2>) and
+// on up to f(cbox<1000>), which makes f(cbox<1>) again. Each instance is
+// checked as checked code would be, however far down the chain it is.
+struct cbox =
+    v: u8['n]
+
+let f = (b: cbox<'n>, k: i32) ->
+    if k <= 0 then sizeof(cbox<'n>) else f(default(cbox<('n % 1000) + 1>), k - 1)
+
+let main = (args: str[]) ->
+    assert(f(default(cbox<1>), 0) == 1)
+    assert(f(default(cbox<1>), 998) == 999)
+    assert(f(default(cbox<1>), 1000) == 1)
+    0

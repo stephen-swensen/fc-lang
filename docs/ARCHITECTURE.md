@@ -182,21 +182,29 @@ Besides typing, pass2 does:
   depend on the concrete types (operator operands, sizes, const arguments) are
   made per instance by `validate_generic_expr`, which walks the body under
   that instance's bindings and reports through the chain of instantiations
-  that led to it (see [Invariants](#invariants)). An instance's size check
-  also covers the instances its fields name (`d: cbox<'n - 3>` in `s<3>`),
-  which only monomorphization makes and nothing checks after pass2.
+  that led to it (see [Invariants](#invariants)). The generic calls a body
+  makes are queued and walked in order (`drain_generic_validations`), so each
+  instance is reached by its shortest chain, to the depth monomorphization
+  allows (`MONO_MAX_CHAIN_DEPTH`). An instance's size check also covers the
+  instances its fields name (`d: cbox<'n - 3>` in `s<3>`) a few steps on;
+  monomorphization checks the sizes of every instance it makes, however far
+  its chain runs.
 
 ### Monomorphization
 
 `mono_register` is the single place a generic instance enters the table. It
 mangles the instance name, evaluates the instance's `static_assert`s, and
-rejects value recursion. Each instance records the instance whose body or
-fields first named it (`named_by`; an instance pass2 registers has none). A
-new instance is rejected when its template is already up that chain with
-other const arguments (`f<'n + 1>` inside `f`), whatever its values would do
-later: a doubled argument wraps round to 0 and repeats, so counting instances
-alone would never notice it. The cap on instances per template is the
-backstop. Once any error has been reported it registers nothing, so in a
+rejects a chain of instantiations that never comes round. Each instance
+records the instance whose body or fields first named it (`named_by`; an
+instance pass2 registers has none) and how many such steps separate it from
+one pass2 registers (`depth`). A generic may instantiate itself with any
+arguments, and a family whose values come round again (`f<'n / 2>` reaches
+`f<0>`) closes by itself; one that is still making new instances past
+`MONO_MAX_CHAIN_DEPTH` (1024) steps (`f<'n + 1>`) is rejected, naming the
+first two instances of its template on the chain. A type argument that grows
+is reported sooner by the cap on its nesting depth, and pass1 rejects a type
+that wraps its own parameter in a self-reference at its definition. Once any
+error has been reported it registers nothing, so in a
 program (or an editor buffer) that already has an error, no further instance
 is checked. After pass2, discovery walks instantiated bodies to a fixpoint,
 and finalize resolves every type name to its mangled C name. Codegen's

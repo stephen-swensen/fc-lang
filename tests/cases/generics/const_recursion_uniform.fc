@@ -1,6 +1,5 @@
-// What value recursion leaves alone: a generic that recurs at its own
-// instance, directly or through another generic, and one that instantiates a
-// different generic with a changed argument.
+// Recursion at a generic's own instance, directly or through another generic,
+// and a changed argument passed to a different generic.
 let count_down = <'n>(k: i32) ->
     if k == 0 then 'n else count_down<'n>(k - 1)
 

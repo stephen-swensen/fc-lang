@@ -1,5 +1,10 @@
+// A struct holding itself with a doubled const argument makes s<4>, s<8>, ...
+// up to s<4611686018427387904>, then wraps round to s<-9223372036854775808>
+// and s<0>, which names itself. The family closes, but the wrapped instance
+// has a negative array size, which is reported however far down the chain it
+// is.
 struct s =
-    limbs: u32['n]
+    limbs: u32[('n >> 59) + 1]
     next: s<'n * 2>*
 
 let main = (args: str[]) ->

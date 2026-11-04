@@ -1,0 +1,7 @@
+// Values that would come round only after 1100 steps: the chain is still
+// making new instances at the depth limit, so it is rejected.
+let f = <'n>(k: i32) ->
+    if k <= 0 then 'n else f<('n + 1) % 1100>(k - 1)
+
+let main = (args: str[]) ->
+    f<0>(1)

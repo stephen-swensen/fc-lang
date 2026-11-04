@@ -1,0 +1,14 @@
+// A wrapped parameter whose argument does not come back round is fine:
+// pair<u8, i64> makes pair<i64?, i32>, which makes pair<i32?, i32>, which
+// names itself.
+struct pair =
+    a: 'a
+    b: 'b
+    next: pair<'b?, i32>*?
+
+let main = (args: str[]) ->
+    let p = default(pair<u8, i64>)
+    assert(p.a == 0u8)
+    let q = default(pair<i32?, i32>)
+    assert(q.b == 0)
+    0

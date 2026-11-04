@@ -1,6 +1,0 @@
-// A doubled const argument wraps round to 0 and would repeat, so the family
-// is finite; it is value recursion all the same, and rejected.
-let grow = <'n>() ->
-    if 'n > 100 then 0 else grow<'n * 2>()
-
-let main = (args: str[]) -> grow<1>()

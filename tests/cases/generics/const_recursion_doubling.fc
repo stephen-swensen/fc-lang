@@ -1,0 +1,14 @@
+// A doubled const argument wraps round to 0 (const arguments are 64-bit two's
+// complement) and names itself from there, so the family closes: grow<1>
+// makes grow<2>, grow<4>, ..., grow<-9223372036854775808> and grow<0>.
+struct cbox =
+    v: u8['n]
+
+let grow = <'n>(k: i32) ->
+    if k <= 0 then sizeof(cbox<('n & 7) + 1>) else grow<'n * 2>(k - 1)
+
+let main = (args: str[]) ->
+    assert(grow<1>(2) == 5)
+    assert(grow<1>(64) == 1)
+    assert(grow<1>(70) == 1)
+    0

@@ -1,1 +1,1 @@
-non-uniform recursive type
+fixed array size must be positive, got -15 (in 'u32[-15]', in instance 's<-9223372036854775808>')

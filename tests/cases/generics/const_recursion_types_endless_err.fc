@@ -1,4 +1,5 @@
-// A type family reached from a generic function's body is judged the same.
+// A type family whose values never come round, reached from a generic
+// function's body, is rejected at the depth limit as a function's is.
 struct a =
     b: b<'n + 1>*?
     v: u8['n]

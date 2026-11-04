@@ -1,1 +1,1 @@
-'runaway' instantiates itself with a changed const argument: runaway<0> leads to runaway<1>
+'runaway' instantiates itself more than 1024 levels deep: runaway<0> leads to runaway<1>

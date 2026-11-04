@@ -896,6 +896,23 @@ bool type_fixed_array_size(Type *t, int64_t *out) {
     return false;
 }
 
+/* The rule on a length known at compile time, shared by every construct that
+ * states one: a slice literal's length (its `len` or element count), a fixed
+ * array's size, which must also be positive, and a string literal's byte
+ * count. A length must be non-negative, and it must fit the stored length of
+ * --len-repr, because every one of them is viewed as a slice. NULL when `n` is
+ * valid, else the diagnostic (malloc'd), naming the length as `what`. */
+char *static_length_error(const char *what, int64_t n, bool must_be_positive) {
+    if (must_be_positive && n <= 0)
+        return str_sprintf("%s must be positive, got %lld", what, (long long)n);
+    if (n < 0)
+        return str_sprintf("%s cannot be negative, got %lld", what, (long long)n);
+    if (n > fc_len_max())
+        return str_sprintf("%s %lld exceeds --len-repr %d length capacity %lld",
+                           what, (long long)n, g_len_repr, (long long)fc_len_max());
+    return NULL;
+}
+
 /* ---- Const-generic expression evaluation ----
  *
  * A TYPE_CONST_EXPR carries a pass2-normalized expression tree whose only

@@ -1,1 +1,1 @@
-'ping' instantiates itself with a changed const argument: ping<1> leads to ping<3>
+'pong' instantiates itself more than 1024 levels deep: pong<2> leads to pong<4>

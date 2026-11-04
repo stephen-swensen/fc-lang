@@ -1,1 +1,1 @@
-non-uniform recursive type 'node'
+recursive type 'node' would need infinitely many instances: field 'next'

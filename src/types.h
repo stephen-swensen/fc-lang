@@ -316,6 +316,12 @@ bool type_is_const_arg(Type *t);
  * size_ref (TYPE_CONST_INT). Returns false if still symbolic. */
 bool type_fixed_array_size(Type *t, int64_t *out);
 
+/* The rule on a length known at compile time, shared by every construct that
+ * states one: a slice literal's length, a fixed array's size (which must also
+ * be positive) and a string literal's byte count. NULL when `n` is valid,
+ * else the diagnostic (malloc'd), naming the length as `what`. */
+char *static_length_error(const char *what, int64_t n, bool must_be_positive);
+
 /* Mask a 64-bit value to `width` bits, sign-extending back to 64 if signed. */
 uint64_t const_mask_extend(uint64_t v, int width, bool is_signed);
 

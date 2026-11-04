@@ -8,35 +8,29 @@
 
 /* Monomorphization termination guards.
  *
- * A generic that instantiates itself with an ever-growing type argument produces
- * an infinite family of monomorphized copies: `f(some(x))` forces
- * f<'a> -> f<'a?> -> f<'a??> -> ..., and a non-uniform recursive type forces
- * node<i32> -> node<node<i32>> -> ... Without a guard, both fixpoint loops below
- * (function discovery in mono_discover_transitive, nested-type discovery in
+ * A generic may instantiate itself with any arguments, and the instances it
+ * makes are the ones those arguments reach. Some families never close: one
+ * that grows a type argument (`f(some(x))` forces f<'a> -> f<'a?> ->
+ * f<'a??> -> ..., and a non-uniform recursive type forces node<i32> ->
+ * node<node<i32>> -> ...), and one whose const argument never comes round
+ * again (f<'n + 1>). Without a guard, both fixpoint loops below (function
+ * discovery in mono_discover_transitive, nested-type discovery in
  * mono_finalize_types) would never converge, or, if a name collision happened
  * to stop the loop, would emit a truncated C type.
  *
- * The divergence always shows up as type arguments that nest one constructor
- * deeper each round, so a cap on the structural depth of an instance's type
- * arguments catches it whatever its shape. Apart from const arguments (see
- * reject_value_recursion and the per-template cap below), FC has no
- * type-level computation: array sizes, tuple
- * arities, etc. are fixed by source. So a bounded type-argument depth admits
- * only finitely many distinct types, and the depth cap alone guarantees
- * termination. The instance-count cap is a backstop for any breadth divergence
- * not foreseen here. Both limits are far above what real programs reach
- * (generic nesting is a handful of levels deep; programs have thousands of
+ * Every instance records how many steps of discovery separate it from code
+ * that names it directly (MonoInstance.depth), and one past
+ * MONO_MAX_CHAIN_DEPTH is rejected (reject_deep_chain): a chain that has not
+ * come round to instances already made by then is taken never to. A growing
+ * type argument also nests one constructor deeper each step, so the cap on
+ * the structural depth of an instance's type arguments reports it sooner,
+ * as what it is. The instance-count cap is a backstop for any breadth
+ * divergence not foreseen here. All three limits are far above what real
+ * programs reach (generic nesting is a handful of levels deep, a recursion
+ * that halves its argument is at most 64, and programs have thousands of
  * instances, not hundreds of thousands). */
 #define MONO_MAX_INSTANTIATION_DEPTH 128
 #define MONO_MAX_INSTANCES           200000
-/* Per-template cap: a value-recursive const generic (f calling f<'n + 1>)
- * grows a family whose members all have type-arg depth 1, invisible to the
- * depth guard. reject_value_recursion rejects one at its first changed
- * instance; this cap is the backstop for any other way one template could be
- * instantiated thousands of times with distinct const values, which no finite
- * program does. It is well below MONO_MAX_INSTANCES so the diagnostic is fast
- * and names the template. */
-#define MONO_MAX_PER_TEMPLATE        2048
 
 static void mono_drain_const_eval_error(void);
 
@@ -51,40 +45,45 @@ static const char *template_display_name(Decl *tmpl, const char *name) {
     return name;
 }
 
-/* Whether two argument lists of one template differ in a const argument. */
-static bool const_args_differ(Type **a, Type **b, int count) {
-    for (int i = 0; i < count; i++)
-        if ((type_is_const_arg(a[i]) || type_is_const_arg(b[i])) && !type_eq(a[i], b[i]))
-            return true;
-    return false;
-}
-
-/* No value recursion (the spec, Const Parameters): an instance of `tmpl` named,
- * directly or through other instances, by an instance of `tmpl` with other
- * const arguments. Every such chain is rejected, whether or not its values
- * would come round again: a doubled argument wraps to 0 and repeats, and one
- * halved reaches 0, long before the per-template cap could tell. Reports and
- * returns true for one found. */
-static bool reject_value_recursion(MonoTable *t, Decl *tmpl, const char *name,
-                                   Type **type_args, int count) {
-    if (!tmpl) return false;
-    for (int k = t->walking - 1; k >= 0; k = t->entries[k].named_by - 1) {
-        MonoInstance *anc = &t->entries[k];
-        if (anc->template_decl != tmpl || anc->type_arg_count != count ||
-            !const_args_differ(anc->type_args, type_args, count))
-            continue;
-        const char *disp = template_display_name(tmpl, name);
-        char *from = type_inst_display(disp, anc->type_args, count);
-        char *to = type_inst_display(disp, type_args, count);
-        diag_error(tmpl->loc,
-            "'%s' instantiates itself with a changed const argument: %s leads to %s. "
-            "A generic may instantiate itself, directly or through other generics, "
-            "only with its own const parameters (no value recursion)", disp, from, to);
-        free(from);
-        free(to);
-        return true;
+/* An instance one step past MONO_MAX_CHAIN_DEPTH: `tmpl` at `type_args`,
+ * named while discovery walks the instance `t->walking` names. Reports it with
+ * the first two instances of `tmpl` on its chain, the first step of the
+ * recursion. Returns true when it reported. */
+static bool reject_deep_chain(MonoTable *t, Decl *tmpl, const char *name,
+                              Type **type_args, int count, int depth) {
+    if (depth <= MONO_MAX_CHAIN_DEPTH) return false;
+    /* The chain from the instance code names, outermost first. */
+    int *chain = xmalloc(sizeof(int) * (size_t)(depth));
+    int n = 0;
+    for (int k = t->walking - 1; k >= 0 && n < depth; k = t->entries[k].named_by - 1)
+        chain[n++] = k;
+    int first = -1, second = -1;
+    for (int j = n - 1; j >= 0 && second < 0; j--) {
+        if (t->entries[chain[j]].template_decl != tmpl) continue;
+        if (first < 0) first = chain[j];
+        else second = chain[j];
     }
-    return false;
+    free(chain);
+    const char *disp = template_display_name(tmpl, name);
+    char *at = type_inst_display(disp, type_args, count);
+    char *from = first >= 0
+        ? type_inst_display(disp, t->entries[first].type_args, t->entries[first].type_arg_count)
+        : NULL;
+    char *to = second >= 0
+        ? type_inst_display(disp, t->entries[second].type_args, t->entries[second].type_arg_count)
+        : NULL;
+    char *step = from && to ? str_sprintf("%s leads to %s, and ", from, to) : str_sprintf("%s", "");
+    diag_error(tmpl ? tmpl->loc : (SrcLoc){0},
+        "'%s' instantiates itself more than %d levels deep: %sthe chain is still "
+        "making new instances at %s. A generic may instantiate itself with changed "
+        "arguments only if they come round again; an 'if' does not end the chain, "
+        "since FC evaluates no branches at compile time",
+        disp, MONO_MAX_CHAIN_DEPTH, step, at);
+    free(step);
+    free(at);
+    free(from);
+    free(to);
+    return true;
 }
 
 const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
@@ -126,7 +125,8 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         }
     }
 
-    if (reject_value_recursion(t, tmpl, name, type_args, count)) return mangled;
+    int depth = t->walking ? t->entries[t->walking - 1].depth + 1 : 0;
+    if (reject_deep_chain(t, tmpl, name, type_args, count, depth)) return mangled;
 
     /* Termination guard: a new instance whose type arguments nest deeper than any
      * finite program would means a generic is instantiating itself with a growing
@@ -136,38 +136,16 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         int d = type_arg_depth(type_args[i]);
         if (d > arg_depth) arg_depth = d;
     }
-    /* Per-template count (value-recursion guard, see MONO_MAX_PER_TEMPLATE).
-     * Only counted when a const argument is present; type-only instantiation
-     * counts are bounded by the depth guard. */
-    int tmpl_count = 0;
-    if (tmpl) {
-        bool has_const_arg = false;
-        for (int i = 0; i < count; i++)
-            if (type_is_const_arg(type_args[i])) { has_const_arg = true; break; }
-        if (has_const_arg)
-            for (int i = 0; i < t->count; i++)
-                if (t->entries[i].template_decl == tmpl) tmpl_count++;
-    }
-    if (arg_depth > MONO_MAX_INSTANTIATION_DEPTH || t->count >= MONO_MAX_INSTANCES ||
-        tmpl_count >= MONO_MAX_PER_TEMPLATE) {
+    if (arg_depth > MONO_MAX_INSTANTIATION_DEPTH || t->count >= MONO_MAX_INSTANCES) {
         /* Prefer the source-level name over the mangled C name for the message. */
         const char *disp = template_display_name(tmpl, name);
-        SrcLoc loc = tmpl ? tmpl->loc : (SrcLoc){0};
-        if (tmpl_count >= MONO_MAX_PER_TEMPLATE)
-            diag_error(loc,
-                "infinite generic instantiation of '%s': it is instantiated with an "
-                "unbounded family of distinct const arguments (exceeded %d instances). "
-                "A generic that calls itself with a changing const argument (e.g. "
-                "f<'n + 1>) requires infinitely many monomorphized copies.",
-                disp, MONO_MAX_PER_TEMPLATE);
-        else
-            diag_error(loc,
-                "infinite generic instantiation of '%s': it is instantiated with an "
-                "unbounded family of ever-deeper type arguments (exceeded depth %d / "
-                "%d instances). A generic function or type that instantiates itself "
-                "with a growing type argument (e.g. f(some(x)), or a non-uniform "
-                "recursive type) requires infinitely many monomorphized copies.",
-                disp, MONO_MAX_INSTANTIATION_DEPTH, MONO_MAX_INSTANCES);
+        diag_error(tmpl ? tmpl->loc : (SrcLoc){0},
+            "infinite generic instantiation of '%s': it is instantiated with an "
+            "unbounded family of ever-deeper type arguments (exceeded depth %d / "
+            "%d instances). A generic function or type that instantiates itself "
+            "with a growing type argument (e.g. f(some(x)), or a non-uniform "
+            "recursive type) requires infinitely many monomorphized copies.",
+            disp, MONO_MAX_INSTANTIATION_DEPTH, MONO_MAX_INSTANCES);
         return mangled;
     }
 
@@ -242,6 +220,7 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         .type_param_names = params_copy,
         .type_param_count = tp_count,
         .named_by = t->walking,
+        .depth = depth,
     };
     DA_APPEND(t->entries, t->count, t->capacity, inst);
     return mangled;
@@ -413,6 +392,74 @@ static void discover_call(Expr *e, DiscoverCtx *c) {
     free(concrete_args);
 }
 
+/* Report the first fixed array in `t` whose size is invalid, a member type of
+ * the instance `inst` of `tmpl`; false after reporting. Descends through
+ * wrappers and tuples but not into other named types: a generic one is
+ * checked as it is made, and a plain one was checked at its declaration. */
+static bool check_member_sizes(Type *t, Decl *tmpl, const char *inst) {
+    if (!t) return true;
+    switch (t->kind) {
+    case TYPE_FIXED_ARRAY: {
+        int64_t sz;
+        char *msg = type_fixed_array_size(t, &sz)
+            ? static_length_error("fixed array size", sz, true) : NULL;
+        if (msg) {
+            diag_error(tmpl ? tmpl->loc : (SrcLoc){0}, "%s (in '%s', in instance '%s')",
+                       msg, type_name(t), inst);
+            free(msg);
+            return false;
+        }
+        return check_member_sizes(t->fixed_array.elem, tmpl, inst);
+    }
+    case TYPE_POINTER: return check_member_sizes(t->pointer.pointee, tmpl, inst);
+    case TYPE_SLICE:   return check_member_sizes(t->slice.elem, tmpl, inst);
+    case TYPE_OPTION:  return check_member_sizes(t->option.inner, tmpl, inst);
+    case TYPE_RESULT:  return check_member_sizes(t->result.inner, tmpl, inst);
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            if (!check_member_sizes(t->func.param_types[i], tmpl, inst)) return false;
+        return check_member_sizes(t->func.return_type, tmpl, inst);
+    case TYPE_STRUCT:
+        if (t->struc.is_tuple)
+            for (int i = 0; i < t->struc.field_count; i++)
+                if (!check_member_sizes(t->struc.fields[i].type, tmpl, inst)) return false;
+        return true;
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_UNION:
+    case TYPE_STUB:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        break;
+    }
+    return true;
+}
+
+/* Completeness backstop for the sizes in an instance monomorphization makes:
+ * every fixed array its fields or payloads hold must have a valid size.
+ * pass2 checks the instances checked code names, and those their fields name
+ * a few steps on (`d: cbox<'n - 3>` in s<3>); a family can run further
+ * (`next: s<'n * 2>*` reaches s<64> from s<1>), and this checks every
+ * instance however far its chain runs. */
+static void check_instance_sizes(Type *ct, Decl *tmpl, const char *disp,
+                                 Type **args, int n) {
+    char *inst = type_inst_display(disp, args, n);
+    if (ct->kind == TYPE_STRUCT) {
+        for (int i = 0; i < ct->struc.field_count; i++)
+            if (!check_member_sizes(ct->struc.fields[i].type, tmpl, inst)) break;
+    } else if (ct->kind == TYPE_UNION) {
+        for (int i = 0; i < ct->unio.variant_count; i++)
+            if (!check_member_sizes(ct->unio.variants[i].payload, tmpl, inst)) break;
+    }
+    free(inst);
+}
+
 /* Register the instance of generic struct or union `sym` at `args` (its C name
  * built from `base`) and give a new entry its concrete type: the template with
  * the arguments substituted, named for the instance, with nested instance
@@ -431,6 +478,7 @@ static void mono_instantiate(MonoTable *t, Arena *a, InternTable *intern,
     else if (ct->kind == TYPE_UNION) ct->unio.name = mangled;
     mono_resolve_type_names(t, a, intern, ct);
     mi->concrete_type = ct;
+    check_instance_sizes(ct, sym->decl, template_display_name(sym->decl, base), args, n);
 }
 
 /* A tuple literal whose element types mention type variables: register the

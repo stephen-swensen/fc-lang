@@ -1,7 +1,0 @@
-// Through another generic: ping<1> leads to pong<2>, which leads to ping<4>.
-let ping = <'n>() ->
-    if 'n > 100 then 0 else pong<'n * 2>()
-
-let pong = <'n>() -> ping<'n * 2>()
-
-let main = (args: str[]) -> ping<1>()

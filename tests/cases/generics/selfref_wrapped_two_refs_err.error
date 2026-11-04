@@ -1,0 +1,1 @@
+recursive type 'pair' would need infinitely many instances: field 'l' refers to 'pair' with 'b wrapped in another type

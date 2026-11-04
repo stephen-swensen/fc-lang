@@ -3,6 +3,14 @@
 #include "common.h"
 #include "pass1.h"
 
+/* How many steps of discovery may separate an instance from code that names
+ * it directly (MonoInstance.depth): a chain of instantiations still making new
+ * instances past this is rejected as one that never comes round (see
+ * monomorph.c). The C++ standard's suggested minimum for nested template
+ * instantiations, and clang's default limit. pass2 validates instances to the
+ * same depth. */
+#define MONO_MAX_CHAIN_DEPTH 1024
+
 typedef struct MonoInstance {
     const char *generic_name;    /* original name (interned) */
     const char *mangled_name;    /* C output name (interned) */
@@ -18,9 +26,11 @@ typedef struct MonoInstance {
     int type_param_count;
     /* The instance whose body or fields first named this one, as one more
      * than its index (always an earlier entry), or 0 for an instance checked
-     * code names (pass2). The chain of these is how mono_register finds a
-     * generic instantiating itself. */
+     * code names (pass2). */
     int named_by;
+    /* The steps along that chain to an instance checked code names (0 for
+     * one itself): how far a recursion has run (MONO_MAX_CHAIN_DEPTH). */
+    int depth;
 } MonoInstance;
 
 typedef struct MonoTable {

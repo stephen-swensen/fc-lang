@@ -1,0 +1,10 @@
+// A halved const argument reaches 0, which names itself, so the family
+// closes. The `if` does not end the chain (nothing is evaluated at compile
+// time): shrink<0> is made though the program never runs it.
+let shrink = <'n>(k: i32) ->
+    if 'n < 2 then k else shrink<'n / 2>(k + 1)
+
+let main = (args: str[]) ->
+    assert(shrink<64>(0) == 6)
+    assert(shrink<1000>(0) == 9)
+    0

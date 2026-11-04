@@ -1,0 +1,27 @@
+// A generic may refer to itself with fixed arguments: chunk<8> makes
+// chunk<64>, which names itself, and node<u8> makes node<i32>. A generic
+// function may call itself at a fixed instance the same way.
+struct chunk =
+    data: u8['n]
+    next: chunk<64>*?
+
+struct node =
+    v: 'a
+    meta: node<i32>*?
+
+let f = <'n>(k: i32) -> if k <= 0 then 'n else f<5>(k - 1)
+
+let size_of = (x: 'a, deep: bool) -> if deep then size_of(7i64, false) else sizeof('a)
+
+let main = (args: str[]) ->
+    let c = default(chunk<8>)
+    assert(c.data[7] == 0u8)
+    let spill = default(chunk<64>)
+    assert(spill.data[63] == 0u8)
+    let n = default(node<u8>)
+    assert(n.v == 0u8)
+    assert(f<3>(0) == 3)
+    assert(f<3>(2) == 5)
+    assert(size_of(1u8, true) == 8)
+    assert(size_of(1u8, false) == 1)
+    0

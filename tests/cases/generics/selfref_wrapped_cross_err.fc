@@ -1,0 +1,9 @@
+// A wrapped parameter that comes back round through another parameter: 'b,
+// wrapped, becomes the argument for 'a, and 'a becomes the argument for 'b,
+// so pair<u8, i32> leads to pair<i32?, u8>, then pair<u8?, i32?>, and on.
+struct pair =
+    a: 'a
+    b: 'b
+    next: pair<'b?, 'a>*?
+
+let main = (args: str[]) -> 0

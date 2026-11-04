@@ -1,0 +1,9 @@
+// The same growth spread over two self-references: l wraps 'b into the
+// argument for 'a, and r passes 'a on as the argument for 'b.
+struct pair =
+    a: 'a
+    b: 'b
+    l: pair<'b?, i32>*?
+    r: pair<i32, 'a>*?
+
+let main = (args: str[]) -> 0

@@ -1,0 +1,10 @@
+// A masked const argument settles at once: low_bit<64> makes low_bit<0>, and
+// low_bit<65> makes low_bit<1>, each of which names itself.
+let low_bit = <'n>(k: i32) ->
+    if k <= 0 then 'n else low_bit<('n & 1)>(k - 1)
+
+let main = (args: str[]) ->
+    assert(low_bit<64>(0) == 64)
+    assert(low_bit<64>(3) == 0)
+    assert(low_bit<65>(3) == 1)
+    0
