@@ -1,0 +1,8 @@
+// A written const argument is computed under the instance that writes it:
+// f<5> makes g<5000000000>, and g reads its parameter as an i32 value.
+let g = <'n>() -> 'n + 1
+let f = <'n>() -> g<'n * 1000000000>()
+
+let main = (args: str[]) ->
+    let x = f<5>()
+    0

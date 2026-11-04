@@ -1,0 +1,9 @@
+// An instance a written type argument makes is checked under it, as one the
+// call's arguments infer is: f<str> makes g<str>, whose body adds two
+// strings.
+let g = <'a>() -> default('a) + default('a)
+let f = <'a>() -> g<'a>()
+
+let main = (args: str[]) ->
+    let x = f<str>()
+    0

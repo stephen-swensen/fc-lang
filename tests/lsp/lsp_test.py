@@ -2685,6 +2685,33 @@ check("hover on a declaration named `_x` covers both characters",
       urng.get("start", {}).get("character") == 11 and urng.get("end", {}).get("character") == 13,
       json.dumps(ur.get(2, {}).get("result"))[:300])
 
+# --- generic instance chains: the editor reports the errors the compiler does ---
+# A const chain that never comes round is reported at its generic, as `fcc`
+# reports it, and one whose instances double at every step stops at the
+# instance limit instead of running on (each check is one analysis).
+chdir = tmpdir("fc_lsp_chain_")
+CHAINS = {
+    "endless.fc": ("let f = <'n>(k: i32) ->\n"
+                   "    if k <= 0 then 'n else f<'n + 1>(k - 1)\n\n"
+                   "let main = (args: str[]) ->\n"
+                   "    let _ = f<0>(3)\n"
+                   "    0\n", "instantiates itself more than 1024 levels deep"),
+    "doubling.fc": ("let f = <'n>(k: i32) ->\n"
+                    "    if k <= 0 then 'n else f<'n * 2>(k - 1) + f<'n * 2 + 1>(k - 1)\n\n"
+                    "let main = (args: str[]) ->\n"
+                    "    let _ = f<1>(3)\n"
+                    "    0\n", "past 200000 generic instances"),
+}
+for name, (src, want) in CHAINS.items():
+    curi = "file://" + os.path.join(chdir, name)
+    _, _, cbf, _, _ = run_session([req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+        note("textDocument/didOpen", {"textDocument": {"uri": curi, "languageId": "fc",
+             "version": 1, "text": src}}),
+        req(9, "shutdown", None), note("exit", None)])
+    cmsgs = cbf.get(name, [[]])[-1]
+    check(f"generic chain ({name}): reported in the editor as by the compiler",
+          len(cmsgs) == 1 and want in cmsgs[0], str(cmsgs)[:300])
+
 check("no session crashed or reported a sanitizer error",
       not CRASHES, "\n".join(f"session {n}: exit {rc}\n{err}" for n, rc, err in CRASHES))
 

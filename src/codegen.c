@@ -5663,13 +5663,8 @@ static Type *resolve_struct_stub(Type *t) {
          * template is never emitted as a complete type). */
         if (t->stub.type_arg_count > 0 && !type_contains_type_var(t)) {
             const char *mangled = stub_instance_name(t);
-            if (g_mono) {
-                for (int i = 0; i < g_mono->count; i++) {
-                    if (g_mono->entries[i].mangled_name == mangled &&
-                        g_mono->entries[i].concrete_type)
-                        return g_mono->entries[i].concrete_type;
-                }
-            }
+            MonoInstance *mi = g_mono ? mono_find(g_mono, mangled) : NULL;
+            if (mi && mi->concrete_type) return mi->concrete_type;
         }
         Symbol *sym = symtab_lookup(g_symtab, t->stub.name);
         if (sym && sym->type) {
@@ -5678,13 +5673,8 @@ static Type *resolve_struct_stub(Type *t) {
                 sym->type->kind == TYPE_ENUM)
                 return sym->type;
         }
-        if (g_mono) {
-            for (int i = 0; i < g_mono->count; i++) {
-                if (g_mono->entries[i].mangled_name == t->stub.name &&
-                    g_mono->entries[i].concrete_type)
-                    return g_mono->entries[i].concrete_type;
-            }
-        }
+        MonoInstance *mi = g_mono ? mono_find(g_mono, t->stub.name) : NULL;
+        if (mi && mi->concrete_type) return mi->concrete_type;
     }
     return t;
 }

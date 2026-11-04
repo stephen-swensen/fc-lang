@@ -1,6 +1,6 @@
-// A division by zero inside a transitively-discovered const argument (pass2
-// never folds it — the callee's const param is only inferable per instance)
-// must fail the FC build, not leak unresolved names into the emitted C.
+// A division by zero inside a const argument a generic body writes shows only
+// in an instance (f<8>), and must fail the FC build, reported at the call
+// that leads to it, not leak unresolved names into the emitted C.
 let g = <'n>() -> 'n
 
 let f = <'n>() -> g<('n / ('n - 8))>()

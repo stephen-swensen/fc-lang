@@ -1,0 +1,11 @@
+// The depth of a chain counts from the nearest instance code names. From
+// f<0> alone, f<('n + 1) % 1100> runs 1099 steps before it comes round, past
+// the limit; but main names f<550> too, and every instance is within 549
+// steps of one of the two.
+let f = <'n>(k: i32) ->
+    if k <= 0 then 'n else f<('n + 1) % 1100>(k - 1)
+
+let main = (args: str[]) ->
+    assert(f<0>(3) == 3)
+    assert(f<550>(600) == 50)
+    0

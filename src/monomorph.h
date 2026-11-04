@@ -11,6 +11,12 @@
  * same depth. */
 #define MONO_MAX_CHAIN_DEPTH 1024
 
+/* How many instances a program may have: a backstop for a family that grows
+ * in breadth rather than depth (two new instances of itself in each), far
+ * above what real programs reach. pass2 applies it to the instances it
+ * checks. */
+#define MONO_MAX_INSTANCES 200000
+
 typedef struct MonoInstance {
     const char *generic_name;    /* original name (interned) */
     const char *mangled_name;    /* C output name (interned) */
@@ -40,6 +46,15 @@ typedef struct MonoTable {
     /* While discovery walks an instance's body or fields, one more than its
      * index (so a zeroed table means none): the named_by of what it finds. */
     int walking;
+    /* Open-addressed index from mangled name (interned, so compared by
+     * pointer) to entry, for mono_find: index_cap slots (a power of two, 0
+     * before the first registration), each an entry index or -1. A slot can
+     * outlive its entry when an interactive session drops the instances of
+     * an input that failed (count shrinks), so a lookup checks the entry it
+     * finds still has the name. */
+    int *index;
+    int index_cap;
+    int index_used;     /* slots ever filled since the last rebuild */
 } MonoTable;
 
 /* Register an instantiation. Returns the mangled name. Deduplicates by mangled name. */
@@ -51,6 +66,18 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern,
 
 /* Find an instance by mangled name */
 MonoInstance *mono_find(MonoTable *t, const char *mangled_name);
+
+/* Report a chain of instantiations still making new instances past
+ * MONO_MAX_CHAIN_DEPTH, at `loc`, the declaration of the generic `name`: `at`
+ * is its instance past the limit, and `from` and `to` its first two instances
+ * on the chain (NULL when it appears only once). pass2 finds the same chains
+ * through function bodies and reports them in the same words. */
+void mono_report_deep_chain(SrcLoc loc, const char *name, const char *from,
+                            const char *to, const char *at);
+
+/* Report that instantiating the generic `name` (declared at `loc`) takes the
+ * program past MONO_MAX_INSTANCES instances; shared with pass2 likewise. */
+void mono_report_too_many(SrcLoc loc, const char *name);
 
 /* Recursively resolve generic struct/union stubs with concrete type_args into
  * mangled names in a type tree. Uses resolved_sym on Type (set by pass1/pass2)

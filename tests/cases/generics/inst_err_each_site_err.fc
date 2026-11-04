@@ -1,0 +1,9 @@
+// An instance is checked once, but each call that leads to one that fails
+// reports it, with its own chain.
+let g = <'a>() -> default('a) + default('a)
+let f = <'a>() -> g<'a>()
+
+let main = (args: str[]) ->
+    let x = f<str>()
+    let y = f<str>()
+    0

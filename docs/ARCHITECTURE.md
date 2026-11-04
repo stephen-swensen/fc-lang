@@ -182,10 +182,17 @@ Besides typing, pass2 does:
   depend on the concrete types (operator operands, sizes, const arguments) are
   made per instance by `validate_generic_expr`, which walks the body under
   that instance's bindings and reports through the chain of instantiations
-  that led to it (see [Invariants](#invariants)). The generic calls a body
-  makes are queued and walked in order (`drain_generic_validations`), so each
-  instance is reached by its shortest chain, to the depth monomorphization
-  allows (`MONO_MAX_CHAIN_DEPTH`). An instance's size check also covers the
+  that led to it (see [Invariants](#invariants)). The instances form one
+  graph for all of pass2 (`GenGraph`): a body is walked once, recording the
+  generic calls it makes, and each call with concrete arguments in checked
+  code starts a run that walks the graph breadth-first from its instance, to
+  the depth monomorphization allows (`MONO_MAX_CHAIN_DEPTH`). A run walks a
+  body again only if it failed, so every call that leads to a failure reports
+  it with its own chain, and it stops at instances an earlier run found
+  clean. An instance no run reached within the depth is past it from every
+  call, the chain monomorphization would reject, and pass2 reports it in the
+  same words (`report_endless_chains`), as it does the instance limit
+  (`MONO_MAX_INSTANCES`), so the editor sees both. An instance's size check also covers the
   instances its fields name (`d: cbox<'n - 3>` in `s<3>`) a few steps on;
   monomorphization checks the sizes of every instance it makes, however far
   its chain runs.
@@ -194,7 +201,8 @@ Besides typing, pass2 does:
 
 `mono_register` is the single place a generic instance enters the table. It
 mangles the instance name, evaluates the instance's `static_assert`s, and
-rejects a chain of instantiations that never comes round. Each instance
+rejects a chain of instantiations that never comes round. `mono_find` looks
+an instance up by its interned mangled name through a hash index. Each instance
 records the instance whose body or fields first named it (`named_by`; an
 instance pass2 registers has none) and how many such steps separate it from
 one pass2 registers (`depth`). A generic may instantiate itself with any
@@ -591,7 +599,9 @@ queries. It differs from the CLI in four ways: diagnostics go to a collector,
 a fatal error aborts only this analysis, pass2 runs past recoverable parse and
 pass1 errors (so a half-typed line doesn't blank the rest of the file), and it
 stops after pass2. An error that only monomorphization or codegen reports
-therefore never reaches the editor. It does not require a `main`, so library files can be
+therefore never reaches the editor; a chain of generic instances that never
+comes round is reported by pass2 when it runs through function bodies, but
+not when it runs only through struct fields. It does not require a `main`, so library files can be
 analyzed on their own.
 
 Unchanged feed files are not re-lexed on every keystroke: a session-scoped lex

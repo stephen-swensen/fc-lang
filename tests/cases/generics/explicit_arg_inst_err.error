@@ -1,0 +1,2 @@
+in g<str>() at 4:31: arithmetic requires numeric operands, got str and str
+g<str>() instantiated at

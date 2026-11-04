@@ -1,0 +1,2 @@
+in g<5000000000>() at 3:19: const parameter 'n = 5000000000 does not fit i32 in expression position
+f<5>() instantiated at

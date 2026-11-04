@@ -851,6 +851,9 @@ typedef struct {
     const char **td_params;
     uint8_t *td_kinds;
     int td_ntp;
+    /* The instances the per-instance check of generic bodies has met, shared
+       by every call site (see GenGraph). */
+    struct GenGraph *gen_graph;
 } CheckCtx;
 
 static Type *check_expr(CheckCtx *ctx, Expr *e);
@@ -4045,28 +4048,42 @@ static Provenance lvalue_storage_prov(Expr *target) {
 
 /* ---- Generic body validation after type variable resolution ---- */
 
+/* Which of a generic's type parameters its parameter types name
+ * (fgi_mark_var marks them). */
+typedef struct { const char **params; bool *seen; int n; } FgiSeen;
+static void fgi_mark_var(const char *name, uint8_t kind, void *ctx) {
+    (void)kind;
+    FgiSeen *f = ctx;
+    for (int i = 0; i < f->n; i++)
+        if (f->params[i] == name || strcmp(f->params[i], name) == 0) f->seen[i] = true;
+}
+
 /* Format "func_name(param_type1, param_type2)" for generic validation error messages.
  * Shows concrete parameter types (after substitution), not type variable bindings. */
 static const char *fmt_generic_inst(const char *func_name, Arena *arena,
     Type *func_type, const char **type_params, Type **bindings, int ntp)
 {
-    /* Grown to fit. This descriptor is not only display text: it also keys the
-     * gen_seen memo, so a clipped spelling would make two different
-     * instantiations of a long-named generic compare equal and silently halt a
-     * divergent descent before the depth backstop could report it. */
     char *buf = NULL;
     #define FGI_APPEND(...) (buf = str_appendf(buf, __VA_ARGS__))
     FGI_APPEND("%s", func_name);
-    /* When any binding is a const argument, spell the full binding list,
-     * "f<3>(...)", both for the diagnostic and because this descriptor keys
-     * the gen_seen memo: instances differing only in a const value must not
-     * alias. A type-only instantiation is spelled by its parameter types
-     * alone. */
+    /* Spell the full binding list, "f<3>(...)", when the parameter types do
+     * not show every binding: a const argument, or a type parameter only the
+     * body uses (`<'a>() -> default('a)`). A type-only instantiation is
+     * otherwise spelled by its parameter types alone. */
     {
-        bool any_const = false;
+        bool spell = false;
         for (int i = 0; i < ntp; i++)
-            if (bindings[i] && type_is_const_arg(bindings[i])) any_const = true;
-        if (any_const) {
+            if (bindings[i] && type_is_const_arg(bindings[i])) spell = true;
+        if (!spell && ntp > 0 && func_type && func_type->kind == TYPE_FUNC) {
+            bool *seen = calloc((size_t)ntp, sizeof(bool));
+            FgiSeen f = { type_params, seen, ntp };
+            for (int i = 0; i < func_type->func.param_count; i++)
+                type_walk_vars(func_type->func.param_types[i], fgi_mark_var, NULL, &f);
+            for (int i = 0; i < ntp; i++)
+                if (!seen[i]) spell = true;
+            free(seen);
+        }
+        if (spell) {
             FGI_APPEND("<");
             for (int i = 0; i < ntp; i++) {
                 if (i > 0) FGI_APPEND(", ");
@@ -4103,39 +4120,71 @@ static const char *fmt_generic_inst(const char *func_name, Arena *arena,
  * the same "infinite generic instantiation" wording as the monomorph.c guards. */
 #define GEN_INST_DEPTH_MAX 64
 
-/* Memo of generic instantiations already validated in the current top-level
- * pass. A self- or mutually-recursive generic (or a diamond of generic calls)
- * resolves to a finite set of distinct instantiations; validating each once
- * bounds the total work. Without it, a body with two self-calls re-descends
- * 2^depth times and exhausts memory. Keyed on the callee symbol, so
- * same-named generics in different modules never alias, and on the concrete
- * signature (gen_seen_add builds the key). The memo is reset at each
- * independent top-level entry. */
-typedef struct { const Symbol *sym; const char *key; } GenSeen;
+/* The per-instance check of generic function bodies keeps one graph for all
+ * of pass2: a node for each instance it has met and, once an instance's body
+ * has been walked, the generic calls that body makes (its edges). Each call
+ * with concrete arguments in checked code (an entry) starts a run, a
+ * breadth-first walk from the entry's instance over those it leads to, out
+ * to MONO_MAX_CHAIN_DEPTH calls, so each is reached by its shortest chain
+ * from the entry. A body is walked once; a later run follows the edges it
+ * recorded, and walks it again only if it failed a check, so that every
+ * entry leading to the failure reports it with its own chain. An instance
+ * from which a run passed everywhere and reached the end of every chain is
+ * clean, and later runs stop at it.
+ *
+ * A run leaves an instance it reaches past the depth limit unwalked (cut).
+ * Another entry may lead to the same instance in fewer steps, and
+ * monomorphization measures the depth from the nearest; but an instance no
+ * run has walked once every body is checked is past the limit from every
+ * entry, the chain monomorphization would reject, and pass2 reports it in
+ * the same words (report_endless_chains). */
 
-/* An instantiation a validation has yet to walk: a generic callee a walked
- * body calls, under its concrete bindings, `depth` calls from the entry. */
-typedef struct {
-    Symbol *callee;
-    Type **bindings;
-    int ntp;
-    const InstFrame *frame;
-    int depth;
-} GenPending;
+/* A generic call in a walked body: the instance it makes and where. */
+typedef struct { int to; SrcLoc site; } GenEdge;
 
-/* What one top-level validation shares with every cross-body descent it
- * makes: whether the infinite-instantiation error has been reported, the memo
- * of instantiations already validated, and the queue of those still to walk.
- * The queue is walked in order, so each instance is reached by its shortest
- * chain of calls, as monomorphization reaches it (MONO_MAX_CHAIN_DEPTH). */
 typedef struct {
-    bool inf_reported;
-    GenSeen *seen;
-    int seen_n, seen_cap;
-    GenPending *pending;
-    int pending_n, pending_cap, pending_next;
+    const char *key;        /* the instance's mangled name (interned) */
+    Symbol *sym;            /* the generic function */
+    Type **bindings;        /* its arguments, one per type parameter */
+    Type *fn_type;          /* the generic's signature, for desc */
+    const char *desc;       /* "inner(i32)", made when a message first needs it (frame_desc) */
+    GenEdge *edges;
+    int edge_n, edge_cap;
+    int stamp;              /* the last run that reached it */
+    bool walked;            /* its body has been walked: its edges are complete */
+    bool failed;            /* its body failed a check */
+    bool clean;             /* it and all it leads to passed, every chain to its end */
+    const InstFrame *cut;   /* the first chain that reached it past the limit */
+} GenNode;
+
+typedef struct GenGraph {
+    GenNode *nodes;
+    int node_n, node_cap;
+    int *index;             /* open-addressed, key to node; -1 is empty */
+    int index_cap;
+    int runs;               /* the stamp of the last run */
+    int queued;             /* nodes some run has queued: the instances pass2 checks */
+    bool too_many;          /* MONO_MAX_INSTANCES reported; nothing more is checked */
     SymbolTable *symtab;    /* for per-instance type queries (writable_ref_path, sizes) */
-} GenValidation;
+    InternTable *intern;    /* for instance names */
+    Arena *arena;           /* for descriptions */
+} GenGraph;
+
+/* A node a run has yet to walk, `depth` calls from the entry. */
+typedef struct { int node; const InstFrame *frame; int depth; } GenPending;
+
+/* One run: its queue holds each node it reaches, once, in the order reached.
+ * `ok` says everything it reached passed, `cut` that some chain ran past the
+ * limit (or was stopped), so what it reached is not known clean. */
+typedef struct {
+    GenGraph *g;
+    int stamp;
+    GenPending *queue;
+    int queue_n, queue_cap;
+    bool ok;
+    bool cut;
+    bool inf_reported;      /* the growing-type-argument error, once per run */
+} GenRun;
 
 /* The deepest nesting among an instantiation's type arguments. */
 static int inst_arg_depth(Type **bindings, int n) {
@@ -4147,31 +4196,25 @@ static int inst_arg_depth(Type **bindings, int n) {
     return depth;
 }
 
-/* Record the instantiation of `sym` printed as `desc`, whose arguments nest
- * `depth` deep (inst_arg_depth), as validated. The depth is part of the key,
- * so two instantiations that differ only in nesting stay distinct even where
- * the printed signature does not tell them apart. Returns true if newly added
- * (the caller should descend), false if it was already validated this pass. */
-static bool gen_seen_add(GenValidation *run, Arena *arena, const Symbol *sym,
-                         int depth, const char *desc) {
-    const char *key = arena_sprintf(arena, "%d:%s", depth, desc);
-    for (int i = 0; i < run->seen_n; i++)
-        if (run->seen[i].sym == sym && strcmp(run->seen[i].key, key) == 0)
-            return false;
-    GenSeen ent = { sym, key };
-    DA_APPEND(run->seen, run->seen_n, run->seen_cap, ent);
-    return true;
-}
-
 /* One frame of a generic-instantiation chain: a concrete instantiation and the
  * call site that required it. Linked outward via `parent` (NULL at the entry
- * call). The entry frame lives on the stack of the call that validates; the
- * frames of the instantiations it reaches are in the arena. */
+ * call). Frames are in the arena: a cut node keeps the one that reached it
+ * until pass2 ends. */
 struct InstFrame {
-    const char *desc;               /* "inner(i32)", fmt_generic_inst output */
     SrcLoc site;                    /* the call expression that triggered this instantiation */
     const struct InstFrame *parent; /* enclosing instantiation, NULL at the entry */
+    GenGraph *g;
+    int node;                       /* the instantiation's GenNode */
 };
+
+/* The frame's instantiation as messages spell it, "inner(i32)". */
+static const char *frame_desc(const InstFrame *f) {
+    GenNode *n = &f->g->nodes[f->node];
+    if (!n->desc)
+        n->desc = fmt_generic_inst(n->sym->name, f->g->arena, n->fn_type,
+                                   n->sym->type_params, n->bindings, n->sym->type_param_count);
+    return n->desc;
+}
 
 /* The entry (outermost) frame; its site is the user's actionable call. */
 static const InstFrame *inst_frame_root(const InstFrame *f) {
@@ -4204,7 +4247,7 @@ static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fm
     if (!frame->parent) {
         /* Single-level: the head line alone. */
         diag_error(primary, "in %s at %d:%d: %s",
-                   frame->desc, err_loc.line, err_loc.col, msg);
+                   frame_desc(frame), err_loc.line, err_loc.col, msg);
         free(msg);
         return;
     }
@@ -4213,12 +4256,12 @@ static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fm
      * Grown to fit: chains can be deep, and truncating would drop the
      * outermost frames, which are the actionable ones. */
     char *buf = str_sprintf("in %s at %d:%d: %s",
-                            frame->desc, err_loc.line, err_loc.col, msg);
+                            frame_desc(frame), err_loc.line, err_loc.col, msg);
     free(msg);
     for (const InstFrame *f = frame; f; f = f->parent) {
         const char *fn = f->site.filename ? f->site.filename : diag_filename();
         buf = str_appendf(buf, "\n    %s instantiated at %s:%d:%d",
-                          f->desc, fn, f->site.line, f->site.col);
+                          frame_desc(f), fn, f->site.line, f->site.col);
     }
     diag_error(primary, "%s", buf);
     free(buf);
@@ -4244,7 +4287,8 @@ static bool check_inst_type_operand(const InstFrame *frame, Arena *arena,
 
 /* One per-instance validation of a generic body: the concrete bindings it is
  * checked under, the chain of instantiations that led to it (`depth` calls
- * long), and whether it has passed so far. */
+ * long), and whether it has passed so far. `record` says this is the first
+ * walk of the instance's body (GenNode `node`), which records its edges. */
 typedef struct {
     Arena *arena;
     const char **type_params;
@@ -4252,8 +4296,10 @@ typedef struct {
     int ntp;
     const InstFrame *frame;
     bool ok;
-    GenValidation *run;
+    GenRun *run;
     int depth;
+    int node;
+    bool record;
 } GenericCheck;
 
 static void validate_generic_expr(Expr *e, void *check);
@@ -4499,39 +4545,112 @@ static void check_generic_array_size(Expr *e, GenericCheck *gc) {
     }
 }
 
+static unsigned gen_slot(const GenGraph *g, const char *key) {
+    uint64_t h = (uint64_t)(uintptr_t)key * 0x9e3779b97f4a7c15u;
+    return (unsigned)(h >> 32) & (unsigned)(g->index_cap - 1);
+}
+
+/* The node for the instance of generic function `sym` at `bindings`, made
+ * the first time it is met (`fn_type` is the generic's signature, for its
+ * description). */
+static int gen_node(GenGraph *g, Symbol *sym, Type **bindings, Type *fn_type) {
+    int ntp = sym->type_param_count;
+    const char *base = sym->decl && sym->decl->kind == DECL_LET && sym->decl->let.codegen_name
+                     ? sym->decl->let.codegen_name : sym->name;
+    const char *key = mangle_generic_name(g->intern, base, bindings, ntp);
+    unsigned mask = (unsigned)(g->index_cap - 1);
+    if (g->index_cap)
+        for (unsigned s = gen_slot(g, key); g->index[s] >= 0; s = (s + 1) & mask)
+            if (g->nodes[g->index[s]].key == key) return g->index[s];
+
+    if ((g->node_n + 1) * 2 > g->index_cap) {
+        int cap = g->index_cap ? g->index_cap * 2 : 64;
+        free(g->index);
+        g->index = xmalloc(sizeof(int) * (size_t)cap);
+        memset(g->index, -1, sizeof(int) * (size_t)cap);
+        g->index_cap = cap;
+        mask = (unsigned)(cap - 1);
+        for (int k = 0; k < g->node_n; k++) {
+            unsigned s = gen_slot(g, g->nodes[k].key);
+            while (g->index[s] >= 0) s = (s + 1) & mask;
+            g->index[s] = k;
+        }
+    }
+    GenNode n = { .key = key, .sym = sym, .bindings = bindings, .fn_type = fn_type };
+    DA_APPEND(g->nodes, g->node_n, g->node_cap, n);
+    unsigned s = gen_slot(g, key);
+    while (g->index[s] >= 0) s = (s + 1) & mask;
+    g->index[s] = g->node_n - 1;
+    return g->node_n - 1;
+}
+
+/* Reach node `to` in `run` by the call at `site`, from the instance `depth`
+ * calls from the entry whose frame is `from` (NULL and -1 for the entry
+ * itself): queue it unless the run has it or it is clean, and cut it past
+ * the depth limit. */
+static void gen_reach(GenRun *run, Arena *arena, int to, SrcLoc site,
+                      const InstFrame *from, int depth) {
+    GenGraph *g = run->g;
+    GenNode *n = &g->nodes[to];
+    if (n->stamp == run->stamp || n->clean) return;
+    if (g->too_many) { run->cut = true; return; }
+    InstFrame *f = arena_alloc(arena, sizeof *f);
+    *f = (InstFrame){ site, from, g, to };
+    if (depth + 1 > MONO_MAX_CHAIN_DEPTH) {
+        if (!n->cut) n->cut = f;
+        run->cut = true;
+        return;
+    }
+    if (n->stamp == 0 && ++g->queued > MONO_MAX_INSTANCES) {
+        g->too_many = true;
+        mono_report_too_many(n->sym->decl->loc, n->sym->decl->let.name);
+        run->ok = false;
+        run->cut = true;
+        return;
+    }
+    n->stamp = run->stamp;
+    GenPending p = { to, f, depth + 1 };
+    DA_APPEND(run->queue, run->queue_n, run->queue_cap, p);
+}
+
 /* Transitive validation: when a call targets another generic function,
  * propagate the concrete bindings into the callee's body so that an
  * unsupported operation on the instantiated type is reported at the
  * originating call site rather than leaking to the C compiler. (A generic
  * that fails only for some types would otherwise type-check at its own
- * definition but emit invalid C when reached through a wrapper.) The callee
- * is queued (drain_generic_validations walks it), up to the depth past which
- * monomorphization rejects a chain. */
+ * definition but emit invalid C when reached through a wrapper.) The
+ * callee's instance is reached in the run (gen_reach), and the call recorded
+ * as an edge of this one's. */
 static void validate_generic_callee(Expr *e, GenericCheck *gc) {
     Arena *arena = gc->arena;
     Symbol *callee = e->call.resolved_callee;
-    Type *cft = e->call.func ? e->call.func->type : NULL;
+    /* A call whose arguments are concrete where it is written was registered
+     * and checked as an entry of its own (check_generic_call). */
     if (!callee || !callee->is_generic || callee->type_param_count == 0 ||
         !callee->decl || callee->decl->kind != DECL_LET || !callee->decl->let.init ||
-        callee->decl->let.init->kind != EXPR_FUNC ||
-        !cft || cft->kind != TYPE_FUNC || cft->func.param_count != e->call.arg_count ||
-        gc->depth >= MONO_MAX_CHAIN_DEPTH)
+        callee->decl->let.init->kind != EXPR_FUNC || e->call.mangled_name ||
+        !e->call.type_args || e->call.type_arg_count != callee->type_param_count)
         return;
 
+    /* The callee's arguments, written or inferred (check_generic_call records
+     * both on the call), under this instance's, as monomorphization makes
+     * them. Evaluating a const argument can fail here (`g<1 / ('n - 5)>` at
+     * 'n = 5). */
     int cntp = callee->type_param_count;
     Type **cbind = arena_alloc(arena, sizeof(Type*) * (size_t) cntp);
-    memset(cbind, 0, sizeof(Type*) * (size_t) cntp);
-    for (int i = 0; i < e->call.arg_count; i++) {
-        Type *araw = e->call.args[i]->type;
-        if (!araw) return;
-        /* Resolve the argument's type under the current instantiation. */
-        Type *aconc = type_substitute(arena, araw, gc->type_params, gc->bindings, gc->ntp);
-        if (type_contains_type_var(aconc) ||
-            !unify(arena, cft->func.param_types[i], aconc, callee->type_params, cbind, cntp))
+    for (int i = 0; i < cntp; i++) {
+        cbind[i] = type_substitute(arena, e->call.type_args[i], gc->type_params,
+                                   gc->bindings, gc->ntp);
+        SrcLoc eloc = {0};
+        const char *emsg = const_eval_take_error(&eloc);
+        if (emsg) {
+            gen_inst_diag(gc->frame, eloc.filename ? eloc : e->loc, "%s", emsg);
+            gc->ok = false;
+            return;
+        }
+        if (!cbind[i] || type_is_error(cbind[i]) || type_contains_type_var(cbind[i]))
             return;
     }
-    for (int i = 0; i < cntp; i++)
-        if (!cbind[i] || type_contains_type_var(cbind[i])) return;
 
     /* Depth backstop: a binding nesting deeper than any finite program
      * would means this generic instantiates itself with an ever-growing
@@ -4555,37 +4674,84 @@ static void validate_generic_callee(Expr *e, GenericCheck *gc) {
         return;
     }
 
-    /* cdesc is the human-readable substitution context threaded into
-     * diagnostics; it lives in the arena, so it stays valid until the queued
-     * walk. Validate each distinct instantiation once: recursive or diamond
-     * generic calls otherwise re-descend exponentially. */
-    const char *cdesc = fmt_generic_inst(callee->name, arena, cft,
-        callee->type_params, cbind, cntp);
-    if (!gen_seen_add(gc->run, arena, callee, maxd, cdesc)) return;
-
-    /* A chain frame: this callee instantiation, required by the call
-     * expression `e`. */
-    InstFrame *child = arena_alloc(arena, sizeof *child);
-    *child = (InstFrame){ cdesc, e->loc, gc->frame };
-    GenPending p = { callee, cbind, cntp, child, gc->depth + 1 };
-    DA_APPEND(gc->run->pending, gc->run->pending_n, gc->run->pending_cap, p);
+    GenGraph *g = gc->run->g;
+    int to = gen_node(g, callee, cbind, e->call.func ? e->call.func->type : NULL);
+    if (gc->record) {
+        GenEdge edge = { to, e->loc };
+        GenNode *from = &g->nodes[gc->node];
+        DA_APPEND(from->edges, from->edge_n, from->edge_cap, edge);
+    }
+    gen_reach(gc->run, arena, to, e->loc, gc->frame, gc->depth);
 }
 
-/* Walk the instantiations queued so far, and those they queue in turn.
- * Returns false if any failed. */
-static bool drain_generic_validations(GenValidation *run, Arena *arena) {
-    bool ok = true;
-    while (run->pending_next < run->pending_n) {
-        /* A copy: walking a body can grow (and move) the queue. */
-        GenPending p = run->pending[run->pending_next++];
-        GenericCheck sub = { arena, p.callee->type_params, p.bindings, p.ntp,
-                             p.frame, true, run, p.depth };
-        Expr *cfn = p.callee->decl->let.init;
-        for (int i = 0; i < cfn->func.body_count; i++)
-            validate_generic_expr(cfn->func.body[i], &sub);
-        if (!sub.ok) ok = false;
+/* Check the instance `root` of a generic function and everything it leads
+ * to, for the call at `site` in checked code. Each node is walked in the
+ * order reached: by its body the first time, or when it failed before (so
+ * this entry reports the failure too), and otherwise by following its
+ * recorded edges. Returns false if anything it reached failed. */
+static bool gen_run(GenGraph *g, Arena *arena, int root, SrcLoc site) {
+    GenRun run = { .g = g, .stamp = ++g->runs, .ok = true };
+    gen_reach(&run, arena, root, site, NULL, -1);
+    for (int qi = 0; qi < run.queue_n; qi++) {
+        /* A copy: walking a body can grow (and move) the queue and the nodes. */
+        GenPending p = run.queue[qi];
+        GenNode *n = &g->nodes[p.node];
+        if (n->walked && !n->failed) {
+            for (int k = 0; k < n->edge_n; k++) {
+                GenEdge edge = g->nodes[p.node].edges[k];
+                gen_reach(&run, arena, edge.to, edge.site, p.frame, p.depth);
+            }
+            continue;
+        }
+        Symbol *sym = n->sym;
+        GenericCheck sub = { arena, sym->type_params, n->bindings, sym->type_param_count,
+                             p.frame, true, &run, p.depth, p.node, !n->walked };
+        Expr *fn = sym->decl->let.init;
+        for (int i = 0; i < fn->func.body_count; i++)
+            validate_generic_expr(fn->func.body[i], &sub);
+        n = &g->nodes[p.node];
+        n->walked = true;
+        n->failed = !sub.ok;
+        if (!sub.ok) run.ok = false;
     }
-    return ok;
+    if (run.ok && !run.cut)
+        for (int qi = 0; qi < run.queue_n; qi++) g->nodes[run.queue[qi].node].clean = true;
+    free(run.queue);
+    return run.ok;
+}
+
+/* Once every body is checked: report the first chain that ran past the depth
+ * limit to an instance no run walked (see GenGraph), as monomorphization
+ * would, naming the first two instances of its generic on the chain. */
+static void report_endless_chains(GenGraph *g) {
+    if (g->too_many) return;    /* the runs stopped short; that error stands alone */
+    for (int i = 0; i < g->node_n; i++) {
+        GenNode *n = &g->nodes[i];
+        if (!n->cut || n->walked) continue;
+        const InstFrame *first = NULL, *second = NULL;
+        for (const InstFrame *f = n->cut->parent; f; f = f->parent) {
+            if (g->nodes[f->node].sym != n->sym) continue;
+            second = first;
+            first = f;
+        }
+        const char *name = n->sym->decl->let.name;
+        int ntp = n->sym->type_param_count;
+        char *at = type_inst_display(name, n->bindings, ntp);
+        char *from = first ? type_inst_display(name, g->nodes[first->node].bindings, ntp) : NULL;
+        char *to = second ? type_inst_display(name, g->nodes[second->node].bindings, ntp) : NULL;
+        mono_report_deep_chain(n->sym->decl->loc, name, from, to, at);
+        free(at);
+        free(from);
+        free(to);
+        return;
+    }
+}
+
+/* Free the graph's tables; its descriptions and bindings are in the arena. */
+static void gen_graph_free(GenGraph *g) {
+    for (int i = 0; i < g->node_n; i++) free(g->nodes[i].edges);
+    free(g->nodes);
+    free(g->index);
 }
 
 /* A call to a function that is not itself generic (a declared function, a
@@ -4614,7 +4780,7 @@ static void check_generic_call_args(Expr *e, GenericCheck *gc) {
 }
 
 static void check_generic_type_operand(Expr *e, Type *t, GenericCheck *gc) {
-    if (!check_inst_type_operand(gc->frame, gc->arena, gc->run->symtab, t, gc->type_params,
+    if (!check_inst_type_operand(gc->frame, gc->arena, gc->run->g->symtab, t, gc->type_params,
                                  gc->bindings, gc->ntp, e->loc))
         gc->ok = false;
 }
@@ -4636,7 +4802,7 @@ static void check_generic_readonly_copy(Expr *e, GenericCheck *gc) {
     if (!t) return;
     Type *ct = type_read_only(gc->arena,
         type_substitute(gc->arena, t, gc->type_params, gc->bindings, gc->ntp));
-    const char *path = writable_ref_path(gc->arena, gc->run->symtab, ct, 0);
+    const char *path = writable_ref_path(gc->arena, gc->run->g->symtab, ct, 0);
     if (!path) return;
     char *msg = readonly_copy_error(ct, path);
     gen_inst_diag(gc->frame, e->loc, "%s", msg);
@@ -4681,17 +4847,6 @@ static void validate_generic_expr(Expr *e, void *check) {
     case EXPR_ALIGNOF:      check_generic_type_operand(e, e->alignof_expr.target, gc); break;
     default: break;
     }
-}
-
-/* Validate one statement of a generic body under concrete bindings (see
- * validate_generic_expr). Returns true if it passed. */
-static bool validate_generic_body(Expr *e, Arena *arena,
-    const char **type_params, Type **bindings, int ntp,
-    const InstFrame *frame, GenValidation *run)
-{
-    GenericCheck gc = { arena, type_params, bindings, ntp, frame, true, run, 0 };
-    if (e) validate_generic_expr(e, &gc);
-    return gc.ok;
 }
 
 /* Is e an lvalue (addressable storage that outlives the expression)? Used to
@@ -5297,27 +5452,12 @@ static Type *check_generic_call(CheckCtx *ctx, Expr *e, Type *ft, Symbol *callee
                 tmpl_has_errors = last->type && type_is_error(last->type);
             }
             if (!tmpl_has_errors) {
-                const char *inst_desc = fmt_generic_inst(callee_sym->name,
-                    ctx->arena, ft, callee_sym->type_params, bindings, ntp);
-                /* Fresh memo for this top-level validation; seed it with the
-                 * entry instantiation so its own self-calls don't re-descend
-                 * into an identical body. */
-                GenValidation run = {0};
-                run.symtab = ctx->symtab;
-                gen_seen_add(&run, ctx->arena, callee_sym,
-                             inst_arg_depth(bindings, ntp), inst_desc);
-                /* Entry (root) chain frame: this instantiation, required by
-                 * the user's call `e`. Transitive descents push children. */
-                InstFrame root = { inst_desc, e->loc, NULL };
-                bool ok = true;
-                for (int i = 0; i < func_expr->func.body_count && ok; i++) {
-                    ok = validate_generic_body(func_expr->func.body[i], ctx->arena,
-                            callee_sym->type_params, bindings, ntp, &root, &run);
-                    if (!drain_generic_validations(&run, ctx->arena)) ok = false;
-                }
-                free(run.seen);
-                free(run.pending);
-                if (!ok) return poison(e);
+                /* This call is an entry: check its instance and all it leads
+                 * to (gen_run), as the user's call `e` requires them. */
+                GenGraph *g = ctx->gen_graph;
+                int root = gen_node(g, callee_sym,
+                    arena_dup(ctx->arena, bindings, ntp, sizeof(Type*)), ft);
+                if (!gen_run(g, ctx->arena, root, e->loc)) return poison(e);
             }
         }
     }
@@ -7025,7 +7165,7 @@ static Type *check_array_lit(CheckCtx *ctx, Expr *e) {
      * Strings): the backing array would be dimensioned with the wrapped
      * u64 value, and a negative `len` defeats every later bounds check.
      * Zero is legal: `i32[] { }` is the empty-slice literal.
-     * validate_generic_body makes the same check per instance. */
+     * check_generic_array_size makes the same check per instance. */
     if (!size_deferred) {
         uint64_t raw = e->array_lit.size_expr->int_lit.value;
         Type *slt = e->array_lit.size_expr->int_lit.lit_type;
@@ -8151,7 +8291,7 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
     case EXPR_TYPE_VAR_REF: {
         /* A const generic param used as a value: behaves like an i32 integer
          * literal of the bound value (per-instance range check in
-         * validate_generic_body; codegen emits the literal). A standalone use
+         * check_generic_const_param; codegen emits the literal). A standalone use
          * is itself kind evidence: a prefix var with no other occurrence is
          * pinned to const here. In a type body it is a const argument over the
          * type's own parameter (`next: s<'n * 2>*`), kept symbolic. */
@@ -11498,6 +11638,8 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         .on_demand_visited = NULL,
         .file_scopes = file_scopes,
     };
+    GenGraph gen_graph = { .symtab = symtab, .intern = intern_tbl, .arena = arena };
+    ctx.gen_graph = &gen_graph;
 
     /* Validate struct/union static_assert shapes up front: mono_register
      * evaluates them context-free, so ill-formed conditions must be rejected
@@ -11597,6 +11739,8 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         break;
     }
 
+    report_endless_chains(&gen_graph);
+    gen_graph_free(&gen_graph);
     check_infinite_size(prog, symtab);
     check_module_cycles(symtab);
 
@@ -11609,6 +11753,7 @@ void front_end_free(SymbolTable *symtab, InternTable *intern, MonoTable *mono,
     symtab_free(symtab);
     file_scopes_free(file_scopes);
     free(mono->entries);
+    free(mono->index);
     free(intern->entries);   /* the hash array; the strings live in the arena */
     arena_free(arena);
 }

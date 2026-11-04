@@ -11,12 +11,13 @@
  * A generic may instantiate itself with any arguments, and the instances it
  * makes are the ones those arguments reach. Some families never close: one
  * that grows a type argument (`f(some(x))` forces f<'a> -> f<'a?> ->
- * f<'a??> -> ..., and a non-uniform recursive type forces node<i32> ->
- * node<node<i32>> -> ...), and one whose const argument never comes round
- * again (f<'n + 1>). Without a guard, both fixpoint loops below (function
- * discovery in mono_discover_transitive, nested-type discovery in
- * mono_finalize_types) would never converge, or, if a name collision happened
- * to stop the loop, would emit a truncated C type.
+ * f<'a??> -> ..., and a type that wraps its own parameter in a reference to
+ * itself, `node<node<'a>>`, forces node<i32> -> node<node<i32>> -> ...), and
+ * one whose const argument never comes round again (f<'n + 1>). Without a
+ * guard, both fixpoint loops below (function discovery in
+ * mono_discover_transitive, nested-type discovery in mono_finalize_types)
+ * would never converge, or, if a name collision happened to stop the loop,
+ * would emit a truncated C type.
  *
  * Every instance records how many steps of discovery separate it from code
  * that names it directly (MonoInstance.depth), and one past
@@ -24,13 +25,14 @@
  * come round to instances already made by then is taken never to. A growing
  * type argument also nests one constructor deeper each step, so the cap on
  * the structural depth of an instance's type arguments reports it sooner,
- * as what it is. The instance-count cap is a backstop for any breadth
- * divergence not foreseen here. All three limits are far above what real
- * programs reach (generic nesting is a handful of levels deep, a recursion
- * that halves its argument is at most 64, and programs have thousands of
- * instances, not hundreds of thousands). */
+ * as what it is. The instance-count cap (MONO_MAX_INSTANCES) stops a family
+ * that grows in breadth instead: each instance of `f` naming both
+ * f<'n * 2> and f<'n * 2 + 1> doubles the instances at every step, so the
+ * count runs out long before the depth does. All three limits are far above
+ * what real programs reach (generic nesting is a handful of levels deep, a
+ * recursion that halves its argument is at most 64, and programs have
+ * thousands of instances, not hundreds of thousands). */
 #define MONO_MAX_INSTANTIATION_DEPTH 128
-#define MONO_MAX_INSTANCES           200000
 
 static void mono_drain_const_eval_error(void);
 
@@ -72,18 +74,64 @@ static bool reject_deep_chain(MonoTable *t, Decl *tmpl, const char *name,
     char *to = second >= 0
         ? type_inst_display(disp, t->entries[second].type_args, t->entries[second].type_arg_count)
         : NULL;
-    char *step = from && to ? str_sprintf("%s leads to %s, and ", from, to) : str_sprintf("%s", "");
-    diag_error(tmpl ? tmpl->loc : (SrcLoc){0},
-        "'%s' instantiates itself more than %d levels deep: %sthe chain is still "
-        "making new instances at %s. A generic may instantiate itself with changed "
-        "arguments only if they come round again; an 'if' does not end the chain, "
-        "since FC evaluates no branches at compile time",
-        disp, MONO_MAX_CHAIN_DEPTH, step, at);
-    free(step);
+    mono_report_deep_chain(tmpl ? tmpl->loc : (SrcLoc){0}, disp, from, to, at);
     free(at);
     free(from);
     free(to);
     return true;
+}
+
+void mono_report_deep_chain(SrcLoc loc, const char *name, const char *from,
+                            const char *to, const char *at) {
+    char *step = from && to ? str_sprintf("%s leads to %s, and ", from, to) : str_sprintf("%s", "");
+    diag_error(loc,
+        "'%s' instantiates itself more than %d levels deep: %sthe chain is still "
+        "making new instances at %s. A generic may instantiate itself with changed "
+        "arguments only if they come round again; an 'if' does not end the chain, "
+        "since FC evaluates no branches at compile time",
+        name, MONO_MAX_CHAIN_DEPTH, step, at);
+    free(step);
+}
+
+void mono_report_too_many(SrcLoc loc, const char *name) {
+    diag_error(loc,
+        "instantiating '%s' takes the program past %d generic instances, the most "
+        "it may have. A generic that names more than one new instance of itself in "
+        "each instance (f<'n * 2> and f<'n * 2 + 1> inside f) doubles the instances "
+        "at every step, so they never run out",
+        name, MONO_MAX_INSTANCES);
+}
+
+/* The slot mono_find probes first for `name`. */
+static unsigned mono_slot(const MonoTable *t, const char *name) {
+    uint64_t h = (uint64_t)(uintptr_t)name * 0x9e3779b97f4a7c15u;
+    return (unsigned)(h >> 32) & (unsigned)(t->index_cap - 1);
+}
+
+/* Put entry `i` in the index, after any slot left by a dropped entry, and
+ * rebuild the index from the live entries when it is half full. */
+static void mono_index_add(MonoTable *t, int i) {
+    if ((t->index_used + 1) * 2 > t->index_cap) {
+        int cap = t->index_cap ? t->index_cap : 64;
+        while ((t->count + 1) * 2 > cap) cap *= 2;
+        free(t->index);
+        t->index = xmalloc(sizeof(int) * (size_t)cap);
+        memset(t->index, -1, sizeof(int) * (size_t)cap);
+        t->index_cap = cap;
+        t->index_used = 0;
+        for (int k = 0; k < t->count; k++) {
+            if (k == i) continue;
+            unsigned s = mono_slot(t, t->entries[k].mangled_name);
+            while (t->index[s] >= 0) s = (s + 1) & (unsigned)(cap - 1);
+            t->index[s] = k;
+            t->index_used++;
+        }
+    }
+    unsigned s = mono_slot(t, t->entries[i].mangled_name);
+    while (t->index[s] >= 0 && t->index[s] < t->count && t->index[s] != i)
+        s = (s + 1) & (unsigned)(t->index_cap - 1);
+    if (t->index[s] < 0) t->index_used++;
+    t->index[s] = i;
 }
 
 const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
@@ -106,10 +154,7 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
     const char *mangled = mangle_generic_name(intern_tbl, base, type_args, count);
 
     /* Dedup: check if already registered */
-    for (int i = 0; i < t->count; i++) {
-        if (t->entries[i].mangled_name == mangled)
-            return mangled;
-    }
+    if (mono_find(t, mangled)) return mangled;
 
     /* void has no value representation, so an instance binding a type
      * parameter to it would emit `void x;`. pass2 rejects the written and
@@ -136,16 +181,18 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         int d = type_arg_depth(type_args[i]);
         if (d > arg_depth) arg_depth = d;
     }
-    if (arg_depth > MONO_MAX_INSTANTIATION_DEPTH || t->count >= MONO_MAX_INSTANCES) {
+    if (arg_depth > MONO_MAX_INSTANTIATION_DEPTH) {
         /* Prefer the source-level name over the mangled C name for the message. */
-        const char *disp = template_display_name(tmpl, name);
         diag_error(tmpl ? tmpl->loc : (SrcLoc){0},
-            "infinite generic instantiation of '%s': it is instantiated with an "
-            "unbounded family of ever-deeper type arguments (exceeded depth %d / "
-            "%d instances). A generic function or type that instantiates itself "
-            "with a growing type argument (e.g. f(some(x)), or a non-uniform "
-            "recursive type) requires infinitely many monomorphized copies.",
-            disp, MONO_MAX_INSTANTIATION_DEPTH, MONO_MAX_INSTANCES);
+            "infinite generic instantiation of '%s': its type arguments nest more "
+            "than %d deep. A generic that instantiates itself with a growing type "
+            "argument (f(some(x)) inside f makes f<'a?>, then f<'a?" "?>, and so on) needs "
+            "infinitely many instances",
+            template_display_name(tmpl, name), MONO_MAX_INSTANTIATION_DEPTH);
+        return mangled;
+    }
+    if (t->count >= MONO_MAX_INSTANCES) {
+        mono_report_too_many(tmpl ? tmpl->loc : (SrcLoc){0}, template_display_name(tmpl, name));
         return mangled;
     }
 
@@ -223,12 +270,16 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         .depth = depth,
     };
     DA_APPEND(t->entries, t->count, t->capacity, inst);
+    mono_index_add(t, t->count - 1);
     return mangled;
 }
 
 MonoInstance *mono_find(MonoTable *t, const char *mangled_name) {
-    for (int i = 0; i < t->count; i++) {
-        if (t->entries[i].mangled_name == mangled_name)
+    if (t->index_cap == 0) return NULL;
+    for (unsigned s = mono_slot(t, mangled_name); t->index[s] >= 0;
+         s = (s + 1) & (unsigned)(t->index_cap - 1)) {
+        int i = t->index[s];
+        if (i < t->count && t->entries[i].mangled_name == mangled_name)
             return &t->entries[i];
     }
     return NULL;
@@ -655,10 +706,8 @@ static void discover_nested_types(Type *type, MonoTable *t, Arena *a,
 /* Completeness backstop: walk a finalized concrete type and, if it references a
  * generic struct/union instance that was never registered (so codegen would
  * emit a dangling C typedef name), report an infinite-instantiation error once.
- * A missing instance is the sign of a truncated infinite family: mutually or
- * indirectly non-uniform recursive types, which the definition-site self-check
- * (pass1) misses and the depth cap would catch only if discovery reached the
- * family's every member; this reports it however discovery stopped.
+ * A missing instance is the sign of a truncated infinite family that the
+ * limits above did not report; this reports it however discovery stopped.
  * Recurses through wrapper constructors, but not into a referenced instance's
  * own fields (those are checked when its own table entry is visited), so this
  * terminates. */
@@ -709,10 +758,8 @@ static void check_dangling_instance(MonoTable *t, Type *ty, Decl *site, bool *re
 dangling:
     *reported = true;
     diag_error(site ? site->loc : (SrcLoc){0},
-        "infinite generic instantiation: a generic type transitively references an "
-        "unbounded family of instances (a mutually or indirectly non-uniform "
-        "recursive type). A generic type may only refer to other generic types with "
-        "concrete or parameter-preserving type arguments around any recursion cycle.");
+        "infinite generic instantiation: a generic type refers, through its fields, "
+        "to an unbounded family of instances, and one of them was never made");
 }
 
 void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {

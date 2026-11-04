@@ -1,0 +1,11 @@
+// A written const argument that cannot be computed for an instance is
+// reported at the call that leads to it.
+struct cbox =
+    v: u8['n]
+
+let g = <'n>() -> sizeof(cbox<'n>)
+let f = <'n>() -> g<100 / ('n - 5)>()
+
+let main = (args: str[]) ->
+    let x = f<5>()
+    0
