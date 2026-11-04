@@ -1,0 +1,1 @@
+'low_bit' instantiates itself with a changed const argument: low_bit<64> leads to low_bit<0>

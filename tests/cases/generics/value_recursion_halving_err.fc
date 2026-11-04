@@ -1,0 +1,5 @@
+// So is a halved one, which reaches 0 without wrapping.
+let shrink = <'n>() ->
+    if 'n < 2 then 0 else shrink<'n / 2>()
+
+let main = (args: str[]) -> shrink<64>()

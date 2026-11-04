@@ -1,1 +1,1 @@
-unbounded family of distinct const arguments
+'runaway' instantiates itself with a changed const argument: runaway<0> leads to runaway<1>

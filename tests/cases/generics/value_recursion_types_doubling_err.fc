@@ -1,0 +1,16 @@
+// Two generic structs that hold each other with a doubled const argument:
+// a<1> leads to b<2>, which leads to a<4>. Rejected, though the values wrap
+// round to 0 and the family would close there.
+struct cbox =
+    v: u8['n]
+
+struct a =
+    b: b<'n * 2>*?
+    d: cbox<'n>
+
+struct b =
+    a: a<'n * 2>*?
+
+let main = (args: str[]) ->
+    let x = default(a<1>)
+    0

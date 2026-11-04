@@ -1,0 +1,30 @@
+// What value recursion leaves alone: a generic that recurs at its own
+// instance, directly or through another generic, and one that instantiates a
+// different generic with a changed argument.
+let count_down = <'n>(k: i32) ->
+    if k == 0 then 'n else count_down<'n>(k - 1)
+
+let even = <'n>(k: i32) -> if k == 0 then 'n else odd<'n>(k - 1)
+let odd = <'n>(k: i32) -> if k == 0 then 0 else even<'n>(k - 1)
+
+let twice = <'n>() -> 'n * 2
+let doubled = <'n>() -> twice<'n * 2>()
+
+struct cbox =
+    v: u8['n]
+
+struct left =
+    right: right<'n>*?
+    d: cbox<'n>
+
+struct right =
+    left: left<'n>*?
+    d: cbox<'n * 2>
+
+let main = (args: str[]) ->
+    assert(count_down<7>(3) == 7)
+    assert(even<5>(4) == 5)
+    assert(doubled<3>() == 12)
+    let l = default(left<2>)
+    assert(l.d.v[1] == 0u8)
+    0

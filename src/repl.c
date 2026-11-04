@@ -173,6 +173,7 @@ static void undo_declarations(const Mark *m) {
 static void undo_input(const Mark *m) {
     undo_declarations(m);
     S.mono.count = m->mono;
+    S.mono.walking = 0;     /* an error can end discovery mid-walk */
     error_codes_truncate(m->errors);
     S.gn_n = m->gn_n;
     while (S.undo_n > m->undo_n) {

@@ -189,10 +189,14 @@ Besides typing, pass2 does:
 ### Monomorphization
 
 `mono_register` is the single place a generic instance enters the table. It
-mangles the instance name, evaluates the instance's `static_assert`s, and caps
-the number of instances per template: a template that instantiates itself
-with a growing const argument (`f<'n + 1>` inside `f`) would otherwise never
-terminate. Once any error has been reported it registers nothing, so in a
+mangles the instance name, evaluates the instance's `static_assert`s, and
+rejects value recursion. Each instance records the instance whose body or
+fields first named it (`named_by`; an instance pass2 registers has none). A
+new instance is rejected when its template is already up that chain with
+other const arguments (`f<'n + 1>` inside `f`), whatever its values would do
+later: a doubled argument wraps round to 0 and repeats, so counting instances
+alone would never notice it. The cap on instances per template is the
+backstop. Once any error has been reported it registers nothing, so in a
 program (or an editor buffer) that already has an error, no further instance
 is checked. After pass2, discovery walks instantiated bodies to a fixpoint,
 and finalize resolves every type name to its mangled C name. Codegen's

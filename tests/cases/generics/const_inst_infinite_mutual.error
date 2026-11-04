@@ -1,1 +1,1 @@
-unbounded family of distinct const arguments
+'ping' instantiates itself with a changed const argument: ping<1> leads to ping<3>

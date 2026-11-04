@@ -18,8 +18,9 @@
  *
  * The divergence always shows up as type arguments that nest one constructor
  * deeper each round, so a cap on the structural depth of an instance's type
- * arguments catches it whatever its shape. Apart from const arguments (capped
- * per template below), FC has no type-level computation: array sizes, tuple
+ * arguments catches it whatever its shape. Apart from const arguments (see
+ * reject_value_recursion and the per-template cap below), FC has no
+ * type-level computation: array sizes, tuple
  * arities, etc. are fixed by source. So a bounded type-argument depth admits
  * only finitely many distinct types, and the depth cap alone guarantees
  * termination. The instance-count cap is a backstop for any breadth divergence
@@ -28,14 +29,63 @@
  * instances, not hundreds of thousands). */
 #define MONO_MAX_INSTANTIATION_DEPTH 128
 #define MONO_MAX_INSTANCES           200000
-/* Per-template cap: value-recursive const generics (f calling f<'n + 1>) grow
- * an infinite family whose members all have type-arg depth 1, invisible to the
- * depth guard. No finite program instantiates one template thousands of times
- * with distinct const values; cap well below MONO_MAX_INSTANCES so the
- * diagnostic is fast and names the template. */
+/* Per-template cap: a value-recursive const generic (f calling f<'n + 1>)
+ * grows a family whose members all have type-arg depth 1, invisible to the
+ * depth guard. reject_value_recursion rejects one at its first changed
+ * instance; this cap is the backstop for any other way one template could be
+ * instantiated thousands of times with distinct const values, which no finite
+ * program does. It is well below MONO_MAX_INSTANCES so the diagnostic is fast
+ * and names the template. */
 #define MONO_MAX_PER_TEMPLATE        2048
 
 static void mono_drain_const_eval_error(void);
+
+/* The name a message gives the template `tmpl` of an instance registered as
+ * `name`: its source name, which pass1 replaced with the C name in a struct
+ * or union decl (but keeps in a let). */
+static const char *template_display_name(Decl *tmpl, const char *name) {
+    if (!tmpl) return name;
+    if (tmpl->kind == DECL_LET && tmpl->let.name) return tmpl->let.name;
+    if (tmpl->kind == DECL_STRUCT) return mangled_source_name(tmpl->struc.name);
+    if (tmpl->kind == DECL_UNION) return mangled_source_name(tmpl->unio.name);
+    return name;
+}
+
+/* Whether two argument lists of one template differ in a const argument. */
+static bool const_args_differ(Type **a, Type **b, int count) {
+    for (int i = 0; i < count; i++)
+        if ((type_is_const_arg(a[i]) || type_is_const_arg(b[i])) && !type_eq(a[i], b[i]))
+            return true;
+    return false;
+}
+
+/* No value recursion (the spec, Const Parameters): an instance of `tmpl` named,
+ * directly or through other instances, by an instance of `tmpl` with other
+ * const arguments. Every such chain is rejected, whether or not its values
+ * would come round again: a doubled argument wraps to 0 and repeats, and one
+ * halved reaches 0, long before the per-template cap could tell. Reports and
+ * returns true for one found. */
+static bool reject_value_recursion(MonoTable *t, Decl *tmpl, const char *name,
+                                   Type **type_args, int count) {
+    if (!tmpl) return false;
+    for (int k = t->walking - 1; k >= 0; k = t->entries[k].named_by - 1) {
+        MonoInstance *anc = &t->entries[k];
+        if (anc->template_decl != tmpl || anc->type_arg_count != count ||
+            !const_args_differ(anc->type_args, type_args, count))
+            continue;
+        const char *disp = template_display_name(tmpl, name);
+        char *from = type_inst_display(disp, anc->type_args, count);
+        char *to = type_inst_display(disp, type_args, count);
+        diag_error(tmpl->loc,
+            "'%s' instantiates itself with a changed const argument: %s leads to %s. "
+            "A generic may instantiate itself, directly or through other generics, "
+            "only with its own const parameters (no value recursion)", disp, from, to);
+        free(from);
+        free(to);
+        return true;
+    }
+    return false;
+}
 
 const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
                           const char *name, const char *ns_prefix,
@@ -76,6 +126,8 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         }
     }
 
+    if (reject_value_recursion(t, tmpl, name, type_args, count)) return mangled;
+
     /* Termination guard: a new instance whose type arguments nest deeper than any
      * finite program would means a generic is instantiating itself with a growing
      * type argument (infinite monomorphization). Report once and stop. */
@@ -99,19 +151,8 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
     if (arg_depth > MONO_MAX_INSTANTIATION_DEPTH || t->count >= MONO_MAX_INSTANCES ||
         tmpl_count >= MONO_MAX_PER_TEMPLATE) {
         /* Prefer the source-level name over the mangled C name for the message. */
-        const char *disp = name;
-        SrcLoc loc = {0};
-        if (tmpl) {
-            loc = tmpl->loc;
-            /* DECL_LET keeps its source name; pass1 mangles a struct or union
-             * Decl's name, so the source name is its last component. */
-            if (tmpl->kind == DECL_LET && tmpl->let.name)
-                disp = tmpl->let.name;
-            else if (tmpl->kind == DECL_STRUCT)
-                disp = mangled_source_name(tmpl->struc.name);
-            else if (tmpl->kind == DECL_UNION)
-                disp = mangled_source_name(tmpl->unio.name);
-        }
+        const char *disp = template_display_name(tmpl, name);
+        SrcLoc loc = tmpl ? tmpl->loc : (SrcLoc){0};
         if (tmpl_count >= MONO_MAX_PER_TEMPLATE)
             diag_error(loc,
                 "infinite generic instantiation of '%s': it is instantiated with an "
@@ -200,6 +241,7 @@ const char *mono_register(MonoTable *t, Arena *a, InternTable *intern_tbl,
         .concrete_type = NULL,
         .type_param_names = params_copy,
         .type_param_count = tp_count,
+        .named_by = t->walking,
     };
     DA_APPEND(t->entries, t->count, t->capacity, inst);
     return mangled;
@@ -460,24 +502,32 @@ static void discover_aggregate(Type *type, MonoTable *t, Arena *a,
     Type **args = is_struct ? type->struc.type_args : type->unio.type_args;
     int nargs = is_struct ? type->struc.type_arg_count : type->unio.type_arg_count;
     const char *name = is_struct ? type->struc.name : type->unio.name;
-    if (nargs > 0 && !type_contains_type_var(type) && !mono_find(t, name)) {
+    MonoInstance *self = NULL;
+    if (nargs > 0 && !type_contains_type_var(type) && !(self = mono_find(t, name))) {
         Symbol **rsym = is_struct ? &type->struc.resolved_sym : &type->unio.resolved_sym;
         if (!*rsym && symtab)
             *rsym = symtab_lookup_kind(symtab, name, is_struct ? DECL_STRUCT : DECL_UNION);
         for (int i = 0; i < nargs; i++)
             discover_nested_types(args[i], t, a, intern, symtab);
         const char *base = instance_base_name(type);
+        const char *mangled = mangle_generic_name(intern, base, args, nargs);
         Symbol *sym = *rsym;
-        if (!mono_find(t, mangle_generic_name(intern, base, args, nargs)) &&
-            sym && sym->is_generic && sym->decl && sym->type)
+        if (!(self = mono_find(t, mangled)) &&
+            sym && sym->is_generic && sym->decl && sym->type) {
             mono_instantiate(t, a, intern, sym, base, args, nargs);
+            self = mono_find(t, mangled);
+        }
     }
+    /* What its fields name, this instance names (named_by). */
+    int saved_walking = t->walking;
+    if (self) t->walking = (int)(self - t->entries) + 1;
     if (is_struct)
         for (int i = 0; i < type->struc.field_count; i++)
             discover_nested_types(type->struc.fields[i].type, t, a, intern, symtab);
     else
         for (int i = 0; i < type->unio.variant_count; i++)
             discover_nested_types(type->unio.variants[i].payload, t, a, intern, symtab);
+    t->walking = saved_walking;
 }
 
 /* Recursively walk a type tree and register any concrete generic struct/union
@@ -646,7 +696,10 @@ void mono_finalize_types_from(MonoTable *t, int first, Arena *a, InternTable *in
         for (int i = first; i < prev_count; i++) {
             MonoInstance *inst = &t->entries[i];
             if (inst->concrete_type && (inst->decl_kind == DECL_STRUCT || inst->decl_kind == DECL_UNION)) {
+                /* Discovery appends to t->entries, so the instance is not
+                 * read through `inst` after this point. */
                 Type *ct = inst->concrete_type;
+                t->walking = i + 1;
                 if (ct->kind == TYPE_STRUCT) {
                     for (int f = 0; f < ct->struc.field_count; f++)
                         discover_nested_types(ct->struc.fields[f].type, t, a, intern, symtab);
@@ -654,6 +707,7 @@ void mono_finalize_types_from(MonoTable *t, int first, Arena *a, InternTable *in
                     for (int v = 0; v < ct->unio.variant_count; v++)
                         discover_nested_types(ct->unio.variants[v].payload, t, a, intern, symtab);
                 }
+                t->walking = 0;
             }
         }
     } while (t->count > prev_count);  /* Repeat until fixpoint */
@@ -727,8 +781,10 @@ void mono_discover_transitive_from(MonoTable *t, int first, Arena *a, InternTabl
             int tp_count = t->entries[i].type_param_count;
             Expr *fn = tmpl->let.init;
             DiscoverCtx c = { t, a, intern, symtab, tp_names, tp_args, tp_count };
+            t->walking = i + 1;
             for (int j = 0; j < fn->func.body_count; j++)
                 discover_in_expr(fn->func.body[j], &c);
+            t->walking = 0;
         }
         discovered = batch_end;
     }

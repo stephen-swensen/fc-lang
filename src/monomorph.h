@@ -16,12 +16,20 @@ typedef struct MonoInstance {
     /* For functions: type var names (from template) for building substitution map */
     const char **type_param_names;
     int type_param_count;
+    /* The instance whose body or fields first named this one, as one more
+     * than its index (always an earlier entry), or 0 for an instance checked
+     * code names (pass2). The chain of these is how mono_register finds a
+     * generic instantiating itself. */
+    int named_by;
 } MonoInstance;
 
 typedef struct MonoTable {
     MonoInstance *entries;
     int count;
     int capacity;
+    /* While discovery walks an instance's body or fields, one more than its
+     * index (so a zeroed table means none): the named_by of what it finds. */
+    int walking;
 } MonoTable;
 
 /* Register an instantiation. Returns the mangled name. Deduplicates by mangled name. */

@@ -1,0 +1,1 @@
+'a' instantiates itself with a changed const argument: a<2> leads to a<4>

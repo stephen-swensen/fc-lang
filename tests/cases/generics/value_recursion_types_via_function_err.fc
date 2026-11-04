@@ -1,0 +1,13 @@
+// A type family reached from a generic function's body is judged the same.
+struct a =
+    b: b<'n + 1>*?
+    v: u8['n]
+
+struct b =
+    a: a<'n + 1>*?
+
+let make = <'n>() -> default(a<'n>)
+
+let main = (args: str[]) ->
+    let x = make<2>()
+    0
