@@ -1,0 +1,12 @@
+// An instance a generic struct's field names is size-checked when the struct
+// is instantiated: here s<3> holds cbox<0>, which only s<3> names.
+struct cbox =
+    v: u8['n]
+
+struct s =
+    d: cbox<'n - 3>
+    n: i32
+
+let main = (args: str[]) ->
+    let x = default(s<3>)
+    x.n

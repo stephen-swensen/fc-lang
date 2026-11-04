@@ -1,0 +1,11 @@
+// An instance made in a generic body is checked per instantiation, through
+// the instance its fields name too.
+struct cbox =
+    v: u8['n]
+
+struct s =
+    d: cbox<'n - 3>
+
+let size = <'n>() -> (i32)sizeof(s<'n>)
+
+let main = (args: str[]) -> size<3>()

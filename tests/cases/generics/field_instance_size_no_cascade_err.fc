@@ -1,0 +1,12 @@
+// A type already rejected as non-uniformly recursive is not walked again for
+// the sizes of the instances it would make.
+struct cbox =
+    v: u8['n]
+
+struct s =
+    next: s<'n - 1>*?
+    d: cbox<'n>
+
+let main = (args: str[]) ->
+    let x = default(s<1>)
+    0

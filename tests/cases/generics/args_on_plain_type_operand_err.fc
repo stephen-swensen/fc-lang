@@ -1,0 +1,8 @@
+// A type operand is judged as well, a module's type by its qualified name.
+module m =
+    struct q =
+        v: i32
+
+let main = (args: str[]) ->
+    let x = default(m.q<u8>)
+    x.v

@@ -1,0 +1,7 @@
+// Generic arguments on a type that takes none are an error, not dropped.
+struct plain =
+    v: i32
+
+let f = (x: plain<i64>) -> x.v
+
+let main = (args: str[]) -> 0

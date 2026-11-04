@@ -1,0 +1,10 @@
+// The same in a field type, where it is reported once, at the field.
+struct plain =
+    v: i32
+
+struct holder =
+    k: plain<i32, u8>
+
+let get = (h: holder) -> h.k.v
+
+let main = (args: str[]) -> 0

@@ -1,0 +1,1 @@
+field_instance_size_template_concrete_err.fc:10:5: error: fixed array size must be positive, got 0 (in 'u8[0]')

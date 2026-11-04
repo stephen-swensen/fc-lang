@@ -1,0 +1,1 @@
+in size<3>() at 9:27: fixed array size must be positive, got 0 (in 'u8[0]')

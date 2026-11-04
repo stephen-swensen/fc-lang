@@ -1,0 +1,1 @@
+args_on_plain_field_err.fc:6:5: error: struct 'plain' is not generic; it takes no generic arguments

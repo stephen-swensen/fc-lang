@@ -1,0 +1,1 @@
+args_on_plain_param_err.fc:5:10: error: struct 'plain' is not generic; it takes no generic arguments

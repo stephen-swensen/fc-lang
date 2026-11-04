@@ -1,0 +1,8 @@
+// So is a type in a generic body, even one that is never instantiated.
+union token =
+    | word(i32)
+    | stop
+
+let size = (x: 'a) -> sizeof(token<'a>)
+
+let main = (args: str[]) -> 0

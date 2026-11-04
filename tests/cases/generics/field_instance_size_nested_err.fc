@@ -1,0 +1,15 @@
+// However deep the instance sits, behind a pointer included: a plain struct
+// holds s<3>, which holds t<3>*, which holds cbox<0>.
+struct cbox =
+    v: u8['n]
+
+struct t =
+    e: cbox<'n - 3>
+
+struct s =
+    d: t<'n>*?
+
+struct holder =
+    k: s<3>
+
+let main = (args: str[]) -> 0

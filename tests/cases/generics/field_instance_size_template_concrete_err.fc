@@ -1,0 +1,13 @@
+// A generic struct's field may name a concrete instance (b's `a<5>`); it is
+// made, and size-checked, even though no use of the program names it.
+struct cbox =
+    v: u8['n]
+
+struct a =
+    b: b<'n>*?
+
+struct b =
+    a: a<5>*?
+    d: cbox<'n - 5>
+
+let main = (args: str[]) -> 0

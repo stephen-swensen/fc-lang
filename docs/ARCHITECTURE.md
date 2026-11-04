@@ -182,7 +182,9 @@ Besides typing, pass2 does:
   depend on the concrete types (operator operands, sizes, const arguments) are
   made per instance by `validate_generic_expr`, which walks the body under
   that instance's bindings and reports through the chain of instantiations
-  that led to it (see [Invariants](#invariants)).
+  that led to it (see [Invariants](#invariants)). An instance's size check
+  also covers the instances its fields name (`d: cbox<'n - 3>` in `s<3>`),
+  which only monomorphization makes and nothing checks after pass2.
 
 ### Monomorphization
 

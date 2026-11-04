@@ -1,0 +1,10 @@
+// Unions and enums take no generic arguments unless declared generic.
+enum dir =
+    | up
+    | down
+
+union shape =
+    | arrow(dir<u8>)
+    | blank
+
+let main = (args: str[]) -> 0

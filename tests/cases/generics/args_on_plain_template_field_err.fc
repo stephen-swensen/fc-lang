@@ -1,0 +1,9 @@
+// And a generic struct's field type.
+struct plain =
+    v: i32
+
+struct pair =
+    a: 'a
+    b: plain<'a>
+
+let main = (args: str[]) -> 0

@@ -1,0 +1,12 @@
+// A field type with generic arguments it does not take is reported once, not
+// again at each use of the field.
+struct plain =
+    v: i32
+
+struct holder =
+    k: plain<i32>
+
+let get = (h: holder) -> h.k.v
+let put = (h: holder*) -> h.k
+
+let main = (args: str[]) -> 0

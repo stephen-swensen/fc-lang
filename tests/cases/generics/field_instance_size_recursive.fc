@@ -1,0 +1,23 @@
+// Checking the instances a field names ends at a type that holds itself, or
+// a pair that hold each other, through a pointer.
+struct cbox =
+    v: u8['n]
+
+struct list =
+    next: list<'n>*?
+    d: cbox<'n>
+
+struct even =
+    odd: odd<'n>*?
+    d: cbox<'n * 2>
+
+struct odd =
+    even: even<'n>*?
+    d: cbox<'n>
+
+let main = (args: str[]) ->
+    let l = default(list<3>)
+    let e = default(even<2>)
+    assert(sizeof(cbox<3>) == 3)
+    assert(sizeof(cbox<4>) == 4)
+    0

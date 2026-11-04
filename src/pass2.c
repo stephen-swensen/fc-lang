@@ -1669,6 +1669,21 @@ static bool reject_bare_generic_type(Symbol *sym, const char *disp,
     return true;
 }
 
+/* The converse: generic arguments written on a name that takes none
+ * (`plain<i32>`), which would otherwise be dropped without a word. Judged at
+ * the same places as reject_bare_generic_type. Returns true when it reported
+ * (the caller poisons). */
+static bool reject_args_on_plain_type(Symbol *sym, const char *disp,
+                                      int type_arg_count, SrcLoc loc) {
+    if (!sym || type_arg_count == 0) return false;
+    if (sym->is_generic && sym->type_param_count > 0) return false;
+    const char *what = sym->kind == DECL_STRUCT ? "struct "
+                     : sym->kind == DECL_UNION  ? "union "
+                     : sym->kind == DECL_ENUM   ? "enum " : "";
+    diag_error(loc, "%s'%s' is not generic; it takes no generic arguments", what, disp);
+    return true;
+}
+
 /* void has no value representation, so an instance binding a type parameter to
  * it emits `void x;`. Shared by the type-resolution path (resolve_generic_arg)
  * and the field-type path (canonicalize_field_stubs), which judges a field
@@ -1743,10 +1758,12 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
         if (t->stub.name) {
             Symbol *sym = resolve_type_symbol(ctx, t->stub.name);
             if (sym && sym->type) {
-                if (reject_bare_generic_type(sym,
-                        t->stub.qualified_name ? t->stub.qualified_name
-                                               : t->stub.name,
-                        t->stub.type_arg_count, ctx->type_loc))
+                const char *disp = t->stub.qualified_name ? t->stub.qualified_name
+                                                          : t->stub.name;
+                if (reject_bare_generic_type(sym, disp, t->stub.type_arg_count,
+                                             ctx->type_loc) ||
+                    reject_args_on_plain_type(sym, disp, t->stub.type_arg_count,
+                                              ctx->type_loc))
                     return;
                 const char *canon = NULL, *qname = NULL;
                 if (sym->type->kind == TYPE_STRUCT) {
@@ -2422,14 +2439,78 @@ static void sa_validate_decls(Decl **decls, int count) {
 typedef struct InstFrame InstFrame;
 static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fmt, ...);
 
+/* The generic instances one size check enters. A type can hold itself
+ * through a pointer, so the walk stops at an instance it has entered. A
+ * family of instances may never close (`a<'n>` holding `b<'n * 2>*`, which
+ * holds `a<'n * 2>*`), which pass1 or monomorphization rejects; the walk
+ * stops at an instance whose template is twice on its path already, so it
+ * neither runs on nor reports the overflowing sizes of such a family. It also
+ * stops after INST_SIZE_WALK_MAX instances, and, as mono_register does, once
+ * any error has been reported. */
+enum { INST_SIZE_WALK_MAX = 2048 };
+typedef struct {
+    SymbolTable *symtab;
+    Arena *arena;
+    char **names;           /* instances entered, by name */
+    int count, cap;
+    Symbol **path;          /* templates of the instances being entered */
+    int depth, path_cap;
+} InstSizeWalk;
+
+static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc,
+                                   InstSizeWalk *w);
+
+/* The instance a concrete generic stub names (`d: cbox<0>` in an instance of
+ * `struct s = d: cbox<'n - 'n>`). Only monomorphization makes it, from the
+ * instance holding the stub, so its sizes are checked with that instance:
+ * nothing checks them later. */
+static bool check_stub_instance_sizes(Type *t, const InstFrame *frame, SrcLoc loc,
+                                      InstSizeWalk *w) {
+    if (t->stub.type_arg_count == 0 || type_contains_type_var(t) ||
+        diag_error_count() > 0)
+        return true;
+    Symbol *sym = symtab_lookup(w->symtab, t->stub.name);
+    if (!sym || (sym->kind != DECL_STRUCT && sym->kind != DECL_UNION) ||
+        !sym->is_generic || !sym->type || sym->type_param_count != t->stub.type_arg_count)
+        return true;
+    int on_path = 0;
+    for (int i = 0; i < w->depth; i++)
+        if (w->path[i] == sym) on_path++;
+    if (on_path >= 2) return true;
+    char *name = mangle_type_name(t);
+    for (int i = 0; i < w->count; i++) {
+        if (strcmp(w->names[i], name) == 0) {
+            free(name);
+            return true;
+        }
+    }
+    if (w->count >= INST_SIZE_WALK_MAX) {
+        free(name);
+        return true;
+    }
+    DA_APPEND(w->names, w->count, w->cap, name);
+    Type *inst = type_substitute(w->arena, sym->type, sym->type_params,
+                                 t->stub.type_args, t->stub.type_arg_count);
+    SrcLoc eloc = {0};
+    const char *emsg = const_eval_take_error(&eloc);
+    if (emsg) {
+        gen_inst_diag(frame, eloc.filename ? eloc : loc, "%s (in '%s')", emsg, type_name(t));
+        return false;
+    }
+    DA_APPEND(w->path, w->depth, w->path_cap, sym);
+    bool ok = check_inst_sizes_frame(inst, frame, loc, w);
+    w->depth--;
+    return ok;
+}
+
 /* Validate the sizes in a fully-substituted (concrete) instance type: every
  * fixed array must have folded to a positive size that fits --len-repr.
- * Recurses through value constructors and the instance's own fields/payloads,
- * but not into referenced types (stubs), which are validated at their own
- * instantiation. Reports (through gen_inst_diag: the instantiation chain when
- * there is one, else at `loc` directly) and returns false on the first
- * violation. */
-static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc) {
+ * Recurses through value constructors, the instance's own fields/payloads,
+ * and the instances its fields name (check_stub_instance_sizes). Reports
+ * (through gen_inst_diag: the instantiation chain when there is one, else at
+ * `loc` directly) and returns false on the first violation. */
+static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc,
+                                   InstSizeWalk *w) {
     if (!t) return true;
     switch (t->kind) {
     case TYPE_FIXED_ARRAY: {
@@ -2441,31 +2522,32 @@ static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc) 
             free(msg);
             return false;
         }
-        return check_inst_sizes_frame(t->fixed_array.elem, frame, loc);
+        return check_inst_sizes_frame(t->fixed_array.elem, frame, loc, w);
     }
-    case TYPE_POINTER: return check_inst_sizes_frame(t->pointer.pointee, frame, loc);
-    case TYPE_SLICE:   return check_inst_sizes_frame(t->slice.elem, frame, loc);
-    case TYPE_OPTION:  return check_inst_sizes_frame(t->option.inner, frame, loc);
-    case TYPE_RESULT:  return check_inst_sizes_frame(t->result.inner, frame, loc);
+    case TYPE_POINTER: return check_inst_sizes_frame(t->pointer.pointee, frame, loc, w);
+    case TYPE_SLICE:   return check_inst_sizes_frame(t->slice.elem, frame, loc, w);
+    case TYPE_OPTION:  return check_inst_sizes_frame(t->option.inner, frame, loc, w);
+    case TYPE_RESULT:  return check_inst_sizes_frame(t->result.inner, frame, loc, w);
     case TYPE_STRUCT:
         for (int i = 0; i < t->struc.field_count; i++)
-            if (!check_inst_sizes_frame(t->struc.fields[i].type, frame, loc)) return false;
+            if (!check_inst_sizes_frame(t->struc.fields[i].type, frame, loc, w)) return false;
         return true;
     case TYPE_UNION:
         for (int i = 0; i < t->unio.variant_count; i++)
-            if (!check_inst_sizes_frame(t->unio.variants[i].payload, frame, loc)) return false;
+            if (!check_inst_sizes_frame(t->unio.variants[i].payload, frame, loc, w)) return false;
         return true;
     case TYPE_FUNC:
         for (int i = 0; i < t->func.param_count; i++)
-            if (!check_inst_sizes_frame(t->func.param_types[i], frame, loc)) return false;
-        return check_inst_sizes_frame(t->func.return_type, frame, loc);
+            if (!check_inst_sizes_frame(t->func.param_types[i], frame, loc, w)) return false;
+        return check_inst_sizes_frame(t->func.return_type, frame, loc, w);
+    case TYPE_STUB:
+        return check_stub_instance_sizes(t, frame, loc, w);
     CASE_TYPE_PRIMITIVES:
     case TYPE_ENUM:
     case TYPE_ANY_PTR:
     case TYPE_TYPE_VAR:
     case TYPE_CONST_INT:
     case TYPE_CONST_EXPR:
-    case TYPE_STUB:
     case TYPE_ERROR:
     case TYPE_NEVER:
     case TYPE_UNRESOLVED:
@@ -2475,8 +2557,19 @@ static bool check_inst_sizes_frame(Type *t, const InstFrame *frame, SrcLoc loc) 
     return true;
 }
 
-static bool check_inst_sizes(Type *t, SrcLoc loc) {
-    return check_inst_sizes_frame(t, NULL, loc);
+/* check_inst_sizes_frame with a walk of its own, which it frees. */
+static bool check_inst_sizes_in(SymbolTable *symtab, Arena *arena, Type *t,
+                                const InstFrame *frame, SrcLoc loc) {
+    InstSizeWalk w = { .symtab = symtab, .arena = arena };
+    bool ok = check_inst_sizes_frame(t, frame, loc, &w);
+    for (int i = 0; i < w.count; i++) free(w.names[i]);
+    free(w.names);
+    free(w.path);
+    return ok;
+}
+
+static bool check_inst_sizes(CheckCtx *ctx, Type *t, SrcLoc loc) {
+    return check_inst_sizes_in(ctx->symtab, ctx->arena, t, NULL, loc);
 }
 
 /* Register the instance of generic struct or union `sym` at `args` (its C name
@@ -2593,7 +2686,7 @@ static Type *instantiate_aggregate(CheckCtx *ctx, Symbol *sym, const char *displ
         inst->unio.type_arg_count = n;
     }
     if (bindings_contain_type_vars(args, n)) return inst;
-    if (!check_inst_sizes(inst, loc)) return type_error();
+    if (!check_inst_sizes(ctx, inst, loc)) return type_error();
     /* The canonical C name already includes the module/namespace prefix. */
     const char *base = sym->type->kind == TYPE_STRUCT ? sym->type->struc.name
                                                       : sym->type->unio.name;
@@ -2782,10 +2875,10 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
                 return instantiate_written(ctx, sym,
                     t->stub.qualified_name ? t->stub.qualified_name : t->stub.name,
                     t->stub.type_args, t->stub.type_arg_count, ctx->type_loc);
-            if (reject_bare_generic_type(sym,
-                    t->stub.qualified_name ? t->stub.qualified_name
-                                           : t->stub.name,
-                    t->stub.type_arg_count, ctx->type_loc))
+            const char *disp = t->stub.qualified_name ? t->stub.qualified_name
+                                                      : t->stub.name;
+            if (reject_bare_generic_type(sym, disp, t->stub.type_arg_count, ctx->type_loc) ||
+                reject_args_on_plain_type(sym, disp, t->stub.type_arg_count, ctx->type_loc))
                 return type_error();
             return sym->type;
         }
@@ -4051,7 +4144,7 @@ typedef struct {
     bool inf_reported;
     GenSeen *seen;
     int seen_n, seen_cap;
-    SymbolTable *symtab;    /* for per-instance type queries (writable_ref_path) */
+    SymbolTable *symtab;    /* for per-instance type queries (writable_ref_path, sizes) */
 } GenValidation;
 
 /* The deepest nesting among an instantiation's type arguments. */
@@ -4144,7 +4237,8 @@ static void gen_inst_diag(const InstFrame *frame, SrcLoc err_loc, const char *fm
 /* Per-instance validation of a type operand (default/alloc/sizeof/alignof
  * target) in a generic body: substitute the concrete bindings, surface any
  * const-expression evaluation failure, and check folded sizes are positive. */
-static bool check_inst_type_operand(const InstFrame *frame, Arena *arena, Type *t,
+static bool check_inst_type_operand(const InstFrame *frame, Arena *arena,
+                                    SymbolTable *symtab, Type *t,
                                     const char **type_params, Type **bindings,
                                     int ntp, SrcLoc loc) {
     if (!t) return true;
@@ -4155,7 +4249,7 @@ static bool check_inst_type_operand(const InstFrame *frame, Arena *arena, Type *
         gen_inst_diag(frame, eloc.filename ? eloc : loc, "%s", emsg);
         return false;
     }
-    return check_inst_sizes_frame(conc, frame, loc);
+    return check_inst_sizes_in(symtab, arena, conc, frame, loc);
 }
 
 /* One per-instance validation of a generic body: the concrete bindings it is
@@ -4514,7 +4608,7 @@ static void check_generic_call_args(Expr *e, GenericCheck *gc) {
 }
 
 static void check_generic_type_operand(Expr *e, Type *t, GenericCheck *gc) {
-    if (!check_inst_type_operand(gc->frame, gc->arena, t, gc->type_params,
+    if (!check_inst_type_operand(gc->frame, gc->arena, gc->run->symtab, t, gc->type_params,
                                  gc->bindings, gc->ntp, e->loc))
         gc->ok = false;
 }
