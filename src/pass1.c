@@ -290,6 +290,7 @@ static void check_builtin_type_name_decls(Decl **decls, int count) {
     }
 }
 
+/* Mark function `d` generic, and its symbol `sym`, which a `let _` lacks. */
 static void detect_generic_func(Arena *arena, Decl *d, Symbol *sym) {
     if (!decl_is_function(d)) return;
     Expr *fn = d->let.init;
@@ -316,7 +317,9 @@ static void detect_generic_func(Arena *arena, Decl *d, Symbol *sym) {
         type_collect_vars_kinds(fn->func.params[i].type, &vars, &kinds, &vcount, &vcap, &conflict);
     (void)conflict;  /* reported once by the infer_param_kinds fixpoint */
 
-    if (vcount > 0) {
+    if (vcount > 0 && !sym) {
+        d->let.is_generic = true;
+    } else if (vcount > 0) {
         d->let.is_generic = true;
         sym->is_generic = true;
         sym->type_params = arena_dup_names(arena, vars, vcount);
@@ -618,6 +621,14 @@ Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_pr
  * and global module foo_bar (foo_bar). */
 static const char *make_mangled(InternTable *intern, const char *prefix, const char *name) {
     return intern_sprintf(intern, "%s__%s", prefix, name);
+}
+
+/* The C name of a `let _` declared under `prefix`. It binds no name, so it is
+ * numbered instead: any number of them are emitted side by side, and since an
+ * FC name holds no "__", no declared name mangles to `prefix____<n>`. */
+static const char *wildcard_c_name(InternTable *intern, const char *prefix) {
+    static int count;
+    return intern_sprintf(intern, "%s____%d", prefix, count++);
 }
 
 /* The mangling prefix for a declaration path rooted at namespace `ns` (NULL =
@@ -1298,10 +1309,15 @@ static void register_module_members(Decl *d, const char *mangle_prefix,
         switch (child->kind) {
         case DECL_LET: {
             const char *src_name = child->let.name;
-            const char *mangled = make_mangled(intern, mangle_prefix, src_name);
+            const char *mangled = decl_binds_nothing(child)
+                                ? wildcard_c_name(intern, mangle_prefix)
+                                : make_mangled(intern, mangle_prefix, src_name);
             child->let.codegen_name = mangled;
             child->let.is_module_member = true;
-            if (symtab_lookup(members, src_name)) {
+            if (decl_binds_nothing(child)) {
+                /* Declares nothing, so a second one is no redefinition. */
+                detect_generic_func(intern->arena, child, NULL);
+            } else if (symtab_lookup(members, src_name)) {
                 diag_error(child->loc,
                     d->module.is_error_group
                         ? "redefinition of '%s' in error group '%s'"
@@ -2031,7 +2047,10 @@ static void register_top_level_decls(Program *prog, SymbolTable *symtab,
         switch (d->kind) {
         case DECL_LET: {
             SymbolTable own;
-            if (symtab_lookup(own_table(symtab, &own), d->let.name)) {
+            if (decl_binds_nothing(d)) {
+                /* Declares nothing, so a second one is no redefinition. */
+                detect_generic_func(intern->arena, d, NULL);
+            } else if (symtab_lookup(own_table(symtab, &own), d->let.name)) {
                 diag_error(d->loc, "redefinition of '%s'", d->let.name);
             } else {
                 Symbol *let_sym = symtab_add(symtab, d->let.name, DECL_LET, d);
@@ -2045,8 +2064,9 @@ static void register_top_level_decls(Program *prog, SymbolTable *symtab,
              * of codegen_name. */
             if (strcmp(d->let.name, "main") != 0 && !d->let.codegen_name &&
                 d->let.init) {
-                d->let.codegen_name = make_mangled(intern, mangle_root(intern, NULL),
-                                                   d->let.name);
+                d->let.codegen_name = decl_binds_nothing(d)
+                    ? wildcard_c_name(intern, mangle_root(intern, NULL))
+                    : make_mangled(intern, mangle_root(intern, NULL), d->let.name);
             }
             break;
         }

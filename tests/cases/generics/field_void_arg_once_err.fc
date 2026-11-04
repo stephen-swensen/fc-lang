@@ -1,0 +1,11 @@
+// A void generic argument in a field type is reported once, at the field.
+struct box =
+    v: 'a
+
+struct holder =
+    k: box<void>
+
+let get = (h: holder) -> h.k
+let put = (h: holder*) -> h.k.v
+
+let main = (args: str[]) -> 0

@@ -1,0 +1,4 @@
+// A top-level `let _` declares nothing, but its initializer is still checked.
+let _ = sizeof(later)
+
+let main = (args: str[]) -> 0

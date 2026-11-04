@@ -1,0 +1,5 @@
+// Nor does a module's `let _`: the module has no member `_`.
+module m =
+    let _ = 5
+
+let main = (args: str[]) -> m._

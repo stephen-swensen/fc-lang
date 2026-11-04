@@ -1,0 +1,1 @@
+type 'node' has infinite size: field 'next' contains 'node' by value

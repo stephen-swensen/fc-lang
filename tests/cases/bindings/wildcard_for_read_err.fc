@@ -1,0 +1,6 @@
+// Nor does a loop variable named `_`.
+let main = (args: str[]) ->
+    let mut s = 0
+    for _ in 0..3 do
+        s = s + _
+    s

@@ -1,0 +1,42 @@
+// A generic instance that only a field type names is instantiated anyway, in
+// every shape a field type can take: nothing in the program constructs it,
+// reads it, or names it in a body, so the struct holding it is all that does.
+struct box =
+    v: 'a
+
+struct link =
+    next: link<'a>*?
+    v: 'a
+
+union shape =
+    | boxed(box<i16>)
+    | empty
+
+struct holder =
+    plain: box<i64>
+    ptr: box<u8>*?
+    view: box<u16>[]
+    pair: box<u32>[2]
+    nested: box<box<i8>>
+    maybe: box<f64>?
+    call: (box<f32>) -> i32
+    chain: link<holder>*?
+    s: shape
+    n: i32
+
+module m =
+    struct inner =
+        b: box<bool>
+        n: i32
+
+let count = (h: holder*) -> h.n
+
+let main = (args: str[]) ->
+    let h = default(holder)
+    let mut c = default(holder)
+    c.n = 4
+    let i = default(m.inner)
+    assert(count(&c) == 4)
+    assert(i.n == 0)
+    assert(sizeof(holder) > sizeof(i32))
+    h.n

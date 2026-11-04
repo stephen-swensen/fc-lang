@@ -1,0 +1,39 @@
+// A field type's constant generic argument is folded wherever it is written:
+// as an expression, as a named constant, inside another instance, and in a
+// template declared after the struct that instantiates it.
+struct cbox =
+    v: u8['n]
+
+struct box =
+    v: 'a
+
+module cfg =
+    let k = 6
+    struct local =
+        b: cbox<k>
+
+struct early =
+    w: wrap<i32>
+
+struct wrap =
+    c: cbox<cfg.k * 2>
+    v: 'a
+
+struct holder =
+    expr: cbox<cfg.k * 2>
+    named: cbox<cfg.k>
+    nested: box<cbox<cfg.k + 1>>
+    many: cbox<cfg.k>[2]
+
+struct sized =
+    d: cbox<'n * 2>
+    e: u8['n]
+
+let main = (args: str[]) ->
+    let mut h = default(holder)
+    h.nested.v.v[6] = 9u8
+    assert(sizeof(holder) == 12 + 6 + 7 + 12)
+    assert(sizeof(cfg.local) == 6)
+    assert(sizeof(early) == 16)
+    assert(sizeof(sized<3>) == 9)
+    (i32)h.nested.v.v[6]

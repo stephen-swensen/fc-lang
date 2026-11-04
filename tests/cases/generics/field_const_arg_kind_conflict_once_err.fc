@@ -1,0 +1,10 @@
+// A parameter used both as a type and as a constant is reported once, not
+// again for the constant expression it appears in.
+struct box =
+    v: 'a
+
+struct s =
+    d: box<'a * 2>
+    e: 'a
+
+let main = (args: str[]) -> 0

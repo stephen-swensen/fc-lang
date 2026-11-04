@@ -169,6 +169,14 @@ Besides typing, pass2 does:
   (stack, heap, static, unknown), which rejects returning a pointer to the
   stack, freeing non-heap memory, and storing stack pointers in heap objects.
 - **Constant folding** for top-level initializers and const-generic arguments.
+- **Type declarations, before any body.** Every struct's and union's field
+  and payload types are canonicalized: stub names become mangled names and
+  constant generic arguments are folded. Then each generic instance a field
+  type names is judged as the same type written as a parameter's would be
+  (argument count and kinds, `void`, sizes) and, when concrete, registered,
+  since the struct holding it may be all that names it. The field keeps its
+  stub (see [Walkers](#walkers)). A field type that fails is poisoned, so
+  the uses of the field don't report it again.
 - **Generics.** A generic body is checked once, with type variables abstract.
   Each instantiation is registered with the mono table, and the checks that
   depend on the concrete types (operator operands, sizes, const arguments) are

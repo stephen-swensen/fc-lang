@@ -1,0 +1,11 @@
+// A generic struct's field types have their generic arguments counted too,
+// even where the arguments are its own parameters.
+struct box =
+    v: 'a
+
+struct pair =
+    a: box<'a, 'a>
+
+let main = (args: str[]) ->
+    let p = default(pair<i32>)
+    0

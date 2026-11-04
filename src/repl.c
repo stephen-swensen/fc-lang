@@ -344,8 +344,7 @@ static void pattern_names(Pattern *p, Pattern ***out, int *n, int *cap) {
  * entered as `{ let _ = v }`. */
 static SessionItem *entered_items(SessionItem *item, int *n) {
     *n = 1;
-    if (item->decl_count == 1 && item->decls[0]->kind == DECL_LET &&
-        item->decls[0]->let.name == intern_cstr(&S.intern, "_")) {
+    if (item->decl_count == 1 && decl_binds_nothing(item->decls[0])) {
         Decl *d = item->decls[0];
         Expr *let = new_expr(EXPR_LET, d->loc);
         let->let_expr.let_name = d->let.name;

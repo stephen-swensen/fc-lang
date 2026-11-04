@@ -1,0 +1,1 @@
+field_generic_arg_count_err.fc:6:5: error: wrong number of generic arguments for 'box': expected 1, got 2

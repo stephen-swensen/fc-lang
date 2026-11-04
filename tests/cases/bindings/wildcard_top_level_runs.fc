@@ -1,0 +1,6 @@
+// A file-level `let _` runs its initializer before main, as every file-level
+// `let` does; it only binds no name.
+let _ = 1
+let _ = (none(i32))!
+
+let main = (args: str[]) -> 1   // not reached

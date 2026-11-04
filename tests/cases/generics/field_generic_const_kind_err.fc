@@ -1,0 +1,9 @@
+// A type given for a constant parameter is rejected in a union payload.
+struct cbox =
+    v: u8['n]
+
+union u =
+    | full(cbox<i32>)
+    | empty
+
+let main = (args: str[]) -> 0

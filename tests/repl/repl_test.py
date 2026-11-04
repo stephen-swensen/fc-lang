@@ -205,7 +205,7 @@ script("let _ runs its value and binds nothing, it included", """\
     """)
 
 script("let _ makes no name _", "let _ = 5\n_\n", """\
-    stdin:2:1: error: undefined name '_'
+    stdin:2:1: error: '_' binds nothing, so it cannot be read; give the value a name to use it
     """, status=1)
 
 script("a name declared again shadows; what used the old one keeps it", """\
@@ -469,6 +469,23 @@ script("modules: members in any order, using session values", """\
     val it: i32 = 101
     """)
 
+script("a generic instance only a field type names", """\
+    struct box =
+        v: 'a
+    union shape =
+        | boxed(box<box<i64>>)
+        | empty
+    let s = shape.empty
+    match s with
+    | boxed(_) -> 1
+    | empty -> 2
+    """, """\
+    struct box
+    union shape
+    val s: shape = shape.empty
+    val it: i32 = 2
+    """)
+
 script("modules: types that refer to themselves and to each other", """\
     module tree =
         struct node =
@@ -685,6 +702,19 @@ script(".fcx inputs are entered before stdin", "v.x\n", """\
     val it: f64 = 25.0
     val it: f64 = 3.0
     """, args=(PROG, SETUP))
+
+BLANKS = write("blanks.fc", """\
+    let _ = 5
+    let _ = () -> 3
+    module m =
+        let _ = 1
+        let _ = 2
+        let x = 7
+    """)
+script("a loaded file's `let _` declares nothing, however many there are",
+       "m.x\n", """\
+    val it: i32 = 7
+    """, args=(BLANKS,))
 
 BAD = write("bad.fc", "let main = (args: str[]) -> nope\n")
 script("a loaded file that does not compile ends the session", "1\n", """\

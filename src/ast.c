@@ -258,3 +258,11 @@ bool decl_is_variable(const Decl *d) {
     return d && d->kind == DECL_LET && !decl_is_function(d);
 }
 
+bool is_wildcard_name(const char *name) {
+    return name && name[0] == '_' && name[1] == '\0';
+}
+
+bool decl_binds_nothing(const Decl *d) {
+    return d && d->kind == DECL_LET && is_wildcard_name(d->let.name);
+}
+

@@ -1,0 +1,30 @@
+// `_` binds nothing wherever a name is bound, so it can be bound any number
+// of times: at top level, in a module, in a block, as parameters and as a loop
+// variable. A block's `let _` still runs its initializer.
+let _ = 5
+let _ = 6
+let _ = () -> 3
+let _ = (x: 'a) -> x
+
+module m =
+    let _ = 1
+    let _ = 2
+    let x = 7
+
+let bump = (n: i32*) ->
+    n[0] = n[0] + 1
+    n[0]
+
+let both = (_: i32, _: i32) -> 2
+
+let main = (args: str[]) ->
+    let mut n = 0
+    let _ = bump(&n)
+    let _ = bump(&n)
+    assert(n == 2)
+    let mut runs = 0
+    for _ in 0..3 do
+        runs = runs + 1
+    assert(runs == 3)
+    assert(both(1, 2) == 2)
+    m.x

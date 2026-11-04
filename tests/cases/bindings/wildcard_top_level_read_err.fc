@@ -1,0 +1,4 @@
+// A top-level `let _` declares nothing.
+let _ = 5
+
+let main = (args: str[]) -> _

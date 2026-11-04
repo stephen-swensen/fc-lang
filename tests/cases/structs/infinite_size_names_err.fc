@@ -1,0 +1,6 @@
+// A top-level struct that contains itself is named as written.
+struct node =
+    next: node
+    v: i32
+
+let main = (args: str[]) -> 0

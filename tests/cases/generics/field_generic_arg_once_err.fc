@@ -1,0 +1,14 @@
+// A field type with the wrong generic arguments is reported once, at the
+// field, and not again at each use of the field.
+struct box =
+    v: 'a
+
+struct holder =
+    k: box<i64, i32>
+
+let get = (h: holder) -> h.k.v
+let put = (h: holder*) -> h.k
+
+let main = (args: str[]) ->
+    let h = holder { k = box { v = 1i64 } }
+    0

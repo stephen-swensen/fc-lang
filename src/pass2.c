@@ -844,10 +844,10 @@ typedef struct {
        non-flipping markers. */
     bool overflow_checked;
     /* Generic parameters of the struct/union decl whose field types are being
-       canonicalized (canonicalize_decl_field_stubs). classify_size_param reads
-       these to classify a 'x reference in a field's array-size expression when
+       walked (for_each_member_type). owner_param_kind reads these to classify a
+       'x reference in a field's array size or const generic argument when
        there is no active_fn_sym (type bodies have no function symbol). NULL
-       outside the canonicalize walk. */
+       outside that walk. */
     const char **td_params;
     uint8_t *td_kinds;
     int td_ntp;
@@ -1289,7 +1289,18 @@ static void run_let_on_demand(CheckCtx *ctx, Symbol *sym) {
         enter_module_scope(ctx, sym->parent, &saved);
     else
         enter_global_scope_on_demand(ctx, sym, &saved);
+    /* A named constant in a field type is checked from a type body, whose
+     * generic parameters are not the let's. */
+    const char **saved_params = ctx->td_params;
+    uint8_t *saved_kinds = ctx->td_kinds;
+    int saved_ntp = ctx->td_ntp;
+    ctx->td_params = NULL;
+    ctx->td_kinds = NULL;
+    ctx->td_ntp = 0;
     check_decl_let(ctx, sym->decl);
+    ctx->td_params = saved_params;
+    ctx->td_kinds = saved_kinds;
+    ctx->td_ntp = saved_ntp;
     restore_scope(ctx, &saved);
 }
 
@@ -1660,9 +1671,9 @@ static bool reject_bare_generic_type(Symbol *sym, const char *disp,
 
 /* void has no value representation, so an instance binding a type parameter to
  * it emits `void x;`. Shared by the type-resolution path (resolve_generic_arg)
- * and the field-type path (canonicalize_field_stubs); struct/union member
- * types never go through resolve_type, so they need the judgment of their own.
- * Returns true when it reported (the caller poisons). */
+ * and the field-type path (canonicalize_field_stubs), which judges a field
+ * type before its instances are made. Returns true when it reported (the
+ * caller poisons). */
 static bool reject_void_type_arg(Type *arg, SrcLoc loc) {
     if (!arg || arg->kind != TYPE_VOID) return false;
     diag_error(loc, "void cannot be a generic type argument; "
@@ -1781,10 +1792,12 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
     }
 }
 
-/* Canonicalize stub names in all field/payload types of a struct/union decl.
- * ctx->type_loc is set to each field/variant's source loc first so an unknown
- * field type is reported at that field rather than a stale location. */
-static void canonicalize_decl_field_stubs(CheckCtx *ctx, Decl *d) {
+/* Apply `fn` to each field or payload type of a struct or union decl, under
+ * the decl's generic parameters. ctx->type_loc is set to each field/variant's
+ * source loc first, so what `fn` reports is reported at that field rather
+ * than a stale location. A type `fn` reported is poisoned: every use of the
+ * field resolves its type again, and would report it again. */
+static void for_each_member_type(CheckCtx *ctx, Decl *d, void (*fn)(CheckCtx *, Type *)) {
     const char **saved_params = ctx->td_params;
     uint8_t *saved_kinds = ctx->td_kinds;
     int saved_ntp = ctx->td_ntp;
@@ -1794,7 +1807,9 @@ static void canonicalize_decl_field_stubs(CheckCtx *ctx, Decl *d) {
         ctx->td_ntp = d->struc.type_param_count;
         for (int i = 0; i < d->struc.field_count; i++) {
             ctx->type_loc = d->struc.fields[i].loc;
-            canonicalize_field_stubs(ctx, d->struc.fields[i].type);
+            int errs = diag_error_count();
+            fn(ctx, d->struc.fields[i].type);
+            if (diag_error_count() > errs) d->struc.fields[i].type = type_error();
         }
     } else if (d->kind == DECL_UNION) {
         ctx->td_params = d->unio.type_params;
@@ -1802,12 +1817,19 @@ static void canonicalize_decl_field_stubs(CheckCtx *ctx, Decl *d) {
         ctx->td_ntp = d->unio.type_param_count;
         for (int i = 0; i < d->unio.variant_count; i++) {
             ctx->type_loc = d->unio.variants[i].loc;
-            canonicalize_field_stubs(ctx, d->unio.variants[i].payload);
+            int errs = diag_error_count();
+            fn(ctx, d->unio.variants[i].payload);
+            if (diag_error_count() > errs) d->unio.variants[i].payload = type_error();
         }
     }
     ctx->td_params = saved_params;
     ctx->td_kinds = saved_kinds;
     ctx->td_ntp = saved_ntp;
+}
+
+/* Canonicalize stub names in all field/payload types of a struct/union decl. */
+static void canonicalize_decl_field_stubs(CheckCtx *ctx, Decl *d) {
+    for_each_member_type(ctx, d, canonicalize_field_stubs);
 }
 
 /* Register a fully-concrete tuple struct so codegen emits its typedef, generated
@@ -1963,18 +1985,23 @@ static int pin_fn_param_kind(CheckCtx *ctx, const char *var, uint8_t want) {
     return -1;
 }
 
-/* A 'x in a size: it must be a const parameter of the owning declaration
- * (active_fn_sym inside a generic function body, td_params during a type
- * decl's canonicalize walk). A size position is const evidence. */
+/* The kind of `var` as a generic parameter of the declaration that owns the
+ * expression being checked, once an occurrence that is evidence of kind `want`
+ * is counted: the enclosing generic function's (pin_fn_param_kind), or, in a
+ * type body, the struct's or union's whose member types are being walked
+ * (td_params). -1 when it is neither. */
+static int owner_param_kind(CheckCtx *ctx, const char *var, uint8_t want) {
+    if (ctx->active_fn_sym) return pin_fn_param_kind(ctx, var, want);
+    for (int i = 0; i < ctx->td_ntp; i++)
+        if (ctx->td_params[i] == var) return ctx->td_kinds ? ctx->td_kinds[i] : GP_TYPE;
+    return -1;
+}
+
+/* A 'x in a size: it must be a const parameter of the owning declaration. A
+ * size position is const evidence. */
 static Expr *classify_size_param(CheckCtx *ctx, Expr *e) {
     const char *name = e->type_var_ref.name;
-    int k = -1;
-    if (ctx->active_fn_sym) {
-        k = pin_fn_param_kind(ctx, name, GP_CONST);
-    } else {
-        for (int i = 0; i < ctx->td_ntp && k < 0; i++)
-            if (ctx->td_params[i] == name) k = ctx->td_kinds ? ctx->td_kinds[i] : GP_TYPE;
-    }
+    int k = owner_param_kind(ctx, name, GP_CONST);
     if (k < 0) {
         diag_error(e->loc, "%s is not a generic parameter of the enclosing declaration", name);
         return NULL;
@@ -2278,9 +2305,9 @@ static Type *resolve_generic_arg(CheckCtx *ctx, Type *raw, uint8_t want, SrcLoc 
     }
     Type *r = resolve_type(ctx, raw);
     /* Both written spellings come through here: an explicit call type
-     * argument `f<void>(...)` and a type-position one `box<void>`. The
-     * struct/union field spelling does not (field types never reach
-     * resolve_type); canonicalize_field_stubs makes the same judgment. */
+     * argument `f<void>(...)` and a type-position one `box<void>`, a field
+     * type's included (instantiate_field_type). canonicalize_field_stubs
+     * judges a field's first, and poisons it. */
     if (reject_void_type_arg(r, loc)) return type_error();
     return r;
 }
@@ -2588,6 +2615,57 @@ static Type *instantiate_written(CheckCtx *ctx, Symbol *sym, const char *display
     return args ? instantiate_aggregate(ctx, sym, display, args, n, loc) : type_error();
 }
 
+/* Instantiate each generic type a field or payload type names (`kids:
+ * box<i64>`, `next: list<'a>*`), judged as the same type written anywhere else
+ * is. The field keeps its stub, so a type can refer to itself; but a concrete
+ * instance is registered here, since a struct holding one may be all that
+ * names it. Field types are canonicalized first (canonicalize_field_stubs),
+ * so the name resolves from any scope, and their constant arguments folded
+ * (normalize_type_sizes), so the stub names the instance registered. */
+static void instantiate_field_type(CheckCtx *ctx, Type *t) {
+    if (!t) return;
+    switch (t->kind) {
+    case TYPE_POINTER:     instantiate_field_type(ctx, t->pointer.pointee); return;
+    case TYPE_OPTION:      instantiate_field_type(ctx, t->option.inner); return;
+    case TYPE_RESULT:      instantiate_field_type(ctx, t->result.inner); return;
+    case TYPE_SLICE:       instantiate_field_type(ctx, t->slice.elem); return;
+    case TYPE_FIXED_ARRAY: instantiate_field_type(ctx, t->fixed_array.elem); return;
+    case TYPE_FUNC:
+        for (int i = 0; i < t->func.param_count; i++)
+            instantiate_field_type(ctx, t->func.param_types[i]);
+        instantiate_field_type(ctx, t->func.return_type);
+        return;
+    case TYPE_STRUCT:
+        if (t->struc.is_tuple)
+            for (int i = 0; i < t->struc.field_count; i++)
+                instantiate_field_type(ctx, t->struc.fields[i].type);
+        return;
+    case TYPE_STUB: {
+        if (t->stub.type_arg_count == 0) return;
+        Symbol *sym = resolve_type_symbol(ctx, t->stub.name);
+        if (!sym || !sym->type || !sym->is_generic || sym->type_param_count <= 0) return;
+        /* The arguments are resolved as generic arguments, so an instance
+         * among them (box<box<i64>>) is instantiated too. */
+        instantiate_written(ctx, sym,
+            t->stub.qualified_name ? t->stub.qualified_name : t->stub.name,
+            t->stub.type_args, t->stub.type_arg_count, ctx->type_loc);
+        return;
+    }
+    CASE_TYPE_PRIMITIVES:
+    case TYPE_UNION:
+    case TYPE_ENUM:
+    case TYPE_ANY_PTR:
+    case TYPE_TYPE_VAR:
+    case TYPE_CONST_INT:
+    case TYPE_CONST_EXPR:
+    case TYPE_ERROR:
+    case TYPE_NEVER:
+    case TYPE_UNRESOLVED:
+    case TYPE_COUNT:
+        return;
+    }
+}
+
 static Type *resolve_type(CheckCtx *ctx, Type *t) {
     if (!t || t->kind == TYPE_ERROR) return t;
 
@@ -2701,8 +2779,9 @@ static Type *resolve_type(CheckCtx *ctx, Type *t) {
         if (sym && sym->type) {
             /* A stub with type args (box<i32>) names an instance. */
             if (t->stub.type_arg_count > 0 && sym->is_generic && sym->type_param_count > 0)
-                return instantiate_written(ctx, sym, t->stub.name, t->stub.type_args,
-                                           t->stub.type_arg_count, ctx->type_loc);
+                return instantiate_written(ctx, sym,
+                    t->stub.qualified_name ? t->stub.qualified_name : t->stub.name,
+                    t->stub.type_args, t->stub.type_arg_count, ctx->type_loc);
             if (reject_bare_generic_type(sym,
                     t->stub.qualified_name ? t->stub.qualified_name
                                            : t->stub.name,
@@ -6501,6 +6580,11 @@ static Type *check_unary_prefix(CheckCtx *ctx, Expr *e) {
 static Type *check_ident(CheckCtx *ctx, Expr *e) {
     bool code_use = ctx->code_use;
     ctx->code_use = false;
+    if (is_wildcard_name(e->ident.name)) {
+        diag_error(e->loc, "'_' binds nothing, so it cannot be read; "
+                   "give the value a name to use it");
+        return poison(e);
+    }
     /* 1. Check local scope (stops at current module boundary) */
     const char *cg_name = NULL;
     bool is_mut = false;
@@ -6919,8 +7003,17 @@ static Type *recursive_fn_type(CheckCtx *ctx, Expr *fn, Type **placeholder) {
     int pc = fn->func.param_count;
     Type **ptypes = NULL;
     if (pc > 0) ptypes = arena_alloc(ctx->arena, sizeof(Type*) * (size_t)pc);
-    for (int i = 0; i < pc; i++)
+    /* check_func resolves the parameter types again, in the function's own
+     * kind context. A type that is wrong here keeps the form it resolved to,
+     * which resolves to itself without a second report. */
+    SrcLoc saved_loc = ctx->type_loc;
+    for (int i = 0; i < pc; i++) {
+        ctx->type_loc = fn->func.params[i].loc;
+        int errs = diag_error_count();
         ptypes[i] = resolve_type(ctx, fn->func.params[i].type);
+        if (diag_error_count() > errs) fn->func.params[i].type = ptypes[i];
+    }
+    ctx->type_loc = saved_loc;
     *placeholder = arena_alloc(ctx->arena, sizeof(Type));
     (*placeholder)->kind = TYPE_UNRESOLVED;
     Type *ft = arena_alloc(ctx->arena, sizeof(Type));
@@ -7957,12 +8050,17 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
          * literal of the bound value (per-instance range check in
          * validate_generic_body; codegen emits the literal). A standalone use
          * is itself kind evidence: a prefix var with no other occurrence is
-         * pinned to const here. */
-        if (pin_fn_param_kind(ctx, e->type_var_ref.name, GP_CONST) == GP_CONST) {
+         * pinned to const here. In a type body it is a const argument over the
+         * type's own parameter (`next: s<'n * 2>*`), kept symbolic. */
+        int kind = owner_param_kind(ctx, e->type_var_ref.name, GP_CONST);
+        if (kind == GP_CONST) {
             e->type_var_ref.is_const_param = true;
             e->type = type_int32();
             return e->type;
         }
+        /* A type body's parameter takes its kind from where it occurs, and
+         * pass1 reported one that occurs as both. */
+        if (kind >= 0 && !ctx->active_fn_sym) return poison(e);
         /* A type variable used standalone (not as 'a.property) */
         diag_error(e->loc, "type variable %s cannot be used as a value",
             e->type_var_ref.name);
@@ -10681,7 +10779,8 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
  * struct and union fields, and in stub type arguments: named consts resolve
  * in the decl's own scope, concrete sizes fold to a positive `size`, and
  * const-param sizes keep a normalized symbolic form for per-instance folding.
- * Stub names are left to canonicalize_field_stubs, which pass 0 runs next. */
+ * A stub's constant arguments fold the same way. Stub names are left to
+ * canonicalize_field_stubs, which pass 0 runs next. */
 static void normalize_type_sizes(CheckCtx *ctx, Type *t) {
     if (!t) return;
     switch (t->kind) {
@@ -10706,10 +10805,28 @@ static void normalize_type_sizes(CheckCtx *ctx, Type *t) {
             normalize_type_sizes(ctx, t->func.param_types[i]);
         normalize_type_sizes(ctx, t->func.return_type);
         return;
-    case TYPE_STUB:
-        for (int i = 0; i < t->stub.type_arg_count; i++)
-            normalize_type_sizes(ctx, t->stub.type_args[i]);
+    case TYPE_STUB: {
+        /* A constant argument, written as an expression or as a named
+         * constant (`cbox<cfg.k * 2>`, `cbox<cfg.k>`), folds here as a size
+         * does, so the field names its instance by the value. Only a constant
+         * or an error is written back: a type stays a stub. */
+        Symbol *sym = t->stub.name ? resolve_type_symbol(ctx, t->stub.name) : NULL;
+        const uint8_t *kinds = sym && sym->is_generic &&
+                               sym->type_param_count == t->stub.type_arg_count
+                             ? sym->param_kinds : NULL;
+        for (int i = 0; i < t->stub.type_arg_count; i++) {
+            Type *a = t->stub.type_args[i];
+            bool named_const = kinds && kinds[i] == GP_CONST && a &&
+                               a->kind == TYPE_STUB && a->stub.type_arg_count == 0;
+            if (named_const || (a && a->kind == TYPE_CONST_EXPR)) {
+                Type *r = resolve_generic_arg(ctx, a, GP_CONST, ctx->type_loc);
+                if (type_is_const_arg(r) || type_is_error(r)) t->stub.type_args[i] = r;
+            } else {
+                normalize_type_sizes(ctx, a);
+            }
+        }
         return;
+    }
     CASE_TYPE_PRIMITIVES:
     case TYPE_ENUM:
     case TYPE_ANY_PTR:
@@ -10724,8 +10841,8 @@ static void normalize_type_sizes(CheckCtx *ctx, Type *t) {
     }
 }
 
-/* Fold the fixed-array size expressions of one type decl's fields, under the
- * decl's own generic-parameter kinds. */
+/* Fold the fixed-array size expressions and constant generic arguments of
+ * one type decl's fields, under the decl's own generic-parameter kinds. */
 static void normalize_decl_field_sizes(CheckCtx *ctx, Decl *d) {
     const char **saved_params = ctx->td_params;
     uint8_t *saved_kinds = ctx->td_kinds;
@@ -10761,34 +10878,81 @@ static void normalize_decl_field_sizes(CheckCtx *ctx, Decl *d) {
     ctx->td_ntp = saved_ntp;
 }
 
-/* Fold every type decl's fixed-array size expressions in a module and
- * canonicalize its struct and union field types, recursing into submodules
- * with the same scope handling as check_module_members. This runs as its own
- * pass before any body checking: instantiation (resolve_type,
- * type_substitute) reads a template's field types, so they must already name
- * the declarations they mean (including imported ones) and their size
- * expressions must be folded when the first body names the template, and that
- * body may be in a module checked before the template's own. */
-static void canonicalize_module_types(CheckCtx *ctx, Decl *mod_decl,
-                                      SymbolTable *parent_members) {
+/* Fold a type decl's fixed-array size expressions and canonicalize its
+ * struct and union field types. This runs as its own pass before any body
+ * checking: instantiation (resolve_type, type_substitute) reads a template's
+ * field types, so they must already name the declarations they mean
+ * (including imported ones) and their size expressions must be folded when
+ * the first body names the template, and that body may be in a module
+ * checked before the template's own. */
+static void canonicalize_type_decl(CheckCtx *ctx, Decl *d) {
+    normalize_decl_field_sizes(ctx, d);
+    if (d->kind != DECL_EXTERN)
+        canonicalize_decl_field_stubs(ctx, d);
+}
+
+/* Instantiate the generic types a struct's or union's field types name. A
+ * pass of its own after canonicalize_type_decl: an instance is built from its
+ * template's field types, which must be canonical by then, and the template
+ * may be declared after the struct that names it. */
+static void instantiate_type_decl_fields(CheckCtx *ctx, Decl *d) {
+    if (d->kind != DECL_EXTERN)
+        for_each_member_type(ctx, d, instantiate_field_type);
+}
+
+/* Visit every struct, union and extern decl in a module, recursing into
+ * submodules with the same scope handling as check_module_members. */
+static void visit_module_type_decls(CheckCtx *ctx, Decl *mod_decl,
+                                    SymbolTable *parent_members,
+                                    void (*visit)(CheckCtx *, Decl *)) {
     for (int i = 0; i < mod_decl->module.decl_count; i++) {
         Decl *child = mod_decl->module.decls[i];
         if (child->kind == DECL_STRUCT || child->kind == DECL_UNION ||
             child->kind == DECL_EXTERN) {
-            normalize_decl_field_sizes(ctx, child);
-            if (child->kind != DECL_EXTERN)
-                canonicalize_decl_field_stubs(ctx, child);
+            visit(ctx, child);
         } else if (child->kind == DECL_MODULE) {
             Symbol *sub_sym = symtab_lookup_kind(parent_members,
                 child->module.name, DECL_MODULE);
             if (sub_sym && sub_sym->members) {
                 SubmoduleFrame f;
                 enter_submodule(ctx, sub_sym, &f);
-                canonicalize_module_types(ctx, child, sub_sym->members);
+                visit_module_type_decls(ctx, child, sub_sym->members, visit);
                 restore_scope(ctx, &f.saved);
             }
         }
     }
+}
+
+/* Visit every struct, union and extern decl in the program, top-level and in
+ * modules, each in the scope its file and module give it. */
+static void visit_type_decls(CheckCtx *ctx, Program *prog, FileImportScopes *file_scopes,
+                             void (*visit)(CheckCtx *, Decl *)) {
+    const char *ns = NULL;
+    for (int i = 0; i < prog->decl_count; i++) {
+        Decl *d = prog->decls[i];
+        if (d->kind == DECL_NAMESPACE) { ns = d->ns.name; continue; }
+
+        /* File-level import scope for this decl's file */
+        ImportTable *file_tbl = file_imports_find(file_scopes, d->loc.filename);
+        ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
+
+        if (d->kind == DECL_MODULE) {
+            Symbol *mod_sym = symtab_lookup_module(ctx->symtab, d->module.name,
+                d->module.ns_prefix ? d->module.ns_prefix : ns);
+            if (!mod_sym || !mod_sym->members) continue;
+            SavedCtxScope saved;
+            enter_module_scope(ctx, mod_sym, &saved);
+            visit_module_type_decls(ctx, d, mod_sym->members, visit);
+            restore_scope(ctx, &saved);
+        } else if (d->kind == DECL_STRUCT || d->kind == DECL_UNION ||
+                   d->kind == DECL_EXTERN) {
+            ctx->current_ns = ns;
+            ctx->import_scope = file_tbl ? &file_import_scope : NULL;
+            visit(ctx, d);
+            ctx->import_scope = NULL;
+        }
+    }
+    ctx->current_ns = NULL;
 }
 
 /* Recursively type-check module members, including arbitrarily nested submodules.
@@ -10871,9 +11035,22 @@ static int find_aggregate_decl(Decl **udts, int n, const char *name) {
     return found;
 }
 
+/* The name a message gives the struct or union emitted as `cname`: its
+ * source name with its module path (`m.node`), as type_name shows the type.
+ * Every declared type is in the global table under its C name too. */
+static const char *aggregate_display_name(SymbolTable *symtab, const char *cname) {
+    Symbol *sym = symtab_lookup(symtab, cname);
+    Type *t = sym ? sym->type : NULL;
+    const char *q = !t ? NULL
+                  : t->kind == TYPE_STRUCT ? t->struc.qualified_name
+                  : t->kind == TYPE_UNION  ? t->unio.qualified_name : NULL;
+    return q ? q : mangled_source_name(cname);
+}
+
 /* DFS over by-value edges; on a back-edge to a node on the current stack, report
  * an infinite-size cycle. state: 0=unvisited, 1=on-stack, 2=done. */
-static void visit_byval_containment(Decl **udts, int n, int *state, int idx) {
+static void visit_byval_containment(SymbolTable *symtab, Decl **udts, int n, int *state,
+                                    int idx) {
     state[idx] = 1;
     Decl *d = udts[idx];
     if (d->kind == DECL_STRUCT) {
@@ -10885,9 +11062,10 @@ static void visit_byval_containment(Decl **udts, int n, int *state, int idx) {
             if (state[j] == 1) {
                 diag_error(d->loc, "type '%s' has infinite size: field '%s' contains "
                     "'%s' by value, forming a cycle; use a pointer or slice to break it",
-                    d->struc.name, d->struc.fields[f].name, tn);
+                    aggregate_display_name(symtab, d->struc.name), d->struc.fields[f].name,
+                    aggregate_display_name(symtab, tn));
             } else if (state[j] == 0) {
-                visit_byval_containment(udts, n, state, j);
+                visit_byval_containment(symtab, udts, n, state, j);
             }
         }
     } else { /* DECL_UNION */
@@ -10899,23 +11077,24 @@ static void visit_byval_containment(Decl **udts, int n, int *state, int idx) {
             if (state[j] == 1) {
                 diag_error(d->loc, "type '%s' has infinite size: variant '%s' contains "
                     "'%s' by value, forming a cycle; use a pointer or slice to break it",
-                    d->unio.name, d->unio.variants[v].name, tn);
+                    aggregate_display_name(symtab, d->unio.name), d->unio.variants[v].name,
+                    aggregate_display_name(symtab, tn));
             } else if (state[j] == 0) {
-                visit_byval_containment(udts, n, state, j);
+                visit_byval_containment(symtab, udts, n, state, j);
             }
         }
     }
     state[idx] = 2;
 }
 
-static void check_infinite_size(Program *prog) {
+static void check_infinite_size(Program *prog, SymbolTable *symtab) {
     Decl **udts = NULL;
     int n = 0, cap = 0;
     collect_aggregate_decls(prog->decls, prog->decl_count, &udts, &n, &cap);
     if (n == 0) { free(udts); return; }
     int *state = xcalloc((size_t) n, sizeof(int));
     for (int i = 0; i < n; i++)
-        if (state[i] == 0) visit_byval_containment(udts, n, state, i);
+        if (state[i] == 0) visit_byval_containment(symtab, udts, n, state, i);
     free(state);
     free(udts);
 }
@@ -11228,37 +11407,10 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
      * body may instantiate a template declared later (in a later module, or
      * below it in the file), and the instance's field types must already
      * name the declarations they mean: an uncanonicalized `box<'a>` field
-     * would instantiate as an unrooted `box__...` C struct. */
-    {
-        const char *ns0 = NULL;
-        for (int i = 0; i < prog->decl_count; i++) {
-            Decl *d = prog->decls[i];
-            if (d->kind == DECL_NAMESPACE) { ns0 = d->ns.name; continue; }
-
-            /* File-level import scope for this decl's file */
-            ImportTable *file_tbl = file_imports_find(file_scopes, d->loc.filename);
-            ImportScope file_import_scope = { .table = file_tbl, .parent = NULL };
-
-            if (d->kind == DECL_MODULE) {
-                Symbol *mod_sym = symtab_lookup_module(symtab, d->module.name,
-                    d->module.ns_prefix ? d->module.ns_prefix : ns0);
-                if (!mod_sym || !mod_sym->members) continue;
-                SavedCtxScope saved;
-                enter_module_scope(&ctx, mod_sym, &saved);
-                canonicalize_module_types(&ctx, d, mod_sym->members);
-                restore_scope(&ctx, &saved);
-            } else if (d->kind == DECL_STRUCT || d->kind == DECL_UNION ||
-                       d->kind == DECL_EXTERN) {
-                ctx.current_ns = ns0;
-                ctx.import_scope = file_tbl ? &file_import_scope : NULL;
-                normalize_decl_field_sizes(&ctx, d);
-                if (d->kind != DECL_EXTERN)
-                    canonicalize_decl_field_stubs(&ctx, d);
-                ctx.import_scope = NULL;
-            }
-        }
-        ctx.current_ns = NULL;
-    }
+     * would instantiate as an unrooted `box__...` C struct. Then judge and
+     * instantiate the generic types those field types name. */
+    visit_type_decls(&ctx, prog, file_scopes, canonicalize_type_decl);
+    visit_type_decls(&ctx, prog, file_scopes, instantiate_type_decl_fields);
 
     /* First pass: type-check all module member decls (including nested submodules) */
     const char *ns_tracker = NULL;
@@ -11342,7 +11494,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
         break;
     }
 
-    check_infinite_size(prog);
+    check_infinite_size(prog, symtab);
     check_module_cycles(symtab);
 
     /* The arena belongs to the caller, which owns the AST; the types pass2

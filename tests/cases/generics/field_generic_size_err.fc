@@ -1,0 +1,10 @@
+// An instance a module's field type names is size-checked like any other.
+struct cbox =
+    v: u8['n]
+
+module m =
+    module sub =
+        struct holder =
+            k: cbox<0>
+
+let main = (args: str[]) -> 0

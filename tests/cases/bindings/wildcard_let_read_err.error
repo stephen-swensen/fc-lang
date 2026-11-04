@@ -1,0 +1,1 @@
+wildcard_let_read_err.fc:4:5: error: '_' binds nothing, so it cannot be read

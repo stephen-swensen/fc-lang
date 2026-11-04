@@ -1,0 +1,12 @@
+// An unknown field type is reported once, at the field, and not again at each
+// use of the field.
+struct holder =
+    k: later
+    n: i32
+
+let get = (h: holder) -> h.k
+let put = (h: holder*) -> h.k
+
+let main = (args: str[]) ->
+    let h = holder { k = 1, n = 2 }
+    h.n

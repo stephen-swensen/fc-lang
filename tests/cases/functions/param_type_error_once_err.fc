@@ -1,0 +1,14 @@
+// A parameter type that is wrong is reported once, at the parameter: in a
+// top-level function, in a module function and in a local lambda, and for an
+// unknown name as for a generic type given the wrong arguments.
+struct box =
+    v: 'a
+
+let f = (l: later) -> 0
+
+module m =
+    let g = (b: box<i32, i32>) -> 0
+
+let main = (args: str[]) ->
+    let h = (p: later*) -> 1
+    0

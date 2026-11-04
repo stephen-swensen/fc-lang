@@ -1,0 +1,8 @@
+// A constant given for a field type's type parameter is rejected.
+struct box =
+    v: 'a
+
+struct holder =
+    k: box<3>
+
+let main = (args: str[]) -> 0

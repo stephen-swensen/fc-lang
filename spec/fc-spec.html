@@ -1476,6 +1476,22 @@ z = z + 1              // compile error — z is now a let binding
 
 Shadowing a `let mut` binding with a `let` binding is a useful pattern for "freezing" a mutable value at a point in time.
 
+### `_` binds nothing
+
+`_` is the one name that binds nothing, wherever a name is bound — a `let` or `let mut`, a parameter, a loop variable — just as it binds nothing in a pattern (§Wildcard patterns). Reading `_` is a compile error, and `_` may be bound any number of times in one scope, at file and module level too. Everything else about the binding is unchanged: a `let _` is checked like any `let`, and its initializer runs when that `let`'s would — in a block where it stands, at file level before `main` — and the value is dropped. It is also how a result is ignored as a binding (§Results cannot be silently ignored).
+
+```fc
+let _ = sizeof(header)              // checked, and binds nothing
+
+let pick = (_: i32, b: i32) -> b    // the first argument is not named
+
+let main = (args: str[]) ->
+    for _ in 0..3 do
+        tick()
+    let _ = report()                // runs report(), drops its value
+    _                               // compile error — '_' binds nothing
+```
+
 ---
 
 ## Type Inference

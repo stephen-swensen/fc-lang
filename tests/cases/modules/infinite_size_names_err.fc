@@ -1,0 +1,9 @@
+// The infinite-size error names the types as they are written, with their
+// module path, not by their C names.
+module m =
+    struct a =
+        b: b
+    struct b =
+        a: a
+
+let main = (args: str[]) -> 0

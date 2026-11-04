@@ -1,0 +1,4 @@
+// `let _` binds nothing, so there is no `_` to read afterwards.
+let main = (args: str[]) ->
+    let _ = 7
+    _

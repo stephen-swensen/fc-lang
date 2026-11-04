@@ -1,0 +1,8 @@
+// A union that contains itself is named with its module path.
+module m =
+    module sub =
+        union u =
+            | a(u)
+            | b
+
+let main = (args: str[]) -> 0

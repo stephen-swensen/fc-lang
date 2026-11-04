@@ -1,0 +1,4 @@
+// An unknown parameter type is reported at the parameter, never at line 0.
+let f = (a: i32, l: later) -> a
+
+let main = (args: str[]) -> 0

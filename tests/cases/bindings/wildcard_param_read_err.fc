@@ -1,0 +1,4 @@
+// A parameter named `_` binds nothing either.
+let f = (_: i32) -> _
+
+let main = (args: str[]) -> f(7)

@@ -808,3 +808,12 @@ bool decl_is_function(const Decl *d);
  * a function or extern it names is code. */
 bool decl_is_variable(const Decl *d);
 
+/* Whether `name` is `_`, which binds nothing wherever a name is bound (a
+ * `let`, a parameter, a loop variable), as it does in a pattern: no binding
+ * named `_` can be read, and a top-level `let _` declares nothing. */
+bool is_wildcard_name(const char *name);
+
+/* Whether `d` is a top-level or module `let _`: it is checked, and its
+ * initializer runs, as any `let`'s does, but it declares no symbol. */
+bool decl_binds_nothing(const Decl *d);
+
