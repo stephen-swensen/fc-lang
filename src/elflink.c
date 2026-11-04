@@ -82,8 +82,7 @@ enum { DT_NULL = 0, DT_NEEDED = 1, DT_STRTAB = 5, DT_SYMTAB = 6, DT_RELA = 7, DT
        DT_VERSYM = 0x6ffffff0, DT_RELACOUNT = 0x6ffffff9, DT_FLAGS_1 = 0x6ffffffb,
        DT_VERNEED = 0x6ffffffe, DT_VERNEEDNUM = 0x6fffffff };
 enum { DF_BIND_NOW = 0x8, DF_1_NOW = 0x1, DF_1_PIE = 0x08000000 };
-enum { R_X86_64_NONE = 0, R_X86_64_COPY = 5, R_X86_64_GLOB_DAT = 6, R_X86_64_RELATIVE = 8,
-       R_X86_64_GOTPCREL = 9, R_X86_64_32S = 11, R_X86_64_PC64 = 24, R_X86_64_GOTPCRELX = 41 };
+enum { R_X86_64_NONE = 0, R_X86_64_COPY = 5, R_X86_64_GLOB_DAT = 6, R_X86_64_RELATIVE = 8 };
 
 /* Where the linker looks for -l libraries after -L and LIBRARY_PATH: GNU ld's
  * list for x86-64, Debian's multiarch directories and the lib64 ones. */

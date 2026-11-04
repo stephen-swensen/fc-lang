@@ -1335,9 +1335,11 @@ static Symbol *import_scope_lookup_kind_until(ImportScope *scope, const char *na
  * filtered (the same rule as symtab_lookup_kind_ns). */
 static Symbol *global_lookup(SymbolTable *symtab, const char *name, const char *current_ns) {
     bool any_ns = is_mangled_root_name(name);
-    for (int i = 0; i < symtab->count; i++) {
-        Symbol *s = &symtab->symbols[i];
-        if (s->name == name && (any_ns || s->ns_prefix == current_ns)) return s;
+    for (SymbolTable *t = symtab; t; t = t->outer) {
+        for (int i = 0; i < t->count; i++) {
+            Symbol *s = &t->symbols[i];
+            if (s->name == name && (any_ns || s->ns_prefix == current_ns)) return s;
+        }
     }
     return NULL;
 }
@@ -3232,15 +3234,17 @@ static Type *resolve_generic_types_in_ret(CheckCtx *ctx, Type *t) {
             t->kind == TYPE_STRUCT ? DECL_STRUCT : DECL_UNION);
         if (!type_sym) {
             /* Search module member symtabs */
-            for (int si = 0; si < ctx->symtab->count && !type_sym; si++) {
-                Symbol *s = &ctx->symtab->symbols[si];
-                if (s->kind != DECL_MODULE || !s->members) continue;
-                for (int mi2 = 0; mi2 < s->members->count; mi2++) {
-                    Symbol *ms = &s->members->symbols[mi2];
-                    if (!ms->type) continue;
-                    if ((ms->type->kind == TYPE_STRUCT && ms->type->struc.name == type_base_name) ||
-                        (ms->type->kind == TYPE_UNION && ms->type->unio.name == type_base_name)) {
-                        type_sym = ms; break;
+            for (SymbolTable *g = ctx->symtab; g && !type_sym; g = g->outer) {
+                for (int si = 0; si < g->count && !type_sym; si++) {
+                    Symbol *s = &g->symbols[si];
+                    if (s->kind != DECL_MODULE || !s->members) continue;
+                    for (int mi2 = 0; mi2 < s->members->count; mi2++) {
+                        Symbol *ms = &s->members->symbols[mi2];
+                        if (!ms->type) continue;
+                        if ((ms->type->kind == TYPE_STRUCT && ms->type->struc.name == type_base_name) ||
+                            (ms->type->kind == TYPE_UNION && ms->type->unio.name == type_base_name)) {
+                            type_sym = ms; break;
+                        }
                     }
                 }
             }
@@ -10605,14 +10609,26 @@ static void check_decl_let(CheckCtx *ctx, Decl *d) {
         ctx->pending.fn_sym = sym;   /* kind context for const params in the body */
     }
 
+    /* A session binding that is not a function is not in scope in its own
+     * initializer, as a local `let` is not: `let x = x + 1` at the prompt
+     * reads the x entered before it. Its symbol has no name until then. */
+    const char *unbound = NULL;
+    if (d->let.is_session && !decl_is_function(d) && sym && sym->decl == d) {
+        unbound = sym->name;
+        sym->name = NULL;
+    }
+
     /* Hand the placeholder to the function's own EXPR_FUNC, which takes it and
        so scopes it to that body. */
     ctx->pending.recursive_ret = recursive_ret;
     ctx->pending.recursive_self = recursive_ret ? d->let.name : NULL;
     Type *t = check_let_init(ctx, d->let.init);
+    if (unbound) sym->name = unbound;
     ctx->pending = saved_handoff;
     ctx->is_top_level_init = saved_top;
-    if (!type_is_error(t) && !bindable_type(t, d->loc, d->let.name))
+    bool binds_nothing = d->let.is_session_stmt &&
+                         (t->kind == TYPE_VOID || t->kind == TYPE_NEVER);
+    if (!type_is_error(t) && !binds_nothing && !bindable_type(t, d->loc, d->let.name))
         t = type_error();
 
     /* If we pre-registered a recursive function type, patch the return type */
@@ -11269,7 +11285,7 @@ void pass2_check(Program *prog, SymbolTable *symtab, InternTable *intern_tbl, Mo
             ctx.import_scope = file_tbl ? &file_import_scope : NULL;
 
             check_decl_let(&ctx, d);
-            if (d->let.init && d->let.init->kind != EXPR_FUNC &&
+            if (d->let.init && d->let.init->kind != EXPR_FUNC && !d->let.is_session &&
                 !is_init_expr(d->let.init, INIT_FILE, NULL)) {
                 diag_error(d->loc,
                     "file-level initializer for '%s' must not contain "

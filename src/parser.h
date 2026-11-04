@@ -30,3 +30,21 @@ void parser_collect_generic_names(Token *tokens, int count, InternTable *intern,
  * parse_file for each. The caller checks diag_error_count(). */
 Program *parse_files(Token **tokens, const int *counts, const char **filenames, int n,
                        Arena *arena, InternTable *intern);
+
+/* One item of an input entered at the prompt of an interactive session (fcc
+ * --interactive): a declaration (an `import` line may make several), or a
+ * statement such as a function body holds. A `let` binding a name is a
+ * declaration. */
+typedef struct {
+    Decl **decls;
+    int decl_count;
+    Expr *stmt;         /* when decl_count is 0 */
+} SessionItem;
+
+/* Parse an input entered at the prompt: its items in order, separated by
+ * newlines or `;` as a block's statements are. Syntax errors are reported as
+ * parse_file reports them. `generic_names` is as for parse_file, collected
+ * over every input of the session. */
+SessionItem *parse_session_input(Token *tokens, int count, const char *filename,
+                                 const char **generic_names, int generic_name_count,
+                                 Arena *arena, InternTable *intern, int *item_count);

@@ -458,6 +458,9 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
             out->backtraces = true;
         } else if (strcmp(a, "--native") == 0) {
             out->native = true;
+        } else if (strcmp(a, "--interactive") == 0) {
+            out->interactive = true;
+            out->native = true;
         } else if (strcmp(a, "--flag") == 0) {
             const char *arg = e->tokens[++i];      /* borrowed: name/value point into e */
             const char *eq = strchr(arg, '=');
@@ -492,8 +495,13 @@ bool args_parse(const ExpandedArgs *e, CompileArgs *out) {
         }
     }
 
-    if (out->input_count == 0) {
+    if (out->input_count == 0 && !out->interactive) {
         out->error = str_sprintf("no input file");
+        return false;
+    }
+    if (out->interactive && (out->compile_only || out->output)) {
+        out->error = str_sprintf("%s does not apply to --interactive, which writes no file",
+                                 out->compile_only ? "-c" : "-o");
         return false;
     }
     if (out->compile_only && !out->native) {

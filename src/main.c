@@ -12,6 +12,7 @@
 #include "version.h"
 #include "lsp.h"
 #include "args.h"
+#include "repl.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,7 @@ static void print_usage(FILE *f) {
     fputs("usage: fcc [options] <input.fc>... [-o <output.c>]\n"
           "       fcc --native [options] <input.fc>... [<lib.a>|<lib.so>|<file.o>]...\n"
           "           [-I <dir>]... [-L <dir>]... [-l <name>]... [-o <program>]\n"
+          "       fcc --interactive [options] [<input.fc>|<input.fcx>]...\n"
           "       fcc --lsp\n"
           "\n"
           "options:\n"
@@ -46,6 +48,11 @@ static void print_usage(FILE *f) {
           "  --native               compile to x86-64 machine code and link an\n"
           "                         executable, for a fast build (experimental;\n"
           "                         Linux x86-64 only)\n"
+          "  --interactive          enter declarations and statements at a prompt,\n"
+          "                         each compiled and run when entered (implies\n"
+          "                         --native); .fc inputs and the standard library\n"
+          "                         are loaded first, then .fcx inputs are entered\n"
+          "                         as if typed\n"
           "  -c                     with --native, write an object file (.o) to link\n"
           "                         with cc instead\n"
           "  -I <dir>               with --native, search <dir> for the headers that\n"
@@ -111,6 +118,13 @@ int main(int argc, char **argv) {
         args_compile_free(&ca);
         args_expand_free(&expanded);
         return 1;
+    }
+
+    if (ca.interactive) {
+        int status = repl_main(&ca);
+        args_compile_free(&ca);
+        args_expand_free(&expanded);
+        return status;
     }
 
     const char **input_paths = ca.inputs;

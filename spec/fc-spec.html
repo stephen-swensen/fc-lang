@@ -3404,7 +3404,7 @@ match open(p) with
 | `≥ 65536`     | compiler-assigned declared errors                                    |
 | negative      | sign-bit-encoded platform conventions (HRESULT, kernel `-errno`)     |
 
-Assignment is deterministic: fully-qualified declared names are sorted and numbered sequentially from 65536. Every declared name is therefore provably non-zero — the `err(T, 0)` guard is **elided at compile time** for named codes, and `err(T, group.member)` is a valid constant initializer. Reserving the full u16 range (not just the kernel's 4095) lets errno *and* Win32/Winsock codes (`WSAECONNRESET` = 10054) pass through untranslated: a failing C call's errno wraps into `err(T, e)` unchanged — automatically, at declared extern boundaries (§Extern error protocols, Part 8) — and the debugger shows the same number `strace` does. Failing HRESULTs are negative as `i32` and pass through in the negative space (wrappers must test the severity bit, not `!= 0` — `S_FALSE` = 1 is a nonzero success).
+Assignment is deterministic: fully-qualified declared names are sorted and numbered sequentially from 65536 (an interactive session instead numbers groups in the order they are entered; see §Interactive sessions). Every declared name is therefore provably non-zero — the `err(T, 0)` guard is **elided at compile time** for named codes, and `err(T, group.member)` is a valid constant initializer. Reserving the full u16 range (not just the kernel's 4095) lets errno *and* Win32/Winsock codes (`WSAECONNRESET` = 10054) pass through untranslated: a failing C call's errno wraps into `err(T, e)` unchanged — automatically, at declared extern boundaries (§Extern error protocols, Part 8) — and the debugger shows the same number `strace` does. Failing HRESULTs are negative as `i32` and pass through in the negative space (wrappers must test the severity bit, not `!= 0` — `S_FALSE` = 1 is a nonzero success).
 
 **No unification, contra Zig:** `file_io.not_found` and `parse.not_found` are distinct codes — FC has no error sets to merge, so unification would buy nothing and lose provenance.
 
@@ -4435,6 +4435,7 @@ FC programs are compiled by the `fcc` command-line tool, which transpiles FC sou
 ```
 fcc [options] <input.fc>... [-o <output.c>]
 fcc --native [options] <input.fc>... [<file.o>|<lib.a>|<lib.so>]... [-o <program>]
+fcc --interactive [options] [<input.fc>|<input.fcx>]...
 fcc --lsp
 ```
 
@@ -4461,6 +4462,7 @@ cc -std=c11 -o myapp main.c
 | `fcc x.fc` | C source | `x.c` |
 | `fcc --native x.fc` | an executable | `x` (a first input with no extension to drop needs `-o`) |
 | `fcc --native -c x.fc` | an object file, for `cc` to link | `x.o` |
+| `fcc --interactive` | nothing: a session at a prompt (see §Interactive sessions) | |
 | `fcc --lsp` | nothing: a language server on stdin/stdout (see §Language server) | |
 | `fcc --help`, `fcc --version` | nothing: prints to stdout | |
 
@@ -4483,11 +4485,12 @@ cc -std=c11 -o myapp main.c
 | `-I <dir>` | with `--native`, search `<dir>` for the C headers that extern declarations name |
 | `-l <name>` | with `--native`, link `lib<name>.so` (or `lib<name>.a`) |
 | `-L <dir>` | with `--native`, search `<dir>` for `-l` libraries |
+| `--interactive` | enter declarations and statements at a prompt, each run as it is entered (see §Interactive sessions) |
 | `--lsp` | run as a language server (see §Language server) |
 | `-V`, `--version` | print version and build information (see §Version) |
 | `-h`, `--help` | print a summary of the options |
 
-Options and inputs may appear in any order. `-I`, `-l` and `-L` take their value attached or as the next argument (`-lSDL2` or `-l SDL2`). A later `--flag` replaces an earlier one of the same name, and a later `-o` replaces an earlier `-o`. Any other argument beginning with `-` is an error, as is a command line with no `.fc` input. `--help`, `--version` and `--lsp` ignore every other argument.
+Options and inputs may appear in any order. `-I`, `-l` and `-L` take their value attached or as the next argument (`-lSDL2` or `-l SDL2`). A later `--flag` replaces an earlier one of the same name, and a later `-o` replaces an earlier `-o`. Any other argument beginning with `-` is an error, as is a command line with no `.fc` input (except `--interactive`'s). `--help`, `--version` and `--lsp` ignore every other argument.
 
 ### Response files
 
@@ -4528,6 +4531,72 @@ Link inputs, `-l` and `-L` apply only when fcc writes the executable. With `-c`,
 ### Language server
 
 `fcc --lsp` runs a Language Server Protocol server on stdin/stdout for editors, and ignores every other argument. It reports the compiler's errors as files are edited (nothing else; see §Diagnostics) and answers hover, go-to-definition and completion requests, with inlay hints and code lenses. An open file's program is described by the nearest `lsp.rsp` in the file's directory or an ancestor, read exactly as `fcc @lsp.rsp` would read it. A file that no `lsp.rsp` lists is analyzed with the `.fc` files in its own directory and the standard library (from `FCC_STDLIB_DIR`, else the installed copy). `lsp.rsp` discovery is not available on Windows.
+
+### Interactive sessions
+
+`fcc --interactive` starts a session at a prompt. FC declarations and statements are entered one input at a time, and each input is compiled and run as it is entered, against what the inputs before it declared. Sessions need the native backend's host, Linux x86-64 (see §Native backend), and `--interactive` implies `--native`.
+
+```
+$ fcc --interactive
+> let x = 6 * 7
+val x: i32 = 42
+> let twice = (n: i32) -> n * 2
+val twice: (i32) -> i32
+> twice(x)
+val it: i32 = 84
+```
+
+**What an input holds.** An input is a sequence of items, separated as a block's statements are (a newline or `;`). An item is a top-level declaration (`struct`, `union`, `enum`, `error`, `module`, `import`, or a `let` binding a function), a `let` or `let mut` binding a value to a name, or any statement a function body may hold. A session is like a `main` body that grows as inputs are entered, with its declarations at the top level:
+
+- **A `let` binding a value** is a **session binding**: a top-level binding, visible to every function and module entered after it, whose initializer runs when it is entered. The initializer may be any expression, calls included; the file-level initializer rules (§Statements vs. expressions) do not apply. It does not see the name it binds: `let x = x + 1` reads the `x` entered before it.
+- **A statement** runs when it is entered. One that yields a value binds it to `it`, a session binding like any other. One that yields nothing (`void`, or a statement that diverges) binds nothing and leaves `it` as it was.
+- **A declaration** is as it is at the top of a file, except that it sees only the names entered before it.
+
+**Strictly in order.** Each item sees the items entered before it, in earlier inputs and earlier in its own input, and nothing after it. There are no forward references at the prompt, so two declarations entered there cannot refer to each other. A module body is still order-free inside (§Module System & Visibility), so mutually recursive functions are declared together in one module, or in a loaded file.
+
+**Declaring a name again** shadows the earlier declaration, as a local `let` does. Later inputs see the new declaration, and whatever already used the old one keeps it. This holds for every kind of declaration, types included: a value of a struct that is declared again keeps the struct it was built with.
+
+```
+> let x = 10
+val x: i32 = 10
+> let get = () -> x
+val get: () -> i32
+> let x = 20
+val x: i32 = 20
+> get()
+val it: i32 = 10
+```
+
+**An input runs only if all of it compiles.** Its items are checked first, and an error anywhere in it runs none of them. Then they run one by one. A statement that fails at run time is undone: an abort (a failed bounds check, an unwrap of `none`, an `assert`), or an interrupt (Ctrl+C) while it runs. The session goes on as if the statement had never run, and the rest of its input does not run. What the statement wrote to a file, the terminal or another process stays written; only the session's own memory is restored.
+
+**What a statement builds lives on.** A session binding may hold a slice literal, an interpolated string or anything else built in place (§Stack Allocation). It lives as long as the session, as a value `main` builds lives as long as the program.
+
+**Showing what was entered.** After each item runs, the session shows what it declared: `val name: type = value` for a binding (a function's type alone), and the kind and name of a type, module or error group. A value is shown much as the syntax that builds it writes it, with long slices and strings cut short. A pointer shows its address and a function value `<fun>`. A value that points at memory the program does not have is shown as unreadable.
+
+**The end of the session.** The end of the input (Ctrl+D at an empty prompt) ends the session with status 0. `return code` at the prompt ends it with `code`, an `i32`, as `main`'s return ends a program. This applies anywhere in a statement, though not inside a function, where `return` is the function's own. The program exiting (`sys.exit`) ends the session too. `defer` is not allowed as an item, since the session has no scope end for it to run at; a statement's blocks may use it as any block does.
+
+**Error codes** are numbered in the order their groups are entered, after the codes given before. The sorted numbering of §Named error codes would renumber codes already in use.
+
+**Entering an input.** At a terminal, a line is an input unless it opens a block or leaves a bracket open. A line ending with `=`, `->`, `do`, `then`, `else`, `with`, `in`, an operator or a comma opens a block, and the input then runs to the next blank line. A paste is one input, blank lines and all. Ctrl+C discards the input being entered. The usual line-editing keys and history work. Diagnostics name a typed input `stdin`, with lines counted from the input's start.
+
+**Files.** The `.fc` inputs on the command line are loaded before the first prompt, with the standard library. They are one program, compiled together under the file rules (forward references, and top-level `let`s in any file), and their file-level initializers run before the first prompt. A `main` among them is an ordinary function and does not run. The `.fcx` inputs (FC scripts) then follow in order, each one input, shown at the prompt as if typed. `-l`, `-L` and `-I` are as for `--native`, except that only shared libraries can be loaded into a session.
+
+**Without a terminal.** When stdin is not a terminal (a pipe, or a redirected file), there is no prompt and the input is not shown. The `.fcx` inputs run, then all of stdin as one input, and the session ends. Its exit status tells how:
+
+| Status | Meaning |
+|------|---------|
+| 0 | the end of the input |
+| 1 | an input that does not compile, or a loaded file that does not |
+| 128 + n | a statement killed by signal n: 134 for an abort |
+| the code | `return code`, or the program exiting with it |
+
+At a terminal, an input that does not compile or a statement that fails is reported, and the session goes on.
+
+```
+$ printf 'let n = 6\nn * 7\n' | fcc --interactive
+val n: i32 = 6
+val it: i32 = 42
+```
 
 ### Version
 
@@ -4579,6 +4648,8 @@ After all errors are reported, the compiler prints a summary:
 |------|---------|
 | 0 | Compilation succeeded |
 | 1 | One or more errors occurred, including an error in the command line |
+
+An interactive session's status is described in §Interactive sessions.
 
 ### Compilation pipeline
 

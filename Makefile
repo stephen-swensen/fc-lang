@@ -109,7 +109,7 @@ $(GEN_VERSION_H): FORCE | $(BUILD_DIR)
 	} > $@.tmp
 	@if cmp -s $@.tmp $@ 2>/dev/null; then rm $@.tmp; else mv $@.tmp $@; fi
 
-$(BUILD_DIR)/version.o $(BUILD_DIR)/lsp.o: $(GEN_VERSION_H)
+$(BUILD_DIR)/version.o $(BUILD_DIR)/lsp.o $(BUILD_DIR)/repl.o: $(GEN_VERSION_H)
 
 $(BUILD_DIR):
 	@mkdir -p $@
@@ -167,7 +167,7 @@ RUN_TESTS = bash tests/run_tests.sh
 
 # `check` is the GNU canonical test target: everything below that runs in a few
 # minutes. test-all-O2 and test-asan are run separately (see CONTRIBUTING.md).
-check: check-ascii check-warnings check-keywords check-examples test-all test-all-len16 test-lsp
+check: check-ascii check-warnings check-keywords check-examples test-all test-all-len16 test-lsp test-repl
 
 # The compiler builds warning-free under gcc and clang. This recompiles every
 # source with -Werror (syntax only, no objects), so warnings in files an
@@ -286,6 +286,11 @@ test-lsp: $(BIN)
 	@echo "=== Testing LSP server ==="
 	@bash tests/lsp/run_lsp_tests.sh
 
+# The interactive session (fcc --interactive), at a script and at a terminal.
+test-repl: $(BIN)
+	@echo "=== Testing the interactive session ==="
+	@bash tests/repl/run_repl_tests.sh
+
 # The VS Code extension against a real server, with the VS Code API mocked
 # (needs node).
 test-vscode: $(BIN)
@@ -293,7 +298,7 @@ test-vscode: $(BIN)
 	@NODE_PATH=tests/vscode/mock node tests/vscode/smoke.js "$$(pwd)/$(BIN)"
 
 # fcc built with AddressSanitizer and UBSan in its own build directory, and the
-# compiler and language-server suites run against it. Slower than test-all; run
+# compiler, language-server and interactive-session suites run against it. Slower than test-all; run
 # it after changing memory handling. The test runner's memory cap is off
 # because the sanitizer reserves more address space than the cap allows, and
 # leak checking is off for the one-shot compiler, which leaves its arenas to
@@ -311,6 +316,9 @@ test-asan: asan
 	    ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(RUN_TESTS)
 	@echo "=== Testing LSP server (ASan/UBSan) ==="
 	@FCC=$(ASAN_BIN) UBSAN_OPTIONS=halt_on_error=1 bash tests/lsp/run_lsp_tests.sh
+	@echo "=== Testing the interactive session (ASan/UBSan) ==="
+	@FCC=$(ASAN_BIN) ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+	    bash tests/repl/run_repl_tests.sh
 
 
 # === Help ===
@@ -331,8 +339,8 @@ help:
 	@echo "  Override PREFIX, DESTDIR, bindir, or datadir to customize install paths."
 	@echo ""
 	@echo "Test:"
-	@echo "  make check        The check-* targets, test-all, test-all-len16 and"
-	@echo "                    test-lsp (CI runs this and test-vscode)"
+	@echo "  make check        The check-* targets, test-all, test-all-len16, test-lsp"
+	@echo "                    and test-repl (CI runs this and test-vscode)"
 	@echo "  make check-ascii  Fail on non-ASCII bytes in src/*.c and src/*.h"
 	@echo "  make check-warnings  Compile src/ with -Werror under gcc and clang"
 	@echo "  make check-keywords  Check every keyword list against the lexer's table"
@@ -347,15 +355,16 @@ help:
 	@echo "  make test-native-len16  The native suite with --len-repr 16"
 	@echo "  make test-x86asm  Check the native backend's instruction encoder against GNU as"
 	@echo "  make test-lsp     Run the LSP server wire tests (needs python3)"
+	@echo "  make test-repl    Run the interactive session's tests (needs python3)"
 	@echo "  make test-vscode  Run the VSCode extension smoke test (needs node)"
 	@echo "  make asan         Build fcc with ASan/UBSan into $(BUILD_DIR)-asan"
-	@echo "  make test-asan    Run the gcc suite and LSP tests against that build"
+	@echo "  make test-asan    Run the gcc suite, LSP and session tests against that build"
 	@echo "  ... FILTER=regex               Run only tests whose category/name matches"
 
 
 .PHONY: all dev clean install uninstall install-vscode uninstall-vscode \
         check check-ascii check-warnings check-keywords check-examples \
-        test-lsp test-vscode asan test-asan test-all-len16 \
+        test-lsp test-repl test-vscode asan test-asan test-all-len16 \
         test-gcc test-clang test-gcc-O2 test-clang-O2 test-native test-native-cc test-x86asm \
         test-gcc-len16 test-clang-len16 test-native-len16 \
         test-all test-all-O2 help print-bin

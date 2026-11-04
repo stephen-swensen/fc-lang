@@ -30,7 +30,7 @@ exit code.
 
 | Command | What it does |
 |---------|--------------|
-| `make check` | Everything below that runs in a few minutes: the source checks, `test-all`, `test-all-len16` and `test-lsp`. Run this before sending a change. CI (`.github/workflows/check.yml`) runs it and `test-vscode` on every push. |
+| `make check` | Everything below that runs in a few minutes: the source checks, `test-all`, `test-all-len16`, `test-lsp` and `test-repl`. Run this before sending a change. CI (`.github/workflows/check.yml`) runs it and `test-vscode` on every push. |
 | `make check-ascii`, `check-warnings`, `check-keywords`, `check-examples` | The source checks: `src/` is ASCII; the compiler builds warning-free under gcc and clang; every hand-kept keyword list (token names, the spec, both editor grammars) matches the lexer's table, and every built-in operator has hover text (`tools/check-keywords.py`); `spec/examples.fc` compiles and runs. |
 | `make test-all` | The suite under gcc and clang, in parallel. |
 | `make test-gcc` / `make test-clang` | One compiler. |
@@ -41,7 +41,8 @@ exit code.
 | `make test-all-O2` (and `test-gcc-O2`, `test-clang-O2`) | Compile the generated C at `-O2`, which surfaces undefined behavior the optimizer exploits. |
 | `make test-all-len16` (and `test-gcc-len16`, `test-clang-len16`) | The whole suite with 16-bit stored slice lengths (`--len-repr 16`). Keep these green when touching slice code. |
 | `make test-lsp` | Language server tests (needs `python3`). |
-| `make test-asan` | The compiler suite (gcc) and the language server tests against the `make asan` build. Slower; run it after changing memory handling. |
+| `make test-repl` | Interactive session tests (`fcc --interactive`; needs `python3`, Linux x86-64). |
+| `make test-asan` | The compiler suite (gcc), the language server tests and the interactive session tests against the `make asan` build. Slower; run it after changing memory handling. |
 | `make test-vscode` | The VSCode extension against a real server, with the VSCode API mocked (needs `node`). Run it after changing `editors/vscode/extension.js`. |
 
 Add `FILTER=pattern` to run the tests whose `category/name` matches an awk
@@ -161,6 +162,16 @@ Every session also checks that the server survived: a session whose process
 crashed, or printed a sanitizer report, fails the run at the end even if its
 assertions passed. `make test-asan` runs the file against the sanitizer build,
 which is how memory errors in the server are found.
+
+### Interactive session tests
+
+`tests/repl/repl_test.py` runs `fcc --interactive` two ways. A `script(...)`
+scenario enters its text as one input with stdin not a terminal, and checks
+the session's whole output (stdout and stderr together) and exit status
+exactly. A `Term` scenario drives a session through a pseudo-terminal, typing
+each input when the prompt is up (`send`, `paste`, `interrupt_after`), and
+checks that the lines it shows include the expected ones in order (`expect`).
+Add a scenario in the same style; the file runs in a few seconds.
 
 ### Refactoring
 

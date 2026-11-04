@@ -45,7 +45,18 @@ void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *
  * order definitions are emitted in is codegen's (emit_types). */
 void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab);
 
+/* The same for the instances from index `first` on, which are new since a
+ * finalized table held `first` of them: an interactive session finalizes each
+ * statement's instances as it compiles the statement. */
+void mono_finalize_types_from(MonoTable *t, int first, Arena *a, InternTable *intern,
+                              SymbolTable *symtab);
+
 /* Discover all transitive monomorphized instances by walking template function
  * bodies. Generic calls inside generic functions aren't resolved until the outer
  * function is instantiated; this fixpoint loop finds them all. Call after pass2. */
 void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab);
+
+/* The same, walking only the instances from index `first` on (and those they
+ * discover): the instances before it were walked already. */
+void mono_discover_transitive_from(MonoTable *t, int first, Arena *a, InternTable *intern,
+                                   SymbolTable *symtab);

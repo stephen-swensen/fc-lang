@@ -332,24 +332,23 @@ void symtab_init(SymbolTable *t) {
     t->symbols = NULL;
     t->count = 0;
     t->capacity = 0;
+    t->outer = NULL;
 }
 
 Symbol *symtab_lookup(SymbolTable *t, const char *name) {
     /* Since names are interned, pointer comparison works */
-    for (int i = 0; i < t->count; i++) {
-        if (t->symbols[i].name == name) {
-            return &t->symbols[i];
-        }
-    }
+    for (; t; t = t->outer)
+        for (int i = 0; i < t->count; i++)
+            if (t->symbols[i].name == name)
+                return &t->symbols[i];
     return NULL;
 }
 
 Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind) {
-    for (int i = 0; i < t->count; i++) {
-        if (t->symbols[i].name == name && t->symbols[i].kind == kind) {
-            return &t->symbols[i];
-        }
-    }
+    for (; t; t = t->outer)
+        for (int i = 0; i < t->count; i++)
+            if (t->symbols[i].name == name && t->symbols[i].kind == kind)
+                return &t->symbols[i];
     return NULL;
 }
 
@@ -366,11 +365,13 @@ Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind) {
 Symbol *symtab_lookup_kind_ns(SymbolTable *t, const char *name, DeclKind kind,
                                const char *ns_prefix) {
     bool any_ns = is_mangled_root_name(name);
-    for (int i = 0; i < t->count; i++) {
-        Symbol *s = &t->symbols[i];
-        if (s->name == name && s->kind == kind &&
-            (any_ns || s->ns_prefix == ns_prefix)) {
-            return s;
+    for (; t; t = t->outer) {
+        for (int i = 0; i < t->count; i++) {
+            Symbol *s = &t->symbols[i];
+            if (s->name == name && s->kind == kind &&
+                (any_ns || s->ns_prefix == ns_prefix)) {
+                return s;
+            }
         }
     }
     return NULL;
@@ -577,20 +578,36 @@ done:
     free(route_disp);
 }
 
+/* `t` alone, without the tables it is chained to: a copy in *view whose
+ * `outer` is NULL. A redefinition is a second declaration in the same table,
+ * and a newer table's type of any kind shadows an older one's. */
+static SymbolTable *own_table(SymbolTable *t, SymbolTable *view) {
+    *view = *t;
+    view->outer = NULL;
+    return view;
+}
+
 Symbol *symtab_lookup_type(SymbolTable *t, const char *name) {
-    Symbol *s = symtab_lookup_kind(t, name, DECL_STRUCT);
-    if (!s) s = symtab_lookup_kind(t, name, DECL_UNION);
-    if (!s) s = symtab_lookup_kind(t, name, DECL_ENUM);
-    return s;
+    for (; t; t = t->outer) {
+        SymbolTable v;
+        SymbolTable *own = own_table(t, &v);
+        Symbol *s = symtab_lookup_kind(own, name, DECL_STRUCT);
+        if (!s) s = symtab_lookup_kind(own, name, DECL_UNION);
+        if (!s) s = symtab_lookup_kind(own, name, DECL_ENUM);
+        if (s) return s;
+    }
+    return NULL;
 }
 
 /* Find a module symbol by name and namespace prefix */
 Symbol *symtab_lookup_module(SymbolTable *t, const char *name, const char *ns_prefix) {
-    for (int i = 0; i < t->count; i++) {
-        Symbol *s = &t->symbols[i];
-        if (s->kind != DECL_MODULE) continue;
-        if (s->name != name) continue;
-        if (ns_prefix == s->ns_prefix) return s;  /* both NULL or same interned ptr */
+    for (; t; t = t->outer) {
+        for (int i = 0; i < t->count; i++) {
+            Symbol *s = &t->symbols[i];
+            if (s->kind != DECL_MODULE) continue;
+            if (s->name != name) continue;
+            if (ns_prefix == s->ns_prefix) return s;  /* both NULL or same interned ptr */
+        }
     }
     return NULL;
 }
@@ -615,9 +632,17 @@ static const char *make_mangled(InternTable *intern, const char *prefix, const c
  *
  * Conversely, since every user declaration's C name starts with `fc__`, a
  * compiler-derived spelling that does not (`fc_str`, `fc_eq_*`, `fc_tag_*`,
- * `_l_x_3`) cannot collide with one. */
+ * `_l_x_3`) cannot collide with one.
+ *
+ * An interactive session roots each statement's global declarations at a
+ * root of its own (pass1_set_global_root), `fc__<n>`: a numeric component,
+ * which no identifier spells, so it cannot meet a namespace or module path. */
+static const char *g_global_root;
+
+void pass1_set_global_root(const char *root) { g_global_root = root; }
+
 static const char *mangle_root(InternTable *intern, const char *ns) {
-    return ns ? make_mangled(intern, "fc", ns) : "fc";
+    return ns ? make_mangled(intern, "fc", ns) : g_global_root ? g_global_root : "fc";
 }
 
 /* Canonicalize generic stub names in a type tree.
@@ -1520,8 +1545,20 @@ static void collect_error_members(Decl *d, const char *display_prefix,
     }
 }
 
+static bool g_err_append;
+
+void error_codes_set_append(bool append) { g_err_append = append; }
+
+void error_codes_truncate(int count) {
+    if (count < g_err_count) g_err_count = count;
+}
+
 static void assign_error_codes(Program *prog, InternTable *intern) {
-    g_err_count = 0;  /* rebuilt per collection; the LSP re-runs pass1 per edit */
+    /* Rebuilt per collection (the LSP re-runs pass1 per edit), except in an
+     * interactive session, where each collection adds its errors after the
+     * ones before it. */
+    int first = g_err_append ? g_err_count : 0;
+    g_err_count = first;
     for (int i = 0; i < prog->decl_count; i++) {
         Decl *d = prog->decls[i];
         if (d->kind != DECL_MODULE) continue;
@@ -1534,15 +1571,16 @@ static void assign_error_codes(Program *prog, InternTable *intern) {
         }
         collect_error_members(d, display, intern);
     }
-    if (g_err_count == 0) return;
-    qsort(g_err_entries, (size_t)g_err_count, sizeof(ErrEntry), err_entry_cmp);
+    if (g_err_count == first) return;
+    qsort(g_err_entries + first, (size_t)(g_err_count - first), sizeof(ErrEntry),
+          err_entry_cmp);
     if ((int64_t)g_err_count > (int64_t)INT32_MAX - FC_ERROR_CODE_BASE) {
-        diag_error(g_err_entries[0].let_decl->loc,
+        diag_error(g_err_entries[first].let_decl->loc,
             "too many declared errors (%d); the error-code space is exhausted",
             g_err_count);
         return;
     }
-    for (int i = 0; i < g_err_count; i++)
+    for (int i = first; i < g_err_count; i++)
         g_err_entries[i].let_decl->let.init->int_lit.value =
             (uint64_t)(FC_ERROR_CODE_BASE + i);
 }
@@ -1906,7 +1944,8 @@ static void register_modules(Program *prog, SymbolTable *symtab, InternTable *in
 
         /* A module may share its name with a struct, union or enum (its
          * companion type); a second module of that name is a redefinition. */
-        if (symtab_lookup_module(symtab, mod_name, ns_prefix)) {
+        SymbolTable own;
+        if (symtab_lookup_module(own_table(symtab, &own), mod_name, ns_prefix)) {
             diag_error(d->loc,
                 d->module.is_error_group
                     ? "redefinition of error group '%s'"
@@ -1992,7 +2031,8 @@ static void register_top_level_decls(Program *prog, SymbolTable *symtab,
         }
         switch (d->kind) {
         case DECL_LET: {
-            if (symtab_lookup(symtab, d->let.name)) {
+            SymbolTable own;
+            if (symtab_lookup(own_table(symtab, &own), d->let.name)) {
                 diag_error(d->loc, "redefinition of '%s'", d->let.name);
             } else {
                 Symbol *let_sym = symtab_add(symtab, d->let.name, DECL_LET, d);
@@ -2006,7 +2046,8 @@ static void register_top_level_decls(Program *prog, SymbolTable *symtab,
              * of codegen_name. */
             if (strcmp(d->let.name, "main") != 0 && !d->let.codegen_name &&
                 d->let.init) {
-                d->let.codegen_name = make_mangled(intern, "fc", d->let.name);
+                d->let.codegen_name = make_mangled(intern, mangle_root(intern, NULL),
+                                                   d->let.name);
             }
             break;
         }
@@ -2020,9 +2061,11 @@ static void register_top_level_decls(Program *prog, SymbolTable *symtab,
             }
             if (d->kind == DECL_ENUM) resolve_enum_values(d);
             const char *src_name = *type_decl_name(d);
-            if (symtab_lookup_kind_ns(symtab, src_name, DECL_STRUCT, current_ns) ||
-                symtab_lookup_kind_ns(symtab, src_name, DECL_UNION, current_ns) ||
-                symtab_lookup_kind_ns(symtab, src_name, DECL_ENUM, current_ns)) {
+            SymbolTable own;
+            SymbolTable *here = own_table(symtab, &own);
+            if (symtab_lookup_kind_ns(here, src_name, DECL_STRUCT, current_ns) ||
+                symtab_lookup_kind_ns(here, src_name, DECL_UNION, current_ns) ||
+                symtab_lookup_kind_ns(here, src_name, DECL_ENUM, current_ns)) {
                 diag_error(d->loc, "redefinition of '%s'", src_name);
                 break;
             }

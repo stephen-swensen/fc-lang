@@ -334,6 +334,39 @@ wolf-fc's command lines and docs stay as they are.
 
 ---
 
+## Interactive session (`fcc --interactive`): follow-ups
+
+Built 2026-11-03 (spec §Interactive sessions; design in `docs/ARCHITECTURE.md` →
+"Interactive session"). Open items, none blocking:
+
+- **VS Code: send a selection.** Shift+Enter sends the selection to a session in the
+  integrated terminal, wrapped in bracketed-paste markers so it is one input. Wanted
+  with it: a `#line N "file"` directive at the head of the paste, so diagnostics name
+  the file and its line rather than `stdin`, and a message for a name defined only
+  later in the file ("not defined in this session yet"). A "send file" command
+  (`#load`) is deferred.
+- **`defer` at the prompt.** Rejected for now. The recommended meaning, should it be
+  wanted: run at the end of the session, in reverse order, as `main`'s defers run when
+  it returns (Ctrl+D and `return` run them; an exit or a kill skips them). Allowing it
+  later breaks nothing.
+- **A destructuring `let` at the prompt** (`let { a, b } = ...`): rejected; lower it to
+  one session binding per name.
+- **Scripts that end.** An `.fcx` run from a terminal (`#!` line) lands at the prompt
+  when it finishes. fsi and python run a file argument and exit, with a flag to stay
+  (`fsi --use:`, `python -i`); a flag here would give the same.
+- **`err(...)` shown by name.** A session shows a declared error code as a number; the
+  descriptor could carry the error-code names, as `error_name` does.
+- **History across sessions.** Kept in memory only; a history file is the usual next
+  step.
+- **Library inputs.** Only shared libraries load into a session (`-l`, `.so`); a `.o` or
+  `.a` would need the in-memory linker to take archive members.
+- **Cost per statement.** About 1 ms (a fork per statement, and the C environment
+  rebuilt from every declaration for each unit); 3000 statements take 4 s. Fine at a
+  prompt; a cache of the C environment across units is the obvious saving if long
+  scripts matter.
+
+---
+
 ## Editor / LSP server (`fcc --lsp`)
 
 The server's architecture is described in `docs/ARCHITECTURE.md` → "Language server";

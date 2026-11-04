@@ -618,7 +618,12 @@ dangling:
 }
 
 void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
-    if (t->count == 0) return;
+    mono_finalize_types_from(t, 0, a, intern, symtab);
+}
+
+void mono_finalize_types_from(MonoTable *t, int first, Arena *a, InternTable *intern,
+                              SymbolTable *symtab) {
+    if (t->count == first) return;
 
     /* Give every concrete_type a private deep copy before the in-place name
      * canonicalization below (discover_nested_types and mono_resolve_type_names
@@ -627,7 +632,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
      * shares field/variant subtrees with a live pass2 type or a generic
      * template, and renaming those shared nodes would corrupt them. Instances
      * created during the discovery loop below deep-copy at their build sites. */
-    for (int i = 0; i < t->count; i++) {
+    for (int i = first; i < t->count; i++) {
         if (t->entries[i].concrete_type)
             t->entries[i].concrete_type = type_deep_copy(a, t->entries[i].concrete_type);
     }
@@ -638,7 +643,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
     int prev_count;
     do {
         prev_count = t->count;
-        for (int i = 0; i < prev_count; i++) {
+        for (int i = first; i < prev_count; i++) {
             MonoInstance *inst = &t->entries[i];
             if (inst->concrete_type && (inst->decl_kind == DECL_STRUCT || inst->decl_kind == DECL_UNION)) {
                 Type *ct = inst->concrete_type;
@@ -659,7 +664,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
      * (e.g., "fc__m__entry") to instance C identifiers (e.g.,
      * "fc__m__entry__3_i323_i32"). Done after discovery so all instances are
      * registered and mono_find can prevent double-mangling. */
-    for (int i = 0; i < t->count; i++) {
+    for (int i = first; i < t->count; i++) {
         MonoInstance *inst = &t->entries[i];
         if (inst->concrete_type)
             mono_resolve_type_names(t, a, intern, inst->concrete_type);
@@ -671,7 +676,7 @@ void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTabl
      * codegen. After an error, registration has stopped (mono_register), so
      * missing instances are expected and that error already stops codegen. */
     bool dangling_reported = diag_error_count() > 0;
-    for (int i = 0; i < t->count && !dangling_reported; i++) {
+    for (int i = first; i < t->count && !dangling_reported; i++) {
         MonoInstance *inst = &t->entries[i];
         if (!inst->concrete_type) continue;
         Type *ct = inst->concrete_type;
@@ -701,7 +706,12 @@ static void mono_drain_const_eval_error(void) {
 }
 
 void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab) {
-    int discovered = 0;
+    mono_discover_transitive_from(t, 0, a, intern, symtab);
+}
+
+void mono_discover_transitive_from(MonoTable *t, int first, Arena *a, InternTable *intern,
+                                   SymbolTable *symtab) {
+    int discovered = first;
     while (discovered < t->count) {
         int batch_end = t->count;
         for (int i = discovered; i < batch_end; i++) {

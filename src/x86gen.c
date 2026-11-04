@@ -54,6 +54,14 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
     diag_error_simple("--native is supported only on Linux x86-64");
 }
 
+void x86gen_emit_unit(Program *prog, Obj *obj, MonoTable *mono,
+                      Arena *arena, InternTable *intern, SymbolTable *symtab,
+                      const char *const *include_dirs, int ninclude_dirs, X86Unit *unit) {
+    (void)prog; (void)obj; (void)mono; (void)arena; (void)intern; (void)symtab;
+    (void)include_dirs; (void)ninclude_dirs; (void)unit;
+    diag_error_simple("--interactive is supported only on Linux x86-64");
+}
+
 #else /* Linux x86-64: the backend */
 
 #include "x86asm.h"
@@ -6896,6 +6904,178 @@ static void emit_c_main(SrcLoc main_def) {
     if (g_backtraces) trace_add("main", end, "main", main_def);
 }
 
+/* ---- Interactive sessions ----
+ * A unit's runner (see x86gen_emit_unit) in place of the C entry point, and
+ * the descriptor of the value the unit binds. */
+
+static void emit_unit_runner(const char *sym) {
+    begin_function();
+    g_fn_ret = type_int32();    /* a `return` at the prompt returns the exit code */
+    g_tco_ok = false;
+    int32_t next = slot_alloc(8, 8);
+    movq(R(RDI), fp(next));
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < g_rg_n; i++) {
+            Decl *d = g_runtime_globals[i];
+            if ((pass == 0) != d->let.is_module_member) continue;
+            if (!d->let.init) continue;
+            emit_loc(d->loc);
+            defer_push(false);
+            gen_expr(d->let.init);
+            if (!type_valueless(conc(d->let.resolved_type))) {
+                const char *name = d->let.codegen_name ? d->let.codegen_name : d->let.name;
+                leaq(RIPREL(asm_sym(name), 0), R(RDX));
+                store_val(d->let.resolved_type, RDX, 0);
+            }
+            defer_pop();
+        }
+    }
+    movq(fp(next), R(RAX));
+    call_ind(R(RAX));
+    xorl(R(RAX), R(RAX));
+    end_function(sym, true);
+}
+
+static void desc_byte(Buf *b, unsigned v) {
+    char c = (char)v;
+    buf_put(b, &c, 1);
+}
+
+static void desc_num(Buf *b, uint64_t v, int width) {
+    char t[8];
+    for (int i = 0; i < width; i++) t[i] = (char)(v >> (8 * i));
+    buf_put(b, t, (size_t)width);
+}
+
+static void desc_str(Buf *b, const char *s) {
+    desc_num(b, strlen(s), 4);
+    buf_puts(b, s);
+}
+
+/* Beyond this depth a type is shown by name: a type reaching itself through
+ * a slice would have no end. */
+enum { DESC_DEPTH = 8 };
+
+static void desc_type(Buf *b, Type *t, int depth) {
+    t = conc(t);
+    if (!t || depth > DESC_DEPTH) {
+        desc_byte(b, XD_OPAQUE);
+        desc_str(b, t ? type_name(t) : "?");
+        return;
+    }
+    switch (t->kind) {
+    case TYPE_INT8: case TYPE_INT16: case TYPE_INT32: case TYPE_INT64: case TYPE_ISIZE:
+        desc_byte(b, XD_INT);
+        desc_num(b, (uint64_t)int_width(t), 4);
+        return;
+    case TYPE_UINT8: case TYPE_UINT16: case TYPE_UINT32: case TYPE_UINT64: case TYPE_USIZE:
+        desc_byte(b, XD_UINT);
+        desc_num(b, (uint64_t)int_width(t), 4);
+        return;
+    case TYPE_BOOL:
+        desc_byte(b, XD_BOOL);
+        return;
+    case TYPE_FLOAT32: case TYPE_FLOAT64:
+        desc_byte(b, XD_FLOAT);
+        desc_num(b, (uint64_t)ty_size(t), 4);
+        return;
+    case TYPE_POINTER:
+        desc_byte(b, is_cstr_type(t) ? XD_CSTR : XD_PTR);
+        return;
+    case TYPE_ANY_PTR:
+        desc_byte(b, XD_PTR);
+        return;
+    case TYPE_FUNC:
+        desc_byte(b, XD_FUNC);
+        return;
+    case TYPE_SLICE:
+        if (is_str_type(t)) {
+            desc_byte(b, XD_STR);
+            desc_num(b, (uint64_t)(g_len_repr / 8), 4);
+            return;
+        }
+        desc_byte(b, XD_SLICE);
+        desc_num(b, (uint64_t)(g_len_repr / 8), 4);
+        desc_num(b, (uint64_t)ty_size(t->slice.elem), 4);
+        desc_type(b, t->slice.elem, depth + 1);
+        return;
+    case TYPE_FIXED_ARRAY:
+        desc_byte(b, XD_ARRAY);
+        desc_num(b, (uint64_t)fixarr_size(t), 4);
+        desc_num(b, (uint64_t)ty_size(t->fixed_array.elem), 4);
+        desc_type(b, t->fixed_array.elem, depth + 1);
+        return;
+    case TYPE_STRUCT: {
+        Layout *L = agg_layout(t);
+        if (L->ext || t->struc.is_c_union) {
+            desc_byte(b, XD_OPAQUE);
+            desc_str(b, type_name(t));
+            return;
+        }
+        if (t->struc.is_tuple) {
+            desc_byte(b, XD_TUPLE);
+            desc_num(b, (uint64_t)L->n, 4);
+        } else {
+            desc_byte(b, XD_STRUCT);
+            desc_str(b, type_name(t));
+            desc_num(b, (uint64_t)L->n, 4);
+        }
+        for (int i = 0; i < L->n; i++) {
+            if (!t->struc.is_tuple) desc_str(b, L->fname[i]);
+            desc_num(b, (uint64_t)L->off[i], 4);
+            desc_type(b, L->ftype[i], depth + 1);
+        }
+        return;
+    }
+    case TYPE_UNION: {
+        Layout *L = agg_layout(t);
+        desc_byte(b, XD_UNION);
+        desc_str(b, type_name(t));
+        desc_num(b, (uint64_t)L->payload_off, 4);
+        desc_num(b, (uint64_t)L->n, 4);
+        for (int i = 0; i < L->n; i++) {
+            desc_str(b, L->fname[i]);
+            desc_byte(b, L->ftype[i] != NULL);
+            if (L->ftype[i]) desc_type(b, L->ftype[i], depth + 1);
+        }
+        return;
+    }
+    case TYPE_ENUM:
+        desc_byte(b, XD_ENUM);
+        desc_str(b, type_name(t));
+        desc_num(b, (uint64_t)int_width(t), 4);
+        desc_byte(b, int_signed(t));
+        desc_num(b, (uint64_t)t->enu.variant_count, 4);
+        for (int i = 0; i < t->enu.variant_count; i++) {
+            desc_num(b, t->enu.variants[i].value_bits, 8);
+            desc_str(b, t->enu.variants[i].name);
+        }
+        return;
+    case TYPE_OPTION:
+        if (is_null_sentinel(t)) {
+            desc_byte(b, XD_OPT_NULL);
+        } else {
+            desc_byte(b, XD_OPT);
+            desc_num(b, (uint64_t)ty_size(t->option.inner), 4);
+        }
+        desc_type(b, t->option.inner, depth + 1);
+        return;
+    case TYPE_RESULT: {
+        Type *in = conc(t->result.inner);
+        bool has = in && in->kind != TYPE_VOID;
+        desc_byte(b, XD_RESULT);
+        desc_num(b, (uint64_t)result_value_off(t), 4);
+        desc_byte(b, has);
+        if (has) desc_type(b, in, depth + 1);
+        return;
+    }
+    default:
+        desc_byte(b, XD_OPAQUE);
+        desc_str(b, type_name(t));
+        return;
+    }
+}
+
 /* ================================================================
  * The C header probe
  *
@@ -7670,9 +7850,12 @@ static bool is_generic(Decl *d) {
     }
 }
 
-void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
-                 Arena *arena, InternTable *intern, SymbolTable *symtab,
-                 const char *const *include_dirs, int ninclude_dirs, bool backtraces) {
+/* The program, or with `unit` one unit of an interactive session (see
+ * x86gen_emit_unit). */
+static void emit_program(Program *prog, Obj *obj, MonoTable *mono,
+                         Arena *arena, InternTable *intern, SymbolTable *symtab,
+                         const char *const *include_dirs, int ninclude_dirs, bool backtraces,
+                         X86Unit *unit) {
     g_backtraces = backtraces;
     g_mono = mono;
     g_arena = arena;
@@ -7683,15 +7866,34 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
     int n = 0, cap = 0;
     flatten(prog->decls, prog->decl_count, &all, &n, &cap);
 
+    /* A unit's C environment is the whole session's. */
+    Program env_prog = { 0 };
+    Program *env = prog;
+    Decl **env_all = all;
+    int env_n = n, env_cap = 0;
+    if (unit) {
+        env_prog.decls = unit->env;
+        env_prog.decl_count = unit->env_count;
+        env = &env_prog;
+        env_all = NULL;
+        env_n = 0;
+        flatten(unit->env, unit->env_count, &env_all, &env_n, &env_cap);
+    }
+
     asm_init(obj);
-    build_cenv(prog, all, n, include_dirs, ninclude_dirs);
-    run_probe(prog, all, n, mono);
+    build_cenv(env, env_all, env_n, include_dirs, ninclude_dirs);
+    run_probe(env, env_all, env_n, mono);
     if (diag_error_count() > 0) goto done;
 
-    /* Globals */
+    /* Globals. A unit's statement that yields nothing has no storage, but
+     * its initializer runs. */
     for (int i = 0; i < n; i++) {
         Decl *d = all[i];
-        if (d->kind == DECL_LET && !decl_is_function(d) && !is_generic(d)) emit_global(d);
+        if (d->kind != DECL_LET || decl_is_function(d) || is_generic(d)) continue;
+        if (unit && type_valueless(conc(d->let.resolved_type)))
+            DA_APPEND(g_runtime_globals, g_rg_n, g_rg_cap, d);
+        else
+            emit_global(d);
     }
 
     /* Functions */
@@ -7711,7 +7913,7 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
         f.body_count = fn->func.body_count;
         f.disp = d->let.name;
         f.def = d->loc;
-        if (!d->let.is_module_member && strcmp(d->let.name, "main") == 0) {
+        if (!unit && !d->let.is_module_member && strcmp(d->let.name, "main") == 0) {
             f.sym = "fc_main";
             f.is_main = true;
             f.ret = type_int32();
@@ -7730,8 +7932,8 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
     }
     free(lambdas.items);
 
-    /* Generic instances */
-    for (int mi = 0; mi < mono->count; mi++) {
+    /* Generic instances (a unit's new ones) */
+    for (int mi = unit ? unit->mono_first : 0; mi < mono->count; mi++) {
         MonoInstance *inst = &mono->entries[mi];
         if (inst->decl_kind != DECL_LET || !inst->template_decl) continue;
         Decl *tmpl = inst->template_decl;
@@ -7764,7 +7966,21 @@ void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
         leave_instance();
     }
 
-    if (has_main) emit_c_main(main_def);
+    if (unit) emit_unit_runner(unit->runner);
+    else if (has_main) emit_c_main(main_def);
+
+    /* The value the unit binds: its one non-function binding. */
+    if (unit) {
+        unit->desc = NULL;
+        unit->desc_len = 0;
+        if (n == 1 && all[0]->kind == DECL_LET && !decl_is_function(all[0]) &&
+            !type_valueless(conc(all[0]->let.resolved_type))) {
+            Buf b = { 0 };
+            desc_type(&b, all[0]->let.resolved_type, 0);
+            unit->desc = (unsigned char *)b.p;
+            unit->desc_len = (int)b.len;
+        }
+    }
 
     /* Helpers requested along the way, which may request more. */
     int done_eq = 0, done_tr = 0, done_cw = 0;
@@ -7795,6 +8011,8 @@ done:
     code_free(&g_fnbody); code_free(&g_cold); code_free(&g_text);
     hmap_free(&g_locals); hmap_free(&g_reg_locals); hmap_free(&g_addr_taken); hmap_free(&g_fconsts); hmap_free(&g_strings); hmap_free(&g_strhdrs); hmap_free(&g_fnvals);
     hmap_free(&g_layouts); hmap_free(&g_files); hmap_free(&g_probe); hmap_free(&g_probed_layouts);
+    g_file_count = 0;
+    g_errnames_label = 0;
     free(g_spills); g_spills = NULL; g_spill_cap = 0;
     free(g_eqs); g_eqs = NULL; g_eq_n = g_eq_cap = 0;
     free(g_tramps); g_tramps = NULL; g_tramp_n = g_tramp_cap = 0;
@@ -7803,7 +8021,22 @@ done:
     free(g_traces); g_traces = NULL; g_ntraces = g_traces_cap = 0;
     hmap_free(&g_shim_used);
     free_cenv();
+    if (env_all != all) free(env_all);
     free(all);
+}
+
+void x86gen_emit(Program *prog, Obj *obj, MonoTable *mono,
+                 Arena *arena, InternTable *intern, SymbolTable *symtab,
+                 const char *const *include_dirs, int ninclude_dirs, bool backtraces) {
+    emit_program(prog, obj, mono, arena, intern, symtab, include_dirs, ninclude_dirs,
+                 backtraces, NULL);
+}
+
+void x86gen_emit_unit(Program *prog, Obj *obj, MonoTable *mono,
+                      Arena *arena, InternTable *intern, SymbolTable *symtab,
+                      const char *const *include_dirs, int ninclude_dirs, X86Unit *unit) {
+    emit_program(prog, obj, mono, arena, intern, symtab, include_dirs, ninclude_dirs,
+                 false, unit);
 }
 
 #endif /* Linux x86-64 */

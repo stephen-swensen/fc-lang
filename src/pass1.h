@@ -41,6 +41,13 @@ struct SymbolTable {
     Symbol *symbols;
     int count;
     int capacity;
+    /* The table this one continues, or NULL. An interactive session (fcc
+     * --interactive) gives each statement its own top-level table, chained to
+     * the tables of the statements before it: a lookup that misses here goes
+     * on to `outer`, so a name resolves to its newest declaration. A table
+     * stops growing when its statement is done, so the Symbol pointers the
+     * statement's AST holds stay valid. Never set for a module's members. */
+    struct SymbolTable *outer;
 };
 
 /* One name an import brings into scope: the name as written there (an `as`
@@ -77,8 +84,9 @@ typedef struct FileImportScopes {
  * FC_ERROR_CODE_BASE (so a declared code is provably non-zero and the table
  * is diffable across builds). [1, 65535] is reserved platform passthrough
  * (errno / Win32 / WSA); 0 is the ok tag. The registry is rebuilt on every
- * pass1_collect (the LSP re-runs it per edit) and read by codegen (the
- * error_name table / --backtraces aborts) and the CLI (the .errcodes map). */
+ * pass1_collect (the LSP re-runs it per edit), or in an interactive session
+ * added to (error_codes_set_append), and read by codegen (the error_name
+ * table / --backtraces aborts) and the CLI (the .errcodes map). */
 #define FC_ERROR_CODE_BASE 65536
 
 typedef struct ErrorCodeInfo {
@@ -89,6 +97,21 @@ typedef struct ErrorCodeInfo {
 int error_code_count(void);
 ErrorCodeInfo error_code_info(int idx);  /* code = FC_ERROR_CODE_BASE + idx */
 
+/* Interactive sessions number declared errors in the order they are entered:
+ * with append set, pass1_collect numbers a collection's new errors after the
+ * ones already registered instead of renumbering every error, since code
+ * already compiled holds the earlier codes. error_codes_truncate(n) drops the
+ * errors registered after the first n, undoing a statement that failed. */
+void error_codes_set_append(bool append);
+void error_codes_truncate(int count);
+
+/* The root of the C names pass1 gives top-level declarations of the global
+ * namespace: NULL for the default `fc` (`fc__name`, `fc__mod__name`). An
+ * interactive session gives each statement its own root, so that a name
+ * declared again in a later statement gets a C name of its own. */
+void pass1_set_global_root(const char *root);
+
+/* Lookups search `t`, then the tables it is chained to (SymbolTable.outer). */
 void symtab_init(SymbolTable *t);
 Symbol *symtab_lookup(SymbolTable *t, const char *name);
 Symbol *symtab_lookup_kind(SymbolTable *t, const char *name, DeclKind kind);

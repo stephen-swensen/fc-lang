@@ -20,7 +20,8 @@ listed in the spec under "Why C as a target"; the test suite compiles it with
 gcc and clang under `-Wall -Werror`.
 
 The same binary is also the language server (`fcc --lsp`), which runs the front
-end in-process on every edit.
+end in-process on every edit, and the interactive session (`fcc
+--interactive`), which compiles and runs each input as it is entered.
 
 ## Pipeline
 
@@ -89,6 +90,8 @@ The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
 | `common.c/h` | The arena allocator; the `xmalloc`/`xcalloc`/`xrealloc` wrappers, which exit on out-of-memory; growable arrays (`DA_APPEND`); a string-keyed hash map (`HMap`); exact-size string builders; the intern table (the parser interns every name, so names compare by pointer); file reading; name helpers shared by several passes (`c_safe_ident`, `is_mangled_root_name`, `mangled_source_name`, `ns_display`); string-literal decoding and the one escape table (`simple_escape_byte`); the one format-spec reader and conversion table (`interp_spec_scan`, `interp_conv_class`), shared by the lexer, facts and codegen; and `g_len_repr`, the `--len-repr` setting. |
 | `analyze.c/h` | The non-fatal front end used by the language server. |
 | `lsp.c/h`, `json.c/h` | The language server and its JSON-RPC value model. |
+| `repl.c/h` | The interactive session (`--interactive`): each input's items compiled one by one against the session so far, linked in memory, and run in a process that keeps the running program. See [Interactive session](#interactive-session). |
+| `lineedit.c/h` | The session's line editor: raw-mode editing, history, bracketed paste. |
 | `builtin_docs.inc` | Hover documentation for built-in intrinsics (user-facing markdown). |
 | `platform.c/h` | Host detection (`os`/`arch`/`env` flags) and path canonicalization. |
 | `version.c/h` | `--version` output; the build writes the git and compiler details into a generated header. |
@@ -516,7 +519,9 @@ module-level static in the front end must not carry state from one analysis
 into the next. Each one is reset where its pass starts (pass1's error-code
 table, the diagnostic counters in `diag_reset_counts`), is drained by its
 reader (the const-eval stash), or is a counter whose value only needs to be
-unique (`local_c_name`'s id).
+unique (`local_c_name`'s id). The interactive session runs the native backend
+once per item, so `x86gen_emit`'s statics are reset when it finishes, in the
+same cleanup that frees its tables.
 
 ### Const generics
 
@@ -631,3 +636,96 @@ document is its own unit.
 
 The editor extension in `editors/vscode/` is a thin client that starts
 `fcc --lsp` and restarts it if it exits.
+
+## Interactive session
+
+`fcc --interactive` (`repl_main` in `src/repl.c`) compiles and runs FC as it
+is entered; the spec's §Interactive sessions gives the rules. The design
+point is that nothing entered is checked or compiled twice: each item of an
+input is a **unit**, compiled once against the session so far, and the
+running program accumulates the units' code.
+
+### Units
+
+`parse_session_input` reads an input as items: declarations, as at the top of
+a file, and statements, as in a function body. Each item becomes a little
+program of top-level declarations (`compile_unit`):
+
+- a `let` is itself, marked `is_session`; one that does not bind a function is
+  a session binding, a global whose initializer may be any expression (pass2
+  skips the file-level initializer rule for it, and does not let it see its
+  own name);
+- a statement is a `let it = <statement>` marked `is_session_stmt`, which may
+  be `void` (then the unit's table drops `it`, so nothing is bound);
+- a type, module, error group or import is as written.
+
+Each unit runs pass1, pass2 and the monomorphization steps on its own
+program, with three settings that make the steps incremental, each a no-op
+outside a session:
+
+- **Chained symbol tables.** The unit's top-level `SymbolTable` has `outer`
+  set to the table before it, and every lookup in pass1 and pass2 that falls
+  through the current table continues along `outer`, so a name resolves to
+  its newest declaration (shadowing). The redefinition checks look in the
+  unit's own table only (`own_table`). A table is never written again once
+  its unit is compiled, so the `Symbol` pointers the unit's AST holds stay
+  valid, and the iterating steps of pass1 and pass2 (resolved-symbol binding,
+  module parents, kind inference, cycle checks) see only the new unit.
+- **A root per unit.** `pass1_set_global_root` gives the unit's global names
+  their own C root, `fc__<n>`, so a name declared again gets new C symbols
+  and new generic-instance names, and what was compiled against the old one
+  keeps it.
+- **Watermarks.** `mono_discover_transitive_from` and
+  `mono_finalize_types_from` process only the instances the unit registered,
+  and `error_codes_set_append` numbers its error groups after the ones before
+  instead of renumbering every code.
+
+`x86gen_emit_unit` compiles the unit into an object of its own: its
+functions, its globals, the generic instances from the watermark on, and a
+**runner** in place of the C entry point. The runner runs the unit's
+initializers, then calls the continuation it was passed, which does not
+return, so the frame holding what the initializers built on the stack lives
+as long as the session (as a program's lives in `main`). A `return` at the
+prompt returns from the runner instead, which ends the session. The C
+environment (headers, defines, the probe of extern layouts) is built from
+every declaration of the session, since the unit's code may name an extern
+an earlier unit declared. For a unit that binds a value, `x86gen_emit_unit`
+also returns a value descriptor (`X86Desc` in `x86gen.h`): the type's layout,
+from which the session shows the value.
+
+### Processes and linking
+
+The supervisor (the `fcc` process) owns the terminal, the compiler and the
+linker. The holder, forked from it before anything runs, owns the running
+program. Both see one region of address space reserved at startup, and the
+libraries (libm, `-l`) are loaded before the fork, so an address the
+supervisor computes is valid in the holder.
+
+`link_unit` places a unit's sections in the region and resolves its symbols:
+its own, then the units before it (by name, in the session's symbol map), then
+the libraries (`dlsym`). A call to a library goes through a jump stub, and a
+GOT reference through a slot, both in the region, since a library is out of
+32-bit reach of the region. The supervisor sends the linked bytes to the
+holder, which writes them in place.
+
+To run a unit, the holder forks: the child calls the runner, and when the
+continuation is reached the statement is done. The child then shows the
+value (in a further child, so a dangling pointer cannot end the session),
+tells its parent it has taken over, and serves the supervisor from then on;
+the parent exits. If the child dies instead (an abort, Ctrl+C), the parent is
+still the holder, holding the session as it was before the statement. The
+supervisor adopts the exited holders (`PR_SET_CHILD_SUBREAPER`) and reaps
+them.
+
+The holder runs on a large stack of its own (256 MB, reserved), since every
+statement's frames stay on it; under AddressSanitizer it keeps the process's.
+
+### Undoing
+
+An input compiles and links all of its units before any runs. A failure
+there undoes the whole input (`undo_input`): the tables, the import scope
+entries, the instance table, the symbol map (through an undo log) and the
+region's allocation, none of which reached the holder. A unit that fails at
+run time undoes only the front end's record of it and of the units after it
+(`undo_declarations`): its code stays loaded, unreferenced. Undone tables are
+not freed, since generic instances may still point into them.

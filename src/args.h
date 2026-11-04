@@ -53,6 +53,8 @@ typedef struct {
     bool         backtraces;
     bool         native;     /* --native: an x86-64 executable instead of C */
     bool         compile_only; /* -c: with --native, an object file instead */
+    bool         interactive; /* --interactive: a session at a prompt, on the
+                                 native backend; inputs are optional */
     char       **link_inputs; /* owned: object, archive and library files
                                  (rebased) and -lNAME, in command-line order */
     int          link_count, link_cap;
@@ -68,8 +70,9 @@ typedef struct {
  * (unless --no-auto-detect), --flag overrides (replace by name), -o, and turns
  * positionals into inputs with response-file glob/rebase. A positional ending
  * in .o, .a or .so (or .so.N) is a link input, as are -l libraries; both, and
- * -L, are for a --native executable only. -I directories are for --native,
- * with or without -c. Flag name/value
+ * -L, are for a --native executable or an --interactive session only. -I
+ * directories are for --native, with or without -c, and --interactive, which
+ * implies --native. Flag name/value
  * strings borrow from `e`, so `e` must outlive the returned flags. Returns true on
  * success; on failure returns false with out->error set (and out otherwise
  * safe to pass to args_compile_free). */

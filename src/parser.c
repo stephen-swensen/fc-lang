@@ -4499,3 +4499,59 @@ Program *parse_files(Token **tokens, const int *counts, const char **filenames, 
     free(generic_names);
     return prog;
 }
+
+/* ---- Interactive input ---- */
+
+/* `let`, then `mut` or not, a name and `=`: a binding of a name, which the
+ * prompt reads as a declaration (a destructuring `let { ... } =` is read as a
+ * statement). */
+static bool at_let_binding_decl(Parser *p) {
+    int off = peek_at(p, 1)->kind == TOK_MUT ? 2 : 1;
+    return peek_at(p, off)->kind == TOK_IDENT && peek_at(p, off + 1)->kind == TOK_EQ;
+}
+
+SessionItem *parse_session_input(Token *tokens, int count, const char *filename,
+                                 const char **generic_names, int generic_name_count,
+                                 Arena *arena, InternTable *intern, int *item_count) {
+    diag_set_filename(filename);
+    Parser parser = {
+        .tokens = tokens,
+        .token_count = count,
+        .arena = arena,
+        .intern = intern,
+        .filename = filename,
+        .half_gt_pos = -1,
+        .generic_names = generic_names,
+        .generic_name_count = generic_name_count,
+    };
+    Parser *p = &parser;
+    SessionItem *items = NULL;
+    int n = 0, cap = 0;
+    skip_separators(p);
+    while (!at_end_p(p)) {
+        int guard = p->pos;
+        int errs = diag_error_count();
+        SessionItem item = { 0 };
+        if (is_decl_start(current(p)->kind) && (!check(p, TOK_LET) || at_let_binding_decl(p))) {
+            DeclList decls = {0};
+            Decl *d = parse_decl(p, &decls);
+            item.decl_count = decls.count;
+            item.decls = decl_list_finish(p, &decls);
+            if (d->kind == DECL_ERROR) recover_to_decl(p);
+        } else {
+            item.stmt = parse_block_item(p);
+        }
+        /* Items are separated as a block's statements are. */
+        if (p->pos > guard && diag_error_count() == errs && !at_stmt_terminator(p))
+            diag_error(loc_from_token(current(p)),
+                "expected a newline or ';' between statements, got %s",
+                token_kind_name(current(p)->kind));
+        if (item.stmt || item.decl_count > 0) DA_APPEND(items, n, cap, item);
+        if (p->pos == guard && !at_end_p(p)) advance_p(p);
+        skip_separators(p);
+    }
+    *item_count = n;
+    SessionItem *out = arena_dup(arena, items, n, sizeof *items);
+    free(items);
+    return out;
+}

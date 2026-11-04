@@ -665,6 +665,15 @@ struct Decl {
              * check in mono_register. */
             StaticAssert *static_asserts;   /* arena-backed */
             int static_assert_count;
+            /* Entered at the prompt of an interactive session (fcc
+             * --interactive). Its initializer runs when it is entered, after
+             * everything entered before it, so it may be any expression: the
+             * file-level initializer rules do not apply. */
+            bool is_session;
+            /* A statement entered at the prompt rather than a `let`: the
+             * binding is `it` when the statement yields a value, and a void
+             * or diverging statement binds nothing. */
+            bool is_session_stmt;
         } let;
 
         /* DECL_STRUCT */
