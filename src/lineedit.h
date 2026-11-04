@@ -11,12 +11,14 @@
  *   Up/Down, Ctrl+P/N        history        Tab                 four spaces
  *   Ctrl+L                   clear screen   Ctrl+C              discard the input
  *   Ctrl+D                   end the session on an empty line, else Delete
+ *   Alt+Enter, Esc Enter     end the line without ending the input
  *
  * A paste arrives as one piece (the terminal brackets it), newlines and
  * all, so it is never mistaken for lines typed one by one. */
 
 typedef enum {
     LE_LINE,        /* a line, without its newline */
+    LE_MORE,        /* a line ended with Alt+Enter: the input goes on to the next line */
     LE_PASTE,       /* a paste that ended in a newline: one input, every line of it */
     LE_INTERRUPT,   /* Ctrl+C: discard what has been entered */
     LE_EOF,         /* Ctrl+D on an empty line, or the end of the input */

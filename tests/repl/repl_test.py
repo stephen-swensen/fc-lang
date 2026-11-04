@@ -253,6 +253,58 @@ script("statements: loops, match, blocks, imports", """\
     val it: i64 = 4
     """)
 
+script("a destructuring let binds each of its names", """\
+    let { q, r } = { 17 / 5, 17 % 5 }
+    q * 5 + r
+    struct point =
+        x: i32
+        y: i32
+    let { x = px } = point { x = 3, y = 4 }
+    let { x = a, y = b } = point { x = 5, y = 6 }
+    let { { m, n }, _, o } = { { 1, 2 }, 3, 4 }
+    let { _, _ } = { 1, 2 }
+    let { q, r } = { r, q }
+    let mut { s, t } = { 1, 2 }
+    s = 10
+    s + t
+    """, """\
+    val q: i32 = 3
+    val r: i32 = 2
+    val it: i32 = 17
+    struct point
+    val px: i32 = 3
+    val a: i32 = 5
+    val b: i32 = 6
+    val m: i32 = 1
+    val n: i32 = 2
+    val o: i32 = 4
+    val q: i32 = 2
+    val r: i32 = 3
+    val s: i32 = 1
+    val t: i32 = 2
+    val it: i32 = 12
+    """)
+
+script("destructured names are typed as in a block", """\
+    struct holder =
+        xs: i32[]
+        n: i32
+    let buf = i32[] { 1, 2 }
+    let r = (const holder[]) holder[] { holder { xs = buf, n = 7 } }
+    let { xs = t, n = k } = r[0]
+    let { f, g } = { (v: i32) -> v + 1, (v: i32) -> v * 2 }
+    f(g(3))
+    """, """\
+    struct holder
+    val buf: i32[] = { 1, 2 }
+    val r: const holder[] = { holder { xs = { 1, 2 }, n = 7 } }
+    val t: const i32[] = { 1, 2 }
+    val k: i32 = 7
+    val f: (i32) -> i32
+    val g: (i32) -> i32
+    val it: i32 = 7
+    """)
+
 # ---------------------------------------------------------------------------
 # Types
 # ---------------------------------------------------------------------------
@@ -497,8 +549,48 @@ script("a namespace is not declared at the prompt", "namespace acme\n", """\
     stdin:1:1: error: a namespace declaration is not allowed at the prompt; load a file that declares one
     """, status=1)
 
-script("a destructuring let is not allowed at the prompt", "let { a, b } = { 1, 2 }\n", """\
-    stdin:1:1: error: a destructuring let is not allowed at the prompt yet; bind a name and take it apart with match
+script("a let with in is a statement", """\
+    let x = 1 in x + 1
+    let mut y = 2 in y = y + 1; y
+    let f = (n: i32) -> n * 2 in f(21)
+    """, """\
+    val it: i32 = 2
+    val it: i32 = 3
+    val it: i32 = 42
+    """)
+
+script("a let with in binds its name in the body only", "let x = 1 in x\nx\n", """\
+    stdin:2:1: error: undefined name 'x'
+    """, status=1)
+
+script("a pattern that does not fit is reported once, not at each use", """\
+    let f = (ts: {i32, i32}[], t: {i32, i32}) ->
+        let mut s = 0
+        for { c, d, e } in ts do s = c + e
+        match t with
+        | { a, b, c } -> a + c + s
+    """, """\
+    stdin:3:5: error: tuple {i32, i32} has 2 elements but the pattern binds 3
+    stdin:5:7: error: tuple {i32, i32} has 2 elements but the pattern matches 3
+    """, status=1)
+
+script("a destructuring let that does not fit is reported once", "let { x, y, z } = { 1, 2 }\n", """\
+    stdin:1:1: error: tuple {i32, i32} has 2 elements but the pattern binds 3
+    """, status=1)
+
+script("a destructuring let with in binds its names in the body only", """\
+    let { u, v } = { 1, 2 } in u + v
+    u
+    """, """\
+    stdin:2:1: error: undefined name 'u'
+    """, status=1)
+
+script("a destructuring let that does not check binds nothing", "let { a, a } = { 1, 2 }\na\n", """\
+    stdin:1:10: error: duplicate binding 'a' in this pattern; a name may be bound only once
+    """, status=1)
+
+script("what a destructuring let holds cannot be named", "destructured__value\n", """\
+    stdin:1:1: error: identifier 'destructured__value' contains '__' (double underscore), which is reserved
     """, status=1)
 
 # ---------------------------------------------------------------------------
@@ -571,6 +663,33 @@ t.expect("a statement that aborts is undone; the session goes on", [
 ])
 
 t = Term()
+t.send("let xs = i32[] { 1 }\n")
+t.send("let a = 0\n")
+t.send("let { a, b } = { xs[0], xs[5] }; a\n")
+t.send("a\n")
+t.send("\x04")
+t.finish()
+t.expect("a destructuring let that aborts binds none of its names", [
+    "val xs: i32[] = { 1 }",
+    "val a: i32 = 0",
+    "stdin:1: slice index out of range: index=5 len=1",
+    "(1 later statement of this input did not run.)",
+    "val it: i32 = 0",
+])
+
+t = Term()
+t.send("let mut x = 5\n")
+t.send("let { p, n } = { &x, 1 }\n")
+t.send("p[0] = 9; x\n")
+t.send("\x04")
+t.finish()
+t.expect("a destructured pointer points where it was taken from", [
+    "val x: i32 = 5",
+    "val n: i32 = 1",
+    "val it: i32 = 9",
+])
+
+t = Term()
 t.send("let mut i = 0\n")
 t.send("loop i = i + 1\n")
 t.interrupt_after(1.0)
@@ -608,6 +727,70 @@ t.finish()
 t.expect("a paste is one input, blank lines and all", [
     "val a: i32 = 1",
     "val b: i32 = 2",
+    "val it: i32 = 2",
+])
+
+t = Term()
+t.send("let a = 1 \\\n")
+t.send("let b = a + 1\n")
+t.send("let c = 5 \\\n")
+t.send("nope\n")
+t.send("c\n")
+t.send("\x04")
+t.finish()
+t.expect("a line ending with \\ goes on to the next, in the same input", [
+    "val a: i32 = 1",
+    "val b: i32 = 2",
+    "stdin:2:1: error: undefined name 'nope'",
+    "stdin:1:1: error: undefined name 'c'",
+])
+
+t = Term()
+t.send("let a = 1;\n")
+t.send("let b = a + 1\n")
+t.send("let c = 5;\n")
+t.send("nope\n")
+t.send("c\n")
+t.send("\x04")
+t.finish()
+t.expect("a line ending with ; goes on to the next, in the same input", [
+    "val a: i32 = 1",
+    "val b: i32 = 2",
+    "stdin:2:1: error: undefined name 'nope'",
+    "stdin:1:1: error: undefined name 'c'",
+])
+
+t = Term()
+t.send("let a = 1\x1b\r")
+t.send("let b = a + 1\r")
+t.send("let c = 5\x1b\r")
+t.send("\x1b\r")
+t.send("nope\r")
+t.send("c\r")
+t.send("\x04")
+t.finish()
+t.expect("Alt+Enter goes on to the next line, a blank one too", [
+    "val a: i32 = 1",
+    "val b: i32 = 2",
+    "stdin:3:1: error: undefined name 'nope'",
+    "stdin:1:1: error: undefined name 'c'",
+])
+
+t = Term()
+t.send("module m =\n")
+t.send("    let f = () -> 1\n")
+t.send("\\\n")
+t.send("    let g = () -> f() + 1\n")
+t.send("\n")
+t.send("m.g()\n")
+t.send('let s = "x\\\\"\n')
+t.send("1 + 1 // not continued \\\n")
+t.send("\x04")
+t.finish()
+t.expect("in a block a line of \\ alone is a blank line; a \\ in a literal or comment is not one", [
+    "module m",
+    "val it: i32 = 2",
+    'val s: const str = "x\\\\"',
     "val it: i32 = 2",
 ])
 

@@ -1486,6 +1486,23 @@ static Expr *parse_if_expr(Parser *p) {
     return e;
 }
 
+/* Parse `in body` after the let-binding `letnode`: an EXPR_BLOCK of the let
+   followed by the body. The body is greedy, as in ML and F#: an inline
+   `;`-sequence that extends to the enclosing boundary (newline, dedent, `)`,
+   `,`, `else`, EOF), so `let x = v in a; b` binds `x` over both `a` and `b`. */
+static Expr *parse_let_in(Parser *p, Expr *letnode) {
+    advance_p(p); /* consume 'in' */
+    int body_count;
+    Expr **body = parse_inline_seq(p, &body_count);
+    Expr **stmts = arena_alloc(p->arena, sizeof(Expr *) * (size_t)(body_count + 1));
+    stmts[0] = letnode;
+    memcpy(&stmts[1], body, sizeof(Expr *) * (size_t)body_count);
+    Expr *blk = alloc_expr(p, EXPR_BLOCK, letnode->loc);
+    blk->block.stmts = stmts;
+    blk->block.count = body_count + 1;
+    return blk;
+}
+
 /* Parse a let-binding: `let [mut] <target> = <init>`. When an explicit `in`
    follows (required if require_in), `let x = v in body` desugars to an
    EXPR_BLOCK of the `let` followed by `body`, which gives the binding an inner
@@ -1533,21 +1550,7 @@ static Expr *parse_let_binding(Parser *p, bool require_in) {
         letnode->let_expr.let_init = init;
     }
 
-    if (check(p, TOK_IN)) {
-        advance_p(p);
-        /* The `in` body is greedy, as in ML and F#: an inline `;`-sequence
-           that extends to the enclosing boundary (newline, dedent, `)`, `,`,
-           `else`, EOF), so `let x = v in a; b` binds `x` over both `a` and `b`. */
-        int body_count;
-        Expr **body = parse_inline_seq(p, &body_count);
-        Expr **stmts = arena_alloc(p->arena, sizeof(Expr *) * (size_t)(body_count + 1));
-        stmts[0] = letnode;
-        memcpy(&stmts[1], body, sizeof(Expr *) * (size_t)body_count);
-        Expr *blk = alloc_expr(p, EXPR_BLOCK, loc);
-        blk->block.stmts = stmts;
-        blk->block.count = body_count + 1;
-        return blk;
-    }
+    if (check(p, TOK_IN)) return parse_let_in(p, letnode);
     if (require_in) {
         diag_error(loc, "expected 'in' after let-binding in expression position");
         return alloc_expr_error(p, loc);
@@ -4503,8 +4506,8 @@ Program *parse_files(Token **tokens, const int *counts, const char **filenames, 
 /* ---- Interactive input ---- */
 
 /* `let`, then `mut` or not, a name and `=`: a binding of a name, which the
- * prompt reads as a declaration (a destructuring `let { ... } =` is read as a
- * statement). */
+ * prompt reads as a declaration, unless an `in` follows it (a destructuring
+ * `let { ... } =` is read as a statement). */
 static bool at_let_binding_decl(Parser *p) {
     int off = peek_at(p, 1)->kind == TOK_MUT ? 2 : 1;
     return peek_at(p, off)->kind == TOK_IDENT && peek_at(p, off + 1)->kind == TOK_EQ;
@@ -4538,6 +4541,14 @@ SessionItem *parse_session_input(Token *tokens, int count, const char *filename,
             item.decl_count = decls.count;
             item.decls = decl_list_finish(p, &decls);
             if (d->kind == DECL_ERROR) recover_to_decl(p);
+            /* `let x = v in body` is a statement, as in a block. */
+            if (d->kind == DECL_LET && check(p, TOK_IN)) {
+                Expr *let = alloc_expr(p, EXPR_LET, d->loc);
+                let->let_expr.let_name = d->let.name;
+                let->let_expr.let_is_mut = d->let.is_mut;
+                let->let_expr.let_init = d->let.init;
+                item = (SessionItem){ .stmt = parse_let_in(p, let) };
+            }
         } else {
             item.stmt = parse_block_item(p);
         }

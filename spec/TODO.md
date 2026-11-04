@@ -349,8 +349,6 @@ Built 2026-11-03 (spec §Interactive sessions; design in `docs/ARCHITECTURE.md` 
   wanted: run at the end of the session, in reverse order, as `main`'s defers run when
   it returns (Ctrl+D and `return` run them; an exit or a kill skips them). Allowing it
   later breaks nothing.
-- **A destructuring `let` at the prompt** (`let { a, b } = ...`): rejected; lower it to
-  one session binding per name.
 - **Scripts that end.** An `.fcx` run from a terminal (`#!` line) lands at the prompt
   when it finishes. fsi and python run a file argument and exit, with a flag to stay
   (`fsi --use:`, `python -i`); a flag here would give the same.

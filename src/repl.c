@@ -11,6 +11,8 @@
  *   - a `let` binding a function is a function;
  *   - any other `let` is a session binding, a global whose initializer runs
  *     when the unit runs (Decl.let.is_session);
+ *   - a destructuring `let` is entered as a unit for each name it binds,
+ *     after a hidden one that holds the value (entered_items);
  *   - any other statement is a session binding named `it`, which binds
  *     nothing when the statement yields no value (is_session_stmt);
  *   - a type, module, error group or import is as at the top of a file.
@@ -123,6 +125,7 @@ typedef struct {
 
 typedef struct {
     Mark mark;                  /* the session before the unit */
+    int item;                   /* the item of its input it was entered for */
     SymbolTable *table;
     Obj obj;
     const char *runner;
@@ -199,6 +202,11 @@ static void units_free(Units *us) {
  * Compiling a unit
  * ================================================================ */
 
+/* The hidden session binding that holds what a destructuring `let` takes
+ * apart (entered_items). No name in a program may have a `__`, so none can
+ * refer to it. */
+#define DESTRUCTURED "destructured__value"
+
 /* A `return` at the prompt ends the session with its exit code, so it must
  * have one, an i32, as main's does. Lambda bodies have their own. */
 static void check_prompt_return(Expr *e, void *ctx) {
@@ -226,6 +234,7 @@ static void describe_unit(Unit *u, Decl **decls, int n) {
         case DECL_LET: {
             Type *t = d->let.resolved_type;
             if (!t || t->kind == TYPE_VOID || t->kind == TYPE_NEVER) break;
+            if (d->let.name == intern_cstr(&S.intern, DESTRUCTURED)) break;
             if (decl_is_function(d) || t->kind == TYPE_FUNC || !u->desc) {
                 after = str_appendf(after, "val %s: %s\n", d->let.name, type_name(t));
             } else {
@@ -257,6 +266,131 @@ static void describe_unit(Unit *u, Decl **decls, int n) {
     u->after = after;
 }
 
+static void *new_node(size_t size) {
+    void *p = arena_alloc(&S.arena, size);
+    memset(p, 0, size);
+    return p;
+}
+
+static Expr *new_expr(ExprKind kind, SrcLoc loc) {
+    Expr *e = new_node(sizeof *e);
+    e->kind = kind;
+    e->loc = loc;
+    return e;
+}
+
+static Expr *new_ident(const char *name, SrcLoc loc) {
+    Expr *e = new_expr(EXPR_IDENT, loc);
+    e->ident.name = name;
+    return e;
+}
+
+/* `{ let <pattern> = ...; value }` */
+static Expr *new_destructure(Expr *let, Expr *value) {
+    Expr *b = new_expr(EXPR_BLOCK, let->loc);
+    b->block.stmts = new_node(2 * sizeof(Expr *));
+    b->block.stmts[0] = let;
+    b->block.stmts[1] = value;
+    b->block.count = 2;
+    return b;
+}
+
+static Decl *new_session_let(const char *name, bool is_mut, Expr *init, SrcLoc loc) {
+    Decl *d = new_node(sizeof *d);
+    d->kind = DECL_LET;
+    d->loc = loc;
+    d->let.name = name;
+    d->let.is_mut = is_mut;
+    d->let.init = init;
+    return d;
+}
+
+static SessionItem session_let_item(Decl *d) {
+    Decl **decls = new_node(sizeof(Decl *));
+    decls[0] = d;
+    return (SessionItem){ .decls = decls, .decl_count = 1 };
+}
+
+/* The names a destructuring pattern binds, in order. Only the patterns a
+ * destructuring `let` takes have names in them; the others are errors, which
+ * checking the `let` reports. */
+static void pattern_names(Pattern *p, Pattern ***out, int *n, int *cap) {
+    switch (p->kind) {
+    case PAT_BINDING:
+        DA_APPEND(*out, *n, *cap, p);
+        break;
+    case PAT_TUPLE:
+        for (int i = 0; i < p->tuple_pat.pattern_count; i++)
+            pattern_names(p->tuple_pat.patterns[i], out, n, cap);
+        break;
+    case PAT_STRUCT:
+        for (int i = 0; i < p->struc.field_count; i++)
+            pattern_names(p->struc.fields[i].pattern, out, n, cap);
+        break;
+    default:
+        break;
+    }
+}
+
+/* The items an item of the input is entered as: itself, unless it is a
+ * destructuring `let`, which binds each of its names as a session binding.
+ * `let {q, r} = v` is entered as a hidden binding of
+ * `{ let {q, r} = v; {q, r} }`, its names as a tuple, then as `let q` and
+ * `let r`, each taking its name out of that tuple. So the pattern is checked
+ * once, as written, and each name is shown as it is bound. With one name no
+ * tuple is needed (`let q = { let {q, _} = v; q }`), and one that binds none
+ * is a statement. */
+static SessionItem *entered_items(SessionItem *item, int *n) {
+    *n = 1;
+    Expr *e = item->stmt;
+    if (!e || e->kind != EXPR_LET_DESTRUCT) return item;
+    Pattern **names = NULL;
+    int count = 0, cap = 0;
+    pattern_names(e->let_destruct.pattern, &names, &count, &cap);
+    SessionItem *out = new_node((size_t)(count + 1) * sizeof *out);
+    bool mut = e->let_destruct.is_mut;
+    if (count == 0) {
+        out[0].stmt = e;
+    } else if (count == 1) {
+        const char *name = names[0]->binding.name;
+        out[0] = session_let_item(new_session_let(
+            name, mut, new_destructure(e, new_ident(name, names[0]->loc)), e->loc));
+    } else {
+        const char *hidden = intern_cstr(&S.intern, DESTRUCTURED);
+        Expr *tuple = new_expr(EXPR_TUPLE_LIT, e->loc);
+        tuple->tuple_lit.elems = new_node((size_t)count * sizeof(Expr *));
+        tuple->tuple_lit.elem_count = count;
+        for (int i = 0; i < count; i++)
+            tuple->tuple_lit.elems[i] = new_ident(names[i]->binding.name, names[i]->loc);
+        out[0] = session_let_item(new_session_let(hidden, false, new_destructure(e, tuple),
+                                                  e->loc));
+        for (int i = 0; i < count; i++) {
+            const char *name = names[i]->binding.name;
+            SrcLoc loc = names[i]->loc;
+            Pattern *take = new_node(sizeof *take);
+            take->kind = PAT_TUPLE;
+            take->loc = loc;
+            take->tuple_pat.patterns = new_node((size_t)count * sizeof(Pattern *));
+            take->tuple_pat.pattern_count = count;
+            for (int j = 0; j < count; j++) {
+                Pattern *p = new_node(sizeof *p);
+                p->loc = loc;
+                p->kind = i == j ? PAT_BINDING : PAT_WILDCARD;
+                if (i == j) p->binding.name = name;
+                take->tuple_pat.patterns[j] = p;
+            }
+            Expr *let = new_expr(EXPR_LET_DESTRUCT, loc);
+            let->let_destruct.pattern = take;
+            let->let_destruct.init = new_ident(hidden, loc);
+            out[i + 1] = session_let_item(new_session_let(
+                name, mut, new_destructure(let, new_ident(name, loc)), loc));
+        }
+        *n = count + 1;
+    }
+    free(names);
+    return out;
+}
+
 /* The declarations a unit holds: an item's own, or for a statement a
  * binding of it (`it`). NULL after reporting an item the prompt does not
  * take. */
@@ -279,19 +413,9 @@ static Decl **unit_decls(SessionItem *item, int *n) {
                    "for it to run at");
         return NULL;
     }
-    if (e->kind == EXPR_LET || e->kind == EXPR_LET_DESTRUCT) {
-        diag_error(e->loc, "a destructuring let is not allowed at the prompt yet; bind a "
-                   "name and take it apart with match");
-        return NULL;
-    }
-    Decl *d = arena_alloc(&S.arena, sizeof(Decl));
-    memset(d, 0, sizeof *d);
-    d->kind = DECL_LET;
-    d->loc = e->loc;
-    d->let.name = intern_cstr(&S.intern, "it");
-    d->let.init = e;
+    Decl *d = new_session_let(intern_cstr(&S.intern, "it"), false, e, e->loc);
     d->let.is_session_stmt = true;
-    Decl **decls = arena_alloc(&S.arena, sizeof(Decl *));
+    Decl **decls = new_node(sizeof(Decl *));
     decls[0] = d;
     *n = 1;
     return decls;
@@ -1042,10 +1166,15 @@ static RunResult run_input(const char *src, const char *filename, int *code) {
                                              &S.arena, &S.intern, &nitems);
     bool ok = diag_error_count() == 0;
     for (int i = 0; ok && i < nitems; i++) {
-        Unit u;
-        bool compiled = compile_unit(&items[i], filename, &u);
-        DA_APPEND(us->items, us->count, us->cap, u);
-        ok = compiled;
+        int n = 0;
+        SessionItem *entered = entered_items(&items[i], &n);
+        for (int j = 0; ok && j < n; j++) {
+            Unit u;
+            bool compiled = compile_unit(&entered[j], filename, &u);
+            u.item = i;
+            DA_APPEND(us->items, us->count, us->cap, u);
+            ok = compiled;
+        }
     }
     for (int i = 0; ok && i < us->count; i++) ok = link_unit(&us->items[i]);
     diag_set_abort_jmp(NULL);
@@ -1064,18 +1193,22 @@ static RunResult run_input(const char *src, const char *filename, int *code) {
             result = RUN_END;
             break;
         }
-        /* A failed statement is undone, with the statements after it. */
+        /* A failed statement is undone, with the statements after it: all
+         * of it, though it was entered as several units. */
+        int first = i;
+        while (first > 0 && us->items[first - 1].item == us->items[i].item) first--;
+        int later = us->items[us->count - 1].item - us->items[i].item;
         int sig = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
         *code = 128 + sig;
         if (S.interactive) {
             if (sig == SIGINT) fputs("\nInterrupted.\n", stderr);   /* after the terminal's ^C */
             else if (sig != SIGABRT) fprintf(stderr, "The statement was killed by %s.\n",
                                              strsignal(sig));
-            if (i + 1 < us->count)
+            if (later > 0)
                 fprintf(stderr, "(%d later statement%s of this input did not run.)\n",
-                        us->count - i - 1, us->count - i - 1 == 1 ? "" : "s");
+                        later, later == 1 ? "" : "s");
         }
-        undo_declarations(&us->items[i].mark);
+        undo_declarations(&us->items[first].mark);
         result = RUN_FAILED;
         break;
     }
@@ -1249,15 +1382,17 @@ static bool ends_with_word(const char *s, size_t n, const char *w) {
                         (s[n - wl - 1] >= '0' && s[n - wl - 1] <= '9'));
 }
 
-/* Whether the text entered so far needs more lines: an open bracket, or a
- * line ending where a block or an operand must follow (`=`, `->`, `do`,
- * `then`, `else`, `with`, `in`, an operator, a comma). Comments and strings
- * are skipped. */
-static bool wants_more(const char *text) {
-    int depth = 0;
-    const char *last = NULL;    /* the last significant character of the last line */
+/* Entered text as the prompt reads it, with comments and literals skipped. */
+typedef struct {
+    const char *last;           /* the last character that is not blank, or NULL */
+    const char *last_line;      /* the start of its line */
+    int depth;                  /* the brackets left open */
+    bool open_literal;          /* a literal not closed on its line */
+} Scan;
+
+static Scan scan_text(const char *text) {
+    Scan s = { 0 };
     const char *line_start = text;
-    const char *last_start = NULL;
     for (const char *p = text; *p; p++) {
         if (*p == '\n') { line_start = p + 1; continue; }
         if (p[0] == '/' && p[1] == '/') {
@@ -1265,22 +1400,44 @@ static bool wants_more(const char *text) {
             continue;
         }
         if (*p == '"' || *p == '\'') {
-            /* A literal ends on its line; one that does not is the lexer's
-             * to report, so the input is complete. */
             char q = *p;
             for (p++; *p && *p != q && *p != '\n'; p++) if (*p == '\\' && p[1]) p++;
-            if (*p != q) return false;
-            last = p; last_start = line_start;
+            if (*p != q) { s.open_literal = true; return s; }
+            s.last = p; s.last_line = line_start;
             continue;
         }
-        if (*p == '(' || *p == '[' || *p == '{') depth++;
-        if (*p == ')' || *p == ']' || *p == '}') depth--;
-        if (*p != ' ' && *p != '\t' && *p != '\r') { last = p; last_start = line_start; }
+        if (*p == '(' || *p == '[' || *p == '{') s.depth++;
+        if (*p == ')' || *p == ']' || *p == '}') s.depth--;
+        if (*p != ' ' && *p != '\t' && *p != '\r') { s.last = p; s.last_line = line_start; }
     }
-    if (depth > 0) return true;
-    if (!last) return false;
-    size_t n = (size_t)(last - last_start) + 1;
-    const char *s = last_start;
+    return s;
+}
+
+/* Whether a line asks for the line after it to be part of its input: it ends
+ * with `;`, or with `\`, which is dropped. Only the prompt reads a `\` so;
+ * outside a literal it is not FC. */
+static bool continues(char *line) {
+    Scan s = scan_text(line);
+    if (s.open_literal || !s.last) return false;
+    if (*s.last == '\\') {
+        char *at = line + (s.last - line);
+        memmove(at, at + 1, strlen(at + 1) + 1);
+        return true;
+    }
+    return *s.last == ';';
+}
+
+/* Whether the text entered so far opens a block: an open bracket, or a line
+ * ending where a block or an operand must follow (`=`, `->`, `do`, `then`,
+ * `else`, `with`, `in`, an operator, a comma). A literal not closed on its
+ * line is the lexer's to report, so the input is complete. */
+static bool wants_more(const char *text) {
+    Scan sc = scan_text(text);
+    if (sc.open_literal) return false;
+    if (sc.depth > 0) return true;
+    if (!sc.last) return false;
+    size_t n = (size_t)(sc.last - sc.last_line) + 1;
+    const char *s = sc.last_line;
     static const char *const words[] = { "do", "then", "else", "with", "in" };
     for (size_t i = 0; i < sizeof words / sizeof words[0]; i++)
         if (ends_with_word(s, n, words[i])) return true;
@@ -1293,32 +1450,43 @@ static bool blank(const char *s) {
     return true;
 }
 
-/* Read one input at the prompt: a line, or a block of them ending at a blank
- * line, or a paste. NULL at the end of the session. */
+/* Read one input at the prompt: a line, or a paste; lines while each asks
+ * for the next (continues, or Alt+Enter); or a block, which runs to a blank
+ * line. NULL at the end of the session. */
 static char *read_input(void) {
-    char *line = NULL;
+    char *text = NULL;
+    bool block = false;
     for (;;) {
-        LineResult r = lineedit_read("> ", &line);
-        if (r == LE_EOF) return NULL;
-        if (r == LE_INTERRUPT) continue;
-        if (r == LE_PASTE) return line;
-        if (blank(line)) { free(line); continue; }
-        lineedit_history_add(line);
-        if (!wants_more(line)) return line;
-        break;
-    }
-    /* A block: lines up to a blank one. */
-    char *text = line;
-    for (;;) {
-        char *more = NULL;
-        LineResult r = lineedit_read(". ", &more);
+        char *line = NULL;
+        LineResult r = lineedit_read(text ? ". " : "> ", &line);
         if (r == LE_EOF) return text;
-        if (r == LE_INTERRUPT) { free(text); return str_dup(""); }
-        if (r == LE_LINE && blank(more)) { free(more); return text; }
-        if (r == LE_LINE) lineedit_history_add(more);
-        text = str_appendf(text, "\n%s", more);
-        free(more);
-        if (r == LE_PASTE) return text;
+        if (r == LE_INTERRUPT) {
+            if (!text) continue;
+            free(text);
+            return str_dup("");
+        }
+        if (r == LE_PASTE) {
+            if (!text) return line;
+            text = str_appendf(text, "\n%s", line);
+            free(line);
+            return text;
+        }
+        /* A blank line ends the input, unless Alt+Enter asked for more. */
+        if (r == LE_LINE && blank(line)) {
+            free(line);
+            if (text) return text;
+            continue;
+        }
+        lineedit_history_add(line);
+        bool more = continues(line) || r == LE_MORE;
+        if (text) {
+            text = str_appendf(text, "\n%s", line);
+            free(line);
+        } else {
+            text = line;
+        }
+        if (!block) block = wants_more(text);
+        if (!block && !more) return text;
     }
 }
 

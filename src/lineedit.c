@@ -239,6 +239,7 @@ LineResult lineedit_read(const char *prompt, char **out) {
             goto history;
         } else if (c == 27) {
             int a = read_byte();
+            if (a == '\r' || a == '\n') { result = LE_MORE; break; }   /* Alt+Enter */
             if (a != '[' && a != 'O') continue;
             int num = 0, b;
             while ((b = read_byte()) >= '0' && b <= '9') num = num * 10 + (b - '0');
@@ -317,7 +318,7 @@ LineResult lineedit_read(const char *prompt, char **out) {
     puts_raw("\x1b[?2004l\r\n");  /* bracketed paste off */
     tcsetattr(STDIN_FILENO, TCSADRAIN, &orig);
     free(stash);
-    if (result == LE_LINE || result == LE_PASTE) *out = l.p;
+    if (result == LE_LINE || result == LE_MORE || result == LE_PASTE) *out = l.p;
     else free(l.p);
     return result;
 }

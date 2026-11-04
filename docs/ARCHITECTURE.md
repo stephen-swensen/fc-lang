@@ -657,6 +657,11 @@ program of top-level declarations (`compile_unit`):
   own name);
 - a statement is a `let it = <statement>` marked `is_session_stmt`, which may
   be `void` (then the unit's table drops `it`, so nothing is bound);
+- a destructuring `let` is several items (`entered_items`): a hidden session
+  binding of `{ let <pattern> = <init>; { a, b } }`, the bound names as a
+  tuple, then a `let` per name taking it out of that tuple. The pattern is
+  checked once, where the user wrote it, and each name is a session binding
+  of its own. The units remember their item, so a failure undoes all of them;
 - a type, module, error group or import is as written.
 
 Each unit runs pass1, pass2 and the monomorphization steps on its own

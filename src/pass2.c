@@ -3370,6 +3370,13 @@ static void bind_pattern_poison(Pattern *p, void *vctx) {
     pattern_for_each_child(p, bind_pattern_poison, vctx);
 }
 
+/* After checking pattern `p`: when the check reported an error (more than
+ * `errs_before`), it may have stopped before binding every name, so bind
+ * the rest as poison. Their uses are then not each reported as undefined. */
+static void bind_unbound_after_error(CheckCtx *ctx, Pattern *p, int errs_before) {
+    if (diag_error_count() > errs_before) bind_pattern_poison(p, ctx);
+}
+
 /* Add a binding introduced by a pattern or for-loop header. Its type is the
  * piece as read (bound_type), and it inherits both provenance tags of the value
  * it is taken out of (ctx->bind_prov, set by the caller), since a field,
@@ -3549,10 +3556,12 @@ static void check_dup_bindings(Scope *s, int first, const char *what) {
 static void bind_for_element(CheckCtx *ctx, Expr *e, Type *elem_type) {
     if (e->for_expr.var_pattern) {
         e->for_expr.elem_tmp = arena_sprintf(ctx->arena, "_fe_%d", local_id_counter++);
+        int errs = diag_error_count();
         if (e->for_expr.var_pattern->kind == PAT_TUPLE)
             check_tuple_destruct(ctx, e->for_expr.var_pattern, elem_type, false, e->loc);
         else
             check_destruct_pattern(ctx, e->for_expr.var_pattern, elem_type, false, e->loc);
+        bind_unbound_after_error(ctx, e->for_expr.var_pattern, errs);
     } else {
         if (!e->for_expr.var_codegen_name)
             e->for_expr.var_codegen_name = local_c_name(ctx->arena, e->for_expr.var);
@@ -7807,10 +7816,12 @@ static Type *check_expr_inner(CheckCtx *ctx, Expr *e) {
         ctx->bind_prov = prov_of(e->let_destruct.init);
         ctx->bind_readonly = reads_readonly_storage(e->let_destruct.init);
         ctx->bind_owner = e;
+        int errs = diag_error_count();
         if (e->let_destruct.pattern->kind == PAT_TUPLE)
             check_tuple_destruct(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
         else
             check_destruct_pattern(ctx, e->let_destruct.pattern, t, e->let_destruct.is_mut, e->loc);
+        bind_unbound_after_error(ctx, e->let_destruct.pattern, errs);
         ctx->bind_prov = saved_bind;
         ctx->bind_readonly = saved_ro;
         ctx->bind_owner = saved_owner;
@@ -9744,7 +9755,9 @@ static Type *check_match(CheckCtx *ctx, Expr *e) {
         ctx->bind_prov = prov_of(e->match_expr.subject);
         ctx->bind_readonly = reads_readonly_storage(e->match_expr.subject);
         ctx->bind_owner = e;
+        int errs = diag_error_count();
         check_match_pattern(ctx, pat, subj_type, /*reject_bindings=*/false);
+        bind_unbound_after_error(ctx, pat, errs);
         ctx->bind_prov = saved_bind;
         ctx->bind_readonly = saved_ro;
         ctx->bind_owner = saved_owner;
