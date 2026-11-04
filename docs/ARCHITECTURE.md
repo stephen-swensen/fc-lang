@@ -498,6 +498,15 @@ explicit case that reports an internal error. A `switch` with a `default`
 answers a question about a few kinds; CONTRIBUTING.md lists the ones a new
 expression kind usually has to be added to.
 
+The type walkers recurse into a struct's fields and a union's payloads with
+no record of where they have been, so a `Type` graph never has a cycle. A
+field type or payload names another struct, union or enum by a `TYPE_STUB`
+carrying its mangled name, never by its `Type`, at the top level and in a
+module alike (pass1's `canonicalize_stub_names`, pass2's
+`canonicalize_field_stubs`), and code that needs the declaration looks the
+name up. A self-referential `struct node = next: node*` is how a cycle would
+otherwise form.
+
 Facts that pass2 and codegen both need (a type property's result type, a
 built-in member's type, the width of a fixed-size integer, an interpolation
 segment's size budget, which operations a marker governs) live in one table or
@@ -662,7 +671,18 @@ program of top-level declarations (`compile_unit`):
   tuple, then a `let` per name taking it out of that tuple. The pattern is
   checked once, where the user wrote it, and each name is a session binding
   of its own. The units remember their item, so a failure undoes all of them;
+  `let _ = v`, which binds nothing, is the statement `{ let _ = v }`;
 - a type, module, error group or import is as written.
+
+Before an input is parsed, `run_input` takes a `#line N "file"` off its head
+(the form an editor sends a selection in) and lexes the rest as that file's
+lines from N. An input indented as a whole is lexed with the common
+indentation removed (`common_indent`, `dedent`), then its tokens' columns are
+put back: the layout pass works from columns, and the parser never reads
+them. For an input from a file, the session reads the names the file
+declares at its left margin (`read_file_decls`) and prints the input's
+diagnostics through a sink (`from_file_diag`) that turns an undefined name
+the file declares into "not defined in this session yet", with its line.
 
 Each unit runs pass1, pass2 and the monomorphization steps on its own
 program, with three settings that make the steps incremental, each a no-op

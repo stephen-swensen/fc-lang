@@ -1,7 +1,8 @@
 # FC Language — VSCode extension
 
 Editor support for the [FC](../../README.md) language, backed by the compiler's
-built-in language server (`fcc --lsp`).
+built-in language server (`fcc --lsp`) and interactive session
+(`fcc --interactive`).
 
 ## Features
 
@@ -27,6 +28,20 @@ built-in language server (`fcc --lsp`).
   exposes, and the `from` clause itself completes modules, namespaces, and
   dotted routes. (Write the `from` clause first: it is what the names on the
   left are looked up in.)
+
+- **Interactive session** — **Shift+Enter** sends the selection to an FC
+  interactive session (`fcc --interactive`) in a terminal named *FC
+  Interactive*, starting one if there is none. With no selection it sends the
+  top-level item the cursor is in (a function with its body, a struct, a
+  module, a comment with the item below it) and moves to the next item, so
+  repeated presses step through a file. The session reports errors at the
+  file's own lines, so they open in the editor on a click, and a name the file
+  declares further down is reported as not defined in the session yet. Lines
+  selected from inside a function are read as written. The session's
+  inputs run strictly in order, so a selection that uses something declared
+  further down needs that sent first. The commands are *FC: Send to
+  Interactive Session* (also on the editor's context menu) and *FC: Start
+  Interactive Session*. The session needs Linux x86-64.
 
 By default the server merges the installed standard library and the open file's
 sibling `.fc` files into every analysis, so `import ... from std::...` resolves.
@@ -82,10 +97,11 @@ starts it again.
 
 ## Settings
 
-- `fc.serverPath` (default `"fcc"`) — path to the `fcc` binary. Set this to an
-  absolute build path (e.g. `.../build/linux/fcc`) if `fcc` is not on `PATH`.
+- `fc.serverPath` (default `"fcc"`) — path to the `fcc` binary, for the
+  language server and the interactive session. Set this to an absolute build
+  path (e.g. `.../build/linux/fcc`) if `fcc` is not on `PATH`.
 - `fc.stdlibPath` (default empty) — directory holding the stdlib `.fc` files;
-  sets `FCC_STDLIB_DIR` for the server. Leave empty to use the installed
+  sets `FCC_STDLIB_DIR` for the server and the session. Leave empty to use the installed
   location (or, failing that, a `stdlib` directory under the server's working
   directory).
 - `fc.typeDisplay` (default `"inline"`) — how each `let`'s inferred type is

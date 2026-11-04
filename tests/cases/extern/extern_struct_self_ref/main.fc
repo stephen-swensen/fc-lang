@@ -1,0 +1,19 @@
+// Test: C structs in a module that point at themselves and at each other, the
+// shape of most C list and tree headers.
+module c from "chain.h" =
+    extern struct link as link =
+        next: link*
+        v: i32
+    extern struct pair as pair =
+        other: pair*
+        head: link*
+
+let main = (args: str[]) ->
+    let mut b = c.link { next = default(c.link*), v = 2 }
+    let mut a = c.link { next = &b, v = 1 }
+    assert(a.next.v == 2)
+    let mut p = default(c.pair)
+    p.other = &p
+    p.head = &a
+    assert(p.other.head.next.v == 2)
+    0

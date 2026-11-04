@@ -6,6 +6,7 @@
 
 const vscode = require("vscode");
 const cp = require("child_process");
+const path = require("path");
 
 let proc = null;
 let diagColl = null;
@@ -217,11 +218,143 @@ function onExit(child) {
   startServer();
 }
 
+/* ---- interactive session (fcc --interactive) ---- */
+
+let session = null;                 // the terminal running the session
+let sessionCwd = undefined;         // its working directory
+let sessionReady = null;            // resolves once it can be sent input
+
+// The session's terminal, started if there is none. Its first input waits a
+// moment: the session reads what arrives early at its first prompt, but the
+// terminal echoes whatever it is sent before the session has started.
+function interactiveSession(document) {
+  if (session && session.exitStatus === undefined) return session;
+  const cfg = vscode.workspace.getConfiguration("fc");
+  const stdlibPath = cfg.get("stdlibPath") || "";
+  const folder = document && vscode.workspace.getWorkspaceFolder(document.uri);
+  sessionCwd = folder ? folder.uri.fsPath
+    : document && document.uri.scheme === "file" ? path.dirname(document.uri.fsPath)
+    : undefined;
+  session = vscode.window.createTerminal({
+    name: "FC Interactive",
+    shellPath: cfg.get("serverPath") || "fcc",
+    shellArgs: ["--interactive"],
+    cwd: sessionCwd,
+    env: stdlibPath ? { FCC_STDLIB_DIR: stdlibPath } : undefined,
+  });
+  sessionReady = Promise.resolve(session.processId)
+    .then(() => new Promise((resolve) => setTimeout(resolve, 500)));
+  return session;
+}
+
+// A line that begins a top-level item: one at the left margin that does not
+// go on with the item above it (a match arm, `else`, a closing bracket).
+function startsItem(document, line) {
+  const text = document.lineAt(line).text;
+  return /^\S/.test(text) && !/^([|)\]}]|(else|then|with|do|in)\b)/.test(text);
+}
+
+function isComment(document, line) {
+  return /^\s*(\/\/|$)/.test(document.lineAt(line).text);
+}
+
+// The top-level item at `line`, from the line that begins it to the line
+// before the next, and with the item below them for a comment at the left
+// margin. { first, last }, or null on a blank line.
+function itemAt(document, line) {
+  if (document.lineAt(line).isEmptyOrWhitespace) return null;
+  let first = line;
+  while (first > 0 && !startsItem(document, first)) first--;
+  let last = line;
+  for (;;) {
+    while (last + 1 < document.lineCount && !startsItem(document, last + 1)) last++;
+    let onlyComments = true;
+    for (let l = first; l <= last && onlyComments; l++) onlyComments = isComment(document, l);
+    if (!onlyComments || last + 1 >= document.lineCount) break;
+    last++;
+  }
+  while (last > first && document.lineAt(last).isEmptyOrWhitespace) last--;
+  return { first, last };
+}
+
+// What Shift+Enter sends: { text, line } (the 0-based line it starts on)
+// and, with no selection, `next`, the line to move to afterwards.
+//   - A selection, whole lines from its first: a selection that begins in a
+//     line's indentation takes the indentation too, and one inside a line is
+//     put in its column, so the session reads it as written there. A
+//     selection that ends at the start of a line ends with the line before.
+//   - With no selection, the top-level item at the cursor.
+function textToSend(editor) {
+  const document = editor.document;
+  const sel = editor.selection;
+  if (sel.isEmpty) {
+    const item = itemAt(document, sel.active.line);
+    let next = item ? item.last + 1 : sel.active.line + 1;
+    while (next < document.lineCount && document.lineAt(next).isEmptyOrWhitespace) next++;
+    if (next >= document.lineCount) next = document.lineCount - 1;
+    if (!item) return { next };
+    const range = new vscode.Range(item.first, 0, item.last, document.lineAt(item.last).text.length);
+    return { text: document.getText(range), line: item.first, next };
+  }
+  let start = sel.start, end = sel.end;
+  if (end.character === 0 && end.line > start.line)
+    end = new vscode.Position(end.line - 1, document.lineAt(end.line - 1).text.length);
+  if (/^\s*$/.test(document.lineAt(start.line).text.slice(0, start.character)))
+    start = new vscode.Position(start.line, 0);
+  let text = document.getText(new vscode.Range(start, end));
+  if (start.line === end.line) text = " ".repeat(start.character) + text;
+  return { text, line: start.line };
+}
+
+// The file as the session is told of it: relative to its working directory
+// when inside it, so diagnostics stay short and still open on a click.
+function sessionFileName(document) {
+  if (document.uri.scheme !== "file") return document.fileName;
+  const file = document.uri.fsPath;
+  const rel = sessionCwd ? path.relative(sessionCwd, file) : "";
+  return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel : file;
+}
+
+// An input for the session: a paste (so it is one input, blank lines and
+// all), headed by `#line`, so its diagnostics name the file and its lines.
+function sessionInput(text, line, document) {
+  const file = sessionFileName(document).replace(/[\\"]/g, "\\$&");
+  return `\x1b[200~#line ${line + 1} "${file}"\n${text.replace(/\r\n/g, "\n")}\n\x1b[201~`;
+}
+
+async function sendToInteractive() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return;
+  const document = editor.document;
+  const part = textToSend(editor);
+  if (part.text !== undefined) {
+    const terminal = interactiveSession(document);
+    terminal.show(true);
+    await sessionReady;
+    terminal.sendText(sessionInput(part.text, part.line, document), false);
+  }
+  if (part.next !== undefined) {
+    const at = new vscode.Position(part.next, 0);
+    editor.selection = new vscode.Selection(at, at);
+    editor.revealRange(new vscode.Range(at, at));
+  }
+}
+
 /* ---- activation ---- */
 
 async function activate(context) {
   diagColl = vscode.languages.createDiagnosticCollection("fc");
   context.subscriptions.push(diagColl);
+
+  // The session needs no language server, so it is set up first.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("fc.sendToInteractive", sendToInteractive),
+    vscode.commands.registerCommand("fc.startInteractive", () => {
+      const editor = vscode.window.activeTextEditor;
+      interactiveSession(editor && editor.document).show();
+    }),
+    vscode.window.onDidCloseTerminal((t) => { if (t === session) session = null; })
+  );
 
   // startServer sends the already-open FC documents; then watch for changes.
   if (!(await startServer())) return;

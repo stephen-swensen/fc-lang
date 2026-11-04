@@ -40,10 +40,13 @@ def write(name, text):
     return path
 
 
-def script(name, text, expect, status=0, args=()):
-    """Enter `text` as one input; the output must be `expect` exactly."""
+def script(name, text, expect, status=0, args=(), dedent=True):
+    """Enter `text` as one input (`dedent`ed as Python source is); the output
+    must be `expect` exactly."""
+    if dedent:
+        text = textwrap.dedent(text)
     try:
-        p = subprocess.run([BIN, "--interactive", *args], input=textwrap.dedent(text).encode(),
+        p = subprocess.run([BIN, "--interactive", *args], input=text.encode(),
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         out, code = p.stdout.decode(errors="replace"), p.returncode
     except subprocess.TimeoutExpired:
@@ -185,6 +188,25 @@ script("a statement that yields no value binds nothing", """\
     val it: i32 = 5
     val it: i32 = 1
     """)
+
+script("let _ runs its value and binds nothing, it included", """\
+    import io from std::
+    3
+    let _ = 5
+    let mut _ = 6
+    let _ = io.write("ran\\n", stdout)
+    let _ = (n: i32) -> n
+    let _ = { 1, 2 }
+    it
+    """, """\
+    val it: i32 = 3
+    ran
+    val it: i32 = 3
+    """)
+
+script("let _ makes no name _", "let _ = 5\n_\n", """\
+    stdin:2:1: error: undefined name '_'
+    """, status=1)
 
 script("a name declared again shadows; what used the old one keeps it", """\
     let x = 10
@@ -447,6 +469,32 @@ script("modules: members in any order, using session values", """\
     val it: i32 = 101
     """)
 
+script("modules: types that refer to themselves and to each other", """\
+    module tree =
+        struct node =
+            kids: forest
+            v: i32
+        struct forest =
+            items: node[]
+    let leaf = tree.node { kids = tree.forest { }, v = 5 }
+    tree.node { kids = tree.forest { items = tree.node[] { leaf } }, v = 1 }
+    module list =
+        struct node =
+            next: node*?
+            v: i32
+    let mut b = list.node { next = none(list.node*), v = 2 }
+    let second = (n: list.node) -> n.next!.v
+    second(list.node { next = some(&b), v = 1 })
+    """, """\
+    module tree
+    val leaf: tree.node = tree.node { kids = tree.forest { items = {} }, v = 5 }
+    val it: tree.node = tree.node { kids = tree.forest { items = { tree.node { kids = tree.forest { items = {} }, v = 5 } } }, v = 1 }
+    module list
+    val b: list.node = list.node { next = none, v = 2 }
+    val second: (list.node) -> i32
+    val it: i32 = 2
+    """)
+
 script("error groups are numbered as they are entered", """\
     error file_err =
         | not_found
@@ -644,6 +692,64 @@ script("a loaded file that does not compile ends the session", "1\n", """\
     """ % BAD, status=1, args=(BAD,))
 
 # ---------------------------------------------------------------------------
+# Inputs sent from a file (#line), and indented inputs
+# ---------------------------------------------------------------------------
+
+SENT = write("sent.fc", """\
+    import io from std::
+
+    let twice = (n: i32) -> helper(n) * 2
+
+    let main = (args: str[]) ->
+        let x = 20
+        let y = x + 1
+        y
+
+    let helper = (n: i32) -> n + 1
+    """)
+
+script("an indented input is read at the left margin",
+       "    let x = 20\n    let y = x + 1\n\n    y\n", """\
+    val x: i32 = 20
+    val y: i32 = 21
+    val it: i32 = 21
+    """, dedent=False)
+
+script("an indented input's errors are in the columns it was typed in",
+       "    let x = 20\n    x + nope\n", """\
+    stdin:2:9: error: undefined name 'nope'
+    """, status=1, dedent=False)
+
+script("an input sent from a file has the file's lines", """\
+    #line 6 "%s"
+        let x = 20
+        let y = x + 1
+        y + nope
+    """ % SENT, """\
+    %s:8:9: error: undefined name 'nope'
+    """ % SENT, status=1)
+
+script("a statement sent from a file that aborts names the file's line", """\
+    #line 7 "%s"
+    let z = i32[] { 1 }
+    z[3]
+    """ % SENT, """\
+    val z: i32[] = { 1 }
+    %s:8: slice index out of range: index=3 len=1
+    """ % SENT, status=134)
+
+script("a name the file declares is not defined in this session yet", """\
+    #line 3 "%s"
+    let twice = (n: i32) -> helper(n) * 2
+    """ % SENT, """\
+    %s:3:25: error: 'helper' is not defined in this session yet (%s declares it at line 10)
+    """ % (SENT, SENT), status=1)
+
+script("a #line that is not of its form", "#line x\n1\n", """\
+    stdin:1:1: error: a #line directive is written #line N "file": the input's lines are the file's, from line N
+    """, status=1)
+
+# ---------------------------------------------------------------------------
 # At a terminal
 # ---------------------------------------------------------------------------
 
@@ -819,6 +925,33 @@ t = Term()
 t.send("\x04")
 t.finish()
 t.expect("Ctrl+D on an empty line ends the session", [], status=0)
+
+# As an editor sends a selection: a paste with Enter (\r) at each line's end.
+t = Term()
+t.paste('#line 3 "%s"\r    let twice = (n: i32) -> n * 2\r    twice(4)\r' % SENT)
+t.send("\x04")
+t.finish()
+t.expect("a selection an editor sends is one input", [
+    "val twice: (i32) -> i32",
+    "val it: i32 = 8",
+])
+
+# Sent while the session loads a file: read at the first prompt, and shown
+# there, not echoed by the terminal before it.
+BIG = write("big.fc", "\n".join("let f%d = (n: i32) -> if n > %d then n * %d else n - %d"
+                                % (i, i, i, i) for i in range(20000)) + "\n")
+t = Term((BIG,))
+time.sleep(0.3)
+os.write(t.fd, b"\x1b[200~let early = 42\rearly + 1\r\x1b[201~")
+t.send("\x04")
+t.send("\x04")
+t.finish()
+t.expect("what is sent while the session starts is run at the first prompt", [
+    "val early: i32 = 42",
+    "val it: i32 = 43",
+])
+check("what is sent while the session starts is shown once",
+      t.out.count(b"early + 1") == 1, t.out.decode(errors="replace"))
 
 shutil.rmtree(TMP, ignore_errors=True)
 print()

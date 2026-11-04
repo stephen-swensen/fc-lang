@@ -1,0 +1,56 @@
+// A struct in a module may refer to itself through a pointer, an option or a
+// slice, as at the top level: the linked-list, ring and tree shapes, in a
+// module and in a submodule.
+module list =
+    struct node =
+        next: node*?
+        v: i32
+
+    let sum = (n: node*) ->
+        let mut s = 0
+        let mut at = some(n)
+        loop
+            match at with
+            | some(p) ->
+                s = s + p.v
+                at = p.next
+            | none -> break
+        s
+
+    struct tree =
+        children: tree[]
+        label: i32
+
+    let n = 4
+    struct ring =
+        prev: ring*
+        next: ring*
+        buf: i32[n]
+
+    module deep =
+        struct link =
+            to: link*?
+            depth: i32
+
+let main = (args: str[]) ->
+    let mut c = list.node { next = none(list.node*), v = 3 }
+    let mut b = list.node { next = some(&c), v = 2 }
+    let mut a = list.node { next = some(&b), v = 1 }
+    assert(list.sum(&a) == 6)
+
+    let leaf = list.tree { label = 2 }
+    let t = list.tree { children = list.tree[] { leaf, leaf }, label = 1 }
+    assert(t.children.len == 2)
+    assert(t.children[1].label == 2)
+
+    let mut r = default(list.ring)
+    r.prev = &r
+    r.next = &r
+    r.buf[3] = 9
+    assert(r.next.prev.buf[3] == 9)
+    assert(r.buf.len == 4)
+
+    let mut end = list.deep.link { to = none(list.deep.link*), depth = 2 }
+    let l = list.deep.link { to = some(&end), depth = 1 }
+    assert(l.to!.depth == 2)
+    0

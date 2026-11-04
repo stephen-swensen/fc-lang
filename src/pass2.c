@@ -1643,10 +1643,10 @@ static void register_concrete_tuple(CheckCtx *ctx, Type *tup);
  * name never reaches it, so every place that turns a written name into a type
  * judges it here. Returns true when it reported (the caller poisons).
  *
- * Takes the pieces rather than a node because the same name arrives in two
- * representations: an unresolved TYPE_STUB (the usual case) and, for a
- * module-scoped declaration whose field types pass1 already resolved and
- * mangled, a TYPE_STRUCT/TYPE_UNION with `type_arg_count == 0`. */
+ * Takes the pieces rather than a node because the same name can arrive in
+ * two representations: an unresolved TYPE_STUB (the usual case, and the only
+ * one a field type has) and a resolved TYPE_STRUCT/TYPE_UNION with
+ * `type_arg_count == 0`. */
 static bool reject_bare_generic_type(Symbol *sym, const char *disp,
                                      int type_arg_count, SrcLoc loc) {
     if (!sym || !sym->is_generic || sym->type_param_count <= 0) return false;
@@ -1703,10 +1703,9 @@ static void canonicalize_field_stubs(CheckCtx *ctx, Type *t) {
                 register_concrete_tuple(ctx, t);
             return;
         }
-        /* A named struct field type is normally kept as a stub, except inside
-         * a module, where pass1 already resolved and mangled it. A bare
-         * generic therefore arrives here rather than at the TYPE_STUB arm, and
-         * needs the same judgment. */
+        /* A named struct field type is kept as a stub, in a module too (pass1
+         * only renames it). Should one arrive resolved, a bare generic needs
+         * the same judgment as at the TYPE_STUB arm. */
         reject_bare_generic_type(t->struc.resolved_sym,
             t->struc.qualified_name ? t->struc.qualified_name : t->struc.name,
             t->struc.type_arg_count, ctx->type_loc);

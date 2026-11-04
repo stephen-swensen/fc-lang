@@ -1,0 +1,9 @@
+// Structs in a module that contain each other by value form an infinite-size
+// cycle, as at the top level.
+module m =
+    struct ma =
+        b: mb
+    struct mb =
+        a: ma
+
+let main = (args: str[]) -> 0

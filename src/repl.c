@@ -74,6 +74,7 @@ int repl_main(const CompileArgs *ca) {
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <ucontext.h>
 #include <unistd.h>
 
@@ -339,9 +340,25 @@ static void pattern_names(Pattern *p, Pattern ***out, int *n, int *cap) {
  * `let r`, each taking its name out of that tuple. So the pattern is checked
  * once, as written, and each name is shown as it is bound. With one name no
  * tuple is needed (`let q = { let {q, _} = v; q }`), and one that binds none
- * is a statement. */
+ * is a statement. So is `let _ = v`, which binds nothing either: it is
+ * entered as `{ let _ = v }`. */
 static SessionItem *entered_items(SessionItem *item, int *n) {
     *n = 1;
+    if (item->decl_count == 1 && item->decls[0]->kind == DECL_LET &&
+        item->decls[0]->let.name == intern_cstr(&S.intern, "_")) {
+        Decl *d = item->decls[0];
+        Expr *let = new_expr(EXPR_LET, d->loc);
+        let->let_expr.let_name = d->let.name;
+        let->let_expr.let_is_mut = d->let.is_mut;
+        let->let_expr.let_init = d->let.init;
+        Expr *b = new_expr(EXPR_BLOCK, d->loc);
+        b->block.stmts = new_node(sizeof(Expr *));
+        b->block.stmts[0] = let;
+        b->block.count = 1;
+        SessionItem *out = new_node(sizeof *out);
+        out->stmt = b;
+        return out;
+    }
     Expr *e = item->stmt;
     if (!e || e->kind != EXPR_LET_DESTRUCT) return item;
     Pattern **names = NULL;
@@ -1135,16 +1152,165 @@ static RunResult run_unit(Unit *u, int *status) {
     return WIFEXITED(*status) ? RUN_END : RUN_FAILED;
 }
 
+/* ================================================================
+ * An input sent from a file
+ * ================================================================ */
+
+/* An input may begin with a line `#line N "file"`, as an editor sends a
+ * selection: its lines are then the file's, from line N on. Takes the line
+ * off *src and sets *file (interned) and *line. False after reporting a
+ * `#line` that is not of that form. */
+static bool take_line_directive(const char **src, const char **file, int *line) {
+    const char *p = *src;
+    if (strncmp(p, "#line", 5) != 0 || (p[5] && p[5] != ' ' && p[5] != '\n')) return true;
+    p += 5;
+    while (*p == ' ') p++;
+    long n = 0;
+    while (*p >= '0' && *p <= '9' && n < 100000000) n = n * 10 + (*p++ - '0');
+    while (*p == ' ') p++;
+    char *path = NULL;
+    if (n > 0 && *p == '"') {
+        size_t len = 0, cap = 64;
+        path = xmalloc(cap);
+        for (p++; *p && *p != '"' && *p != '\n'; p++) {
+            if (*p == '\\' && (p[1] == '"' || p[1] == '\\')) p++;
+            if (len + 2 > cap) path = xrealloc(path, cap *= 2);
+            path[len++] = *p;
+        }
+        path[len] = 0;
+        if (*p == '"' && len > 0) p++;
+        else { free(path); path = NULL; }
+    }
+    while (*p == ' ') p++;
+    if (!path || (*p && *p != '\n')) {
+        free(path);
+        diag_error((SrcLoc){ .line = 1, .col = 1 }, "a #line directive is written "
+                   "#line N \"file\": the input's lines are the file's, from line N");
+        return false;
+    }
+    *file = intern_cstr(&S.intern, path);
+    *line = (int)n;
+    *src = *p ? p + 1 : p;
+    free(path);
+    return true;
+}
+
+/* The indentation every line of an input has, its blank lines aside: an
+ * input copied from inside a function is read as if it were at the left
+ * margin. */
+static int common_indent(const char *s) {
+    int least = -1;
+    while (*s) {
+        int n = 0;
+        while (s[n] == ' ') n++;
+        if (s[n] && s[n] != '\n' && s[n] != '\r' && (least < 0 || n < least)) least = n;
+        const char *nl = strchr(s, '\n');
+        if (!nl) break;
+        s = nl + 1;
+    }
+    return least < 0 ? 0 : least;
+}
+
+/* `s` with the first `k` columns of each line dropped (a blank line may have
+ * fewer), in the session's arena: tokens point into it. */
+static const char *dedent(const char *s, int k) {
+    char *out = arena_alloc(&S.arena, strlen(s) + 1), *w = out;
+    while (*s) {
+        for (int i = 0; i < k && *s == ' '; i++) s++;
+        while (*s && *s != '\n') *w++ = *s++;
+        if (*s) *w++ = *s++;
+    }
+    *w = 0;
+    return out;
+}
+
+/* The top-level declarations of the file an input came from (#line), so
+ * that a name it uses but the session does not have yet is shown where the
+ * file declares it. */
+typedef struct {
+    const char *name;
+    int line;
+} FileDecl;
+
+static struct {
+    const char *file;
+    FileDecl *decls;
+    int n, cap;
+} g_from;
+
+static void discard_diag(SrcLoc loc, const char *msg, void *ud) {
+    (void)loc; (void)msg; (void)ud;
+}
+
+/* Read the names the file declares at its left margin: `let [mut] x`,
+ * `struct x`, `union x`, `enum x`, `module x`, `error x`. The file may be
+ * mid-edit, so what does not lex is passed over in silence. */
+static void read_file_decls(const char *file) {
+    g_from.file = file;
+    g_from.n = 0;
+    char *text = read_file(file, NULL);
+    if (!text) return;
+    jmp_buf env;
+    diag_set_sink(discard_diag, NULL);
+    diag_set_abort_jmp(&env);
+    if (!setjmp(env)) {
+        Lexer lexer = { 0 };
+        int count = 0;
+        lexer_init(&lexer, text, &S.intern, S.flags, S.flag_count);
+        Token *t = lexer_tokenize(&lexer, &count);
+        for (int i = 0; i + 1 < count; i++) {
+            if (t[i].col != 1) continue;
+            int j = i + 1;
+            if (t[i].kind == TOK_LET && t[j].kind == TOK_MUT && j + 1 < count) j++;
+            else if (t[i].kind != TOK_LET && t[i].kind != TOK_STRUCT && t[i].kind != TOK_UNION &&
+                     t[i].kind != TOK_ENUM && t[i].kind != TOK_MODULE &&
+                     t[i].kind != TOK_ERROR_KW) continue;
+            if (t[j].kind != TOK_IDENT) continue;
+            const char *name = intern(&S.intern, t[j].start, t[j].length);
+            DA_APPEND(g_from.decls, g_from.n, g_from.cap, ((FileDecl){ name, t[j].line }));
+        }
+        free(t);
+    }
+    diag_set_abort_jmp(NULL);
+    diag_set_sink(NULL, NULL);
+    diag_reset_counts();
+    free(text);
+}
+
+/* Print a diagnostic as diag does, but say of a name the session lacks and
+ * the file declares that it is not defined yet, and where it is. */
+static void from_file_diag(SrcLoc loc, const char *msg, void *ud) {
+    (void)ud;
+    if (loc.line == 0) {
+        fprintf(stderr, "fcc: error: %s\n", msg);
+        return;
+    }
+    static const char *const unknown[] = { "undefined name '", "unknown type name '" };
+    for (size_t i = 0; i < sizeof unknown / sizeof unknown[0]; i++) {
+        size_t pre = strlen(unknown[i]), len = strlen(msg);
+        if (strncmp(msg, unknown[i], pre) != 0 || len < pre + 2 || msg[len - 1] != '\'') continue;
+        const char *name = intern(&S.intern, msg + pre, (int)(len - pre - 1));
+        for (int k = 0; k < g_from.n; k++) {
+            if (g_from.decls[k].name != name) continue;
+            fprintf(stderr, "%s:%d:%d: error: '%s' is not defined in this session yet "
+                    "(%s declares it at line %d)\n", loc.filename, loc.line, loc.col, name,
+                    g_from.file, g_from.decls[k].line);
+            return;
+        }
+    }
+    fprintf(stderr, "%s:%d:%d: error: %s\n", loc.filename, loc.line, loc.col, msg);
+}
+
 static jmp_buf g_fatal;
 static Units g_units;           /* the input being run (outside the frame setjmp saves) */
 static Mark g_start;            /* the session before it */
 
-/* Compile, load and run one input. On RUN_END, *code is the session's exit
+/* Compile, load and run the lines of one input, the first of them line
+ * `first_line` of `filename`. On RUN_END, *code is the session's exit
  * status. The source and tokens are kept for the session: the AST points
  * into the source (an assertion's text), and a generic function's body is
  * compiled again by each statement that needs a new instance of it. */
-static RunResult run_input(const char *src, const char *filename, int *code) {
-    diag_reset_counts();
+static RunResult run_lines(const char *src, const char *filename, int first_line, int *code) {
     g_start = mark_session();
     Units *us = &g_units;
     RunResult result = RUN_OK;
@@ -1156,10 +1322,15 @@ static RunResult run_input(const char *src, const char *filename, int *code) {
     }
     diag_set_abort_jmp(&g_fatal);
     diag_set_filename(filename);
+    /* An input indented as a whole is lexed at the left margin, and its
+     * tokens put back in the columns they were typed in. */
+    int indent = common_indent(src);
     Lexer lexer = { 0 };
     int count = 0;
-    lexer_init(&lexer, src, &S.intern, S.flags, S.flag_count);
+    lexer_init(&lexer, indent ? dedent(src, indent) : src, &S.intern, S.flags, S.flag_count);
+    lexer.line = lexer.start_line = first_line;
     Token *tokens = lexer_tokenize(&lexer, &count);
+    for (int i = 0; i < count; i++) tokens[i].col += indent;
     parser_collect_generic_names(tokens, count, &S.intern, &S.gnames, &S.gn_n, &S.gn_cap);
     int nitems = 0;
     SessionItem *items = parse_session_input(tokens, count, filename, S.gnames, S.gn_n,
@@ -1216,6 +1387,21 @@ static RunResult run_input(const char *src, const char *filename, int *code) {
     fflush(stdout);
     fflush(stderr);
     return result;
+}
+
+/* Compile, load and run one input: its lines, or those after its #line. */
+static RunResult run_input(const char *src, const char *filename, int *code) {
+    diag_reset_counts();
+    diag_set_filename(filename);
+    const char *from = NULL;
+    int first_line = 1;
+    if (!take_line_directive(&src, &from, &first_line)) return RUN_COMPILE_ERROR;
+    if (!from) return run_lines(src, filename, 1, code);
+    read_file_decls(from);
+    if (g_from.n > 0) diag_set_sink(from_file_diag, NULL);
+    RunResult r = run_lines(src, from, first_line, code);
+    diag_set_sink(NULL, NULL);
+    return r;
 }
 
 /* ================================================================
@@ -1602,8 +1788,20 @@ int repl_main(const CompileArgs *ca) {
     S.resp = resp[0];
     signal(SIGPIPE, SIG_IGN);     /* a holder gone is seen as an end of input */
 
+    /* What arrives while the files load (an editor may send a selection as
+     * soon as it starts the session) is read at the first prompt, and shown
+     * then, so the terminal does not echo it now. */
+    struct termios tty;
+    bool quiet = S.interactive && tcgetattr(STDIN_FILENO, &tty) == 0;
+    if (quiet) {
+        struct termios noecho = tty;
+        noecho.c_lflag &= ~(tcflag_t)ECHO;
+        tcsetattr(STDIN_FILENO, TCSANOW, &noecho);
+    }
     int code = 0;
-    if (!load_files(files, nfiles)) {
+    bool loaded = load_files(files, nfiles);
+    if (quiet) tcsetattr(STDIN_FILENO, TCSANOW, &tty);
+    if (!loaded) {
         end_session();
         return 1;
     }

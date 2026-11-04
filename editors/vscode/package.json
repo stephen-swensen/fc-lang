@@ -1,7 +1,7 @@
 {
   "name": "fc-lang",
   "displayName": "FC Language",
-  "description": "Syntax highlighting, diagnostics, hover, completion and type CodeLens for the FC language, powered by `fcc --lsp`.",
+  "description": "Syntax highlighting, diagnostics, hover, completion, type CodeLens and an interactive session for the FC language, powered by `fcc --lsp` and `fcc --interactive`.",
   "version": "1.0.0",
   "publisher": "fc-lang",
   "license": "SEE LICENSE IN ../../LICENSE",
@@ -25,13 +25,41 @@
         "path": "./syntaxes/fc.tmLanguage.json"
       }
     ],
+    "commands": [
+      {
+        "command": "fc.sendToInteractive",
+        "title": "Send to Interactive Session",
+        "category": "FC"
+      },
+      {
+        "command": "fc.startInteractive",
+        "title": "Start Interactive Session",
+        "category": "FC"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "fc.sendToInteractive",
+        "key": "shift+enter",
+        "when": "editorTextFocus && editorLangId == fc && !findInputFocussed && !replaceInputFocussed && !suggestWidgetVisible"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "fc.sendToInteractive",
+          "when": "editorLangId == fc",
+          "group": "fc"
+        }
+      ]
+    },
     "configuration": {
       "title": "FC",
       "properties": {
         "fc.serverPath": {
           "type": "string",
           "default": "fcc",
-          "description": "Path to the fcc binary used as the language server (invoked with --lsp)."
+          "description": "Path to the fcc binary: the language server (fcc --lsp) and the interactive session (fcc --interactive)."
         },
         "fc.stdlibPath": {
           "type": "string",

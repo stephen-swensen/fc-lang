@@ -1,0 +1,22 @@
+// A generic struct in a module that refers to itself, and a struct that holds
+// an instance of it made from the struct itself.
+module g =
+    struct chain =
+        next: chain<'a>*?
+        v: 'a
+    struct holder =
+        kids: chain<holder>*?
+        self: holder*?
+        n: i32
+
+let main = (args: str[]) ->
+    let mut tail = g.chain { next = none(g.chain<i32>*), v = 2 }
+    let head = g.chain { next = some(&tail), v = 1 }
+    assert(head.next!.v == 2)
+
+    let mut h = g.holder { kids = none(g.chain<g.holder>*), self = none(g.holder*), n = 7 }
+    let mut k = g.chain { next = none(g.chain<g.holder>*), v = h }
+    h.kids = some(&k)
+    h.self = some(&h)
+    assert(h.self!.kids!.v.n == 7)
+    0

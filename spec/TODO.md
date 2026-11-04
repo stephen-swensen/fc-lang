@@ -339,12 +339,10 @@ wolf-fc's command lines and docs stay as they are.
 Built 2026-11-03 (spec §Interactive sessions; design in `docs/ARCHITECTURE.md` →
 "Interactive session"). Open items, none blocking:
 
-- **VS Code: send a selection.** Shift+Enter sends the selection to a session in the
-  integrated terminal, wrapped in bracketed-paste markers so it is one input. Wanted
-  with it: a `#line N "file"` directive at the head of the paste, so diagnostics name
-  the file and its line rather than `stdin`, and a message for a name defined only
-  later in the file ("not defined in this session yet"). A "send file" command
-  (`#load`) is deferred.
+- **VS Code: send a file.** Shift+Enter sends a selection, or the item at the cursor
+  (`editors/vscode/extension.js`). A "send file" command (`#load "x.fc"`, entering a
+  file under the file rules) would let a selection use what the file declares further
+  down, which a selection on its own cannot, since a session is strictly in order.
 - **`defer` at the prompt.** Rejected for now. The recommended meaning, should it be
   wanted: run at the end of the session, in reverse order, as `main`'s defers run when
   it returns (Ctrl+D and `return` run them; an exit or a kill skips them). Allowing it

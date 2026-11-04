@@ -1,0 +1,7 @@
+// A struct in a module that contains itself by value has no finite size, as
+// at the top level.
+module m =
+    struct foo =
+        value: foo
+
+let main = (args: str[]) -> 0

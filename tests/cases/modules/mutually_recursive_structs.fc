@@ -1,0 +1,47 @@
+// Types in a module may refer to each other through a slice or a pointer: a
+// tree and its forest, a struct and a union.
+module tree =
+    struct node =
+        kids: forest
+        v: i32
+    struct forest =
+        items: node[]
+
+    let total = (n: node) ->
+        if n.kids.items.len == 0 then return n.v
+        let mut s = n.v
+        for k in n.kids.items do s = s + total(k)
+        s
+
+module doc =
+    struct section =
+        title: const str
+        body: part[]
+    union part =
+        | text(const str)
+        | sub(section*)
+
+    let depth = (s: section*) ->
+        if s.body.len == 0 then return 1
+        let mut d = 1
+        for p in s.body do
+            match p with
+            | sub(inner) ->
+                let k = depth(inner) + 1
+                if k > d then d = k
+            | text(_) -> void()
+        d
+
+let main = (args: str[]) ->
+    let leaf = tree.node { kids = tree.forest { }, v = 5 }
+    let root = tree.node { kids = tree.forest { items = tree.node[] { leaf, leaf } }, v = 1 }
+    assert(tree.total(root) == 11)
+
+    let mut inner = doc.section { title = "inner", body = doc.part[] { doc.part.text("x") } }
+    let outer = doc.section {
+        title = "outer",
+        body = doc.part[] { doc.part.text("y"), doc.part.sub(&inner) },
+    }
+    let mut o = outer
+    assert(doc.depth(&o) == 2)
+    0

@@ -645,12 +645,13 @@ static const char *mangle_root(InternTable *intern, const char *ns) {
     return ns ? make_mangled(intern, "fc", ns) : g_global_root ? g_global_root : "fc";
 }
 
-/* Canonicalize generic stub names in a type tree.
- * Walks through compound type wrappers and, for TYPE_STUB nodes with
- * type_arg_count > 0, updates the stub's name to the canonical mangled form
- * from the module's symbol table. Only the name changes: type_args are kept
- * and the stub is not replaced by the full type, so no circular references
- * arise. Mutates the type in place.
+/* Canonicalize the stub names in a field type that name a sibling type.
+ * Walks through compound type wrappers and, for each TYPE_STUB that names a
+ * struct, union or enum among the module's members, updates the stub's name
+ * to the canonical mangled form, which resolves from anywhere. Only the name
+ * changes: type_args are kept and the stub is not replaced by the full type,
+ * so no circular references arise (`next: node*` in `struct node`). Mutates
+ * the type in place.
  *
  * This early pass covers only a module's own members, which is what pass1's
  * kind inference needs to find a referenced generic by name. pass2's
@@ -670,16 +671,27 @@ static void canonicalize_stub_names(Type *t, SymbolTable *members) {
         canonicalize_stub_names(t->func.return_type, members);
         return;
     case TYPE_STUB:
-        if (t->stub.type_arg_count > 0 && t->stub.name) {
-            /* Try struct first, then union; stubs are kind-agnostic */
+        for (int i = 0; i < t->stub.type_arg_count; i++)
+            canonicalize_stub_names(t->stub.type_args[i], members);
+        if (t->stub.name) {
+            /* Stubs are kind-agnostic */
             Symbol *sym = symtab_lookup_kind(members, t->stub.name, DECL_STRUCT);
             if (!sym)
                 sym = symtab_lookup_kind(members, t->stub.name, DECL_UNION);
+            if (!sym && t->stub.type_arg_count == 0)
+                sym = symtab_lookup_kind(members, t->stub.name, DECL_ENUM);
             if (sym && sym->type) {
-                const char *canon = (sym->type->kind == TYPE_STRUCT)
-                    ? sym->type->struc.name : sym->type->unio.name;
-                const char *qname = (sym->type->kind == TYPE_STRUCT)
-                    ? sym->type->struc.qualified_name : sym->type->unio.qualified_name;
+                const char *canon, *qname;
+                if (sym->type->kind == TYPE_STRUCT) {
+                    canon = sym->type->struc.name;
+                    qname = sym->type->struc.qualified_name;
+                } else if (sym->type->kind == TYPE_UNION) {
+                    canon = sym->type->unio.name;
+                    qname = sym->type->unio.qualified_name;
+                } else {
+                    canon = sym->type->enu.name;
+                    qname = sym->type->enu.qualified_name;
+                }
                 if (canon != t->stub.name) {
                     t->stub.name = canon;
                     if (qname) t->stub.qualified_name = qname;
@@ -710,7 +722,9 @@ static void canonicalize_stub_names(Type *t, SymbolTable *members) {
  * Walks through pointers, slices, options, results, fixed arrays and function
  * types, replacing each TYPE_STUB with the sibling type it names (the nodes
  * above a replacement are copied, not mutated). This is how extern signatures
- * and struct fields refer to sibling types in the same module. */
+ * and constants refer to sibling types in the same module. A field type
+ * keeps its stubs (canonicalize_stub_names): a type that refers to itself
+ * would otherwise contain itself. */
 static Type *resolve_type_stubs(Arena *arena, Type *t, SymbolTable *members) {
     if (!t) return t;
     if (t->kind == TYPE_POINTER) {
@@ -1223,37 +1237,22 @@ static void set_type_resolved_syms(SymbolTable *tab) {
 static void finish_module_members(SymbolTable *members, InternTable *intern,
                                   SymbolTable *global_symtab) {
     /* Resolve type stubs against sibling types within the module: each
-     * symbol's own type (extern function signatures, extern constants) and
-     * each struct's field types. */
+     * symbol's own type (extern function signatures, extern constants). */
     for (int j = 0; j < members->count; j++) {
         Symbol *msym = &members->symbols[j];
         if (!msym->type) continue;
-
-        /* Resolve the symbol's top-level type (e.g. extern function signatures
-         * whose param/return types reference sibling extern structs/unions) */
         Type *resolved = resolve_type_stubs(intern->arena, msym->type, members);
         if (resolved != msym->type) {
             msym->type = resolved;
             if (msym->kind == DECL_EXTERN && msym->decl)
                 msym->decl->ext.type = resolved;
         }
-
-        /* Resolve stubs within struct field types */
-        if (msym->type->kind == TYPE_STRUCT) {
-            Type *st = msym->type;
-            for (int k = 0; k < st->struc.field_count; k++) {
-                Type *fr = resolve_type_stubs(intern->arena, st->struc.fields[k].type, members);
-                if (fr != st->struc.fields[k].type)
-                    st->struc.fields[k].type = fr;
-            }
-        }
-
     }
 
-    /* Canonicalize generic stub names in struct/union field types.
-     * Updates parser names (e.g., "inner") to canonical mangled names (e.g.,
-     * "fc__m__inner") so pass1's kind inference finds them without module
-     * context (see canonicalize_stub_names). */
+    /* Canonicalize the stub names in struct/union field types that name
+     * sibling types: parser names (e.g., "inner") become canonical mangled
+     * names (e.g., "fc__m__inner"), so pass1's kind inference and codegen
+     * find them without module context (see canonicalize_stub_names). */
     for (int j = 0; j < members->count; j++) {
         Symbol *msym = &members->symbols[j];
         if (!msym->type) continue;
