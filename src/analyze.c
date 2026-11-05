@@ -176,6 +176,10 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
     diag_reset_counts();
     diag_set_filename(r->filename);
     diag_set_sink(collect_sink, r);
+    /* The const-eval error slot is process-wide. An analysis that aborted
+     * before monomorphization drained it could leave one set, located in that
+     * analysis's freed arena; it must not be reported in this one. */
+    (void)const_eval_take_error(NULL);
 
     /* Volatile so its value survives the longjmp below (it is read after the
      * setjmp/else path). Stays false unless pass2 actually executed. */
@@ -227,6 +231,18 @@ AnalysisResult *analyze(const char *source, int source_len, const char *filename
         pass2_check(r->program, &r->symtab, &r->intern, &r->mono, &r->file_scopes,
                     &r->arena);
         pass2_ran = true;
+        /* Run monomorphization's discovery and finalize steps when pass2 is
+           clean, as fcc does, so the editor reports their errors too: a chain
+           of instances that runs only through struct fields, and a failed
+           static_assert, const evaluation or size in an instance only another
+           generic names. Queries read the same AST afterwards: discovery
+           renames only private copies of instance types, and on a shared
+           type node fills in nothing but what pass2 also writes (a tuple's
+           canonical name, a template's symbol). */
+        if (diag_error_count() == 0) {
+            mono_discover_transitive(&r->mono, &r->arena, &r->intern, &r->symtab);
+            mono_finalize_types(&r->mono, &r->arena, &r->intern);
+        }
     } else {
         r->aborted = true;
         /* Free the lexer's in-progress arrays the abort left behind. The

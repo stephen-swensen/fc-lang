@@ -145,8 +145,10 @@ particular:
   program, so don't approximate a name-dependent decision with token
   lookahead.
 - **Report user errors in pass1 or pass2 when you can.** The language server
-  stops after pass2, so an error raised by monomorphization or codegen fails
-  the command-line build but never reaches the editor.
+  runs monomorphization only once pass2 reports nothing, as `fcc` does, so its
+  errors reach the editor only after every other one is fixed; and it never
+  runs codegen, so an error raised there fails the command-line build but
+  never reaches the editor.
 - **Update the spec** when a feature adds or changes a language rule.
 
 ### Language server tests

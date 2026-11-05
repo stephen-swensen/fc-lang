@@ -6,17 +6,19 @@
 #include "diag.h"
 #include "lexer.h"   /* Flag */
 
-/* Non-fatal front end (lexer -> parser -> pass1 -> pass2) over an in-memory
- * source string, for the in-process LSP server (src/lsp.c).
+/* Non-fatal front end (lexer -> parser -> pass1 -> pass2 -> mono discovery and
+ * finalize) over an in-memory source string, for the in-process LSP server
+ * (src/lsp.c).
  *
  * Unlike the CLI path in main.c, analyze():
  *   - captures diagnostics as structured records instead of printing to stderr,
  *   - never calls exit(): a fatal error (every lexical error, and an
- *     internal compiler error in pass1 or pass2) is caught via longjmp and
+ *     internal compiler error in pass1, pass2 or mono) is caught via longjmp and
  *     recorded, with `aborted` set,
  *   - runs pass2 even when parsing or pass1 reported errors,
- *   - stops after pass2 (no mono discovery or codegen; queries only need the
- *     typed AST and symbols),
+ *   - runs mono discovery and finalize only when pass2 reported no errors (as
+ *     the CLI does), for the errors they report, and never runs codegen
+ *     (queries only need the typed AST and symbols),
  *   - keeps the typed AST, symbols and arena alive in the result for
  *     hover/definition/completion/codeLens queries.
  *

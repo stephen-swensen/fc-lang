@@ -84,21 +84,22 @@ void mono_report_too_many(SrcLoc loc, const char *name);
  * to get canonical names without symtab re-lookup. */
 void mono_resolve_type_names(MonoTable *t, Arena *a, InternTable *intern, Type *type);
 
-/* Finalize monomorphized types: give every instance a private concrete type,
- * discover the instances their fields and payloads name, resolve every type
- * name to its C name, and reject a truncated infinite instance family. The
- * order definitions are emitted in is codegen's (emit_types). */
-void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab);
+/* Finalize monomorphized types, after discovery: resolve every type name to
+ * its C name, and reject a truncated infinite instance family. The order
+ * definitions are emitted in is codegen's (emit_types). */
+void mono_finalize_types(MonoTable *t, Arena *a, InternTable *intern);
 
 /* The same for the instances from index `first` on, which are new since a
  * finalized table held `first` of them: an interactive session finalizes each
  * statement's instances as it compiles the statement. */
-void mono_finalize_types_from(MonoTable *t, int first, Arena *a, InternTable *intern,
-                              SymbolTable *symtab);
+void mono_finalize_types_from(MonoTable *t, int first, Arena *a, InternTable *intern);
 
-/* Discover all transitive monomorphized instances by walking template function
- * bodies. Generic calls inside generic functions aren't resolved until the outer
- * function is instantiated; this fixpoint loop finds them all. Call after pass2. */
+/* Discover every instance the ones pass2 registered lead to: the instances
+ * each function instance's body makes (generic calls inside a generic body
+ * aren't resolved until it is instantiated) and those each struct or union
+ * instance's fields and payloads name, breadth-first, so each instance's
+ * depth is its distance from the nearest one pass2 registered. Also gives
+ * every instance a private concrete type. Call after pass2. */
 void mono_discover_transitive(MonoTable *t, Arena *a, InternTable *intern, SymbolTable *symtab);
 
 /* The same, walking only the instances from index `first` on (and those they

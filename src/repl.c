@@ -481,7 +481,7 @@ static bool compile_unit(SessionItem *item, const char *filename, Unit *u) {
             check_prompt_return(decls[i]->let.init, NULL);
     if (diag_error_count() > 0) return false;
     mono_discover_transitive_from(&S.mono, mono0, &S.arena, &S.intern, t);
-    mono_finalize_types_from(&S.mono, mono0, &S.arena, &S.intern, t);
+    mono_finalize_types_from(&S.mono, mono0, &S.arena, &S.intern);
     if (diag_error_count() > 0) return false;
 
     /* A statement that yields no value binds nothing. */
@@ -1500,7 +1500,7 @@ static bool load_files(const char **paths, int n) {
     pass2_check(prog, t, &S.intern, &S.mono, &S.scopes, &S.arena);
     if (diag_error_count() > 0) { diag_set_abort_jmp(NULL); return false; }
     mono_discover_transitive_from(&S.mono, 0, &S.arena, &S.intern, t);
-    mono_finalize_types_from(&S.mono, 0, &S.arena, &S.intern, t);
+    mono_finalize_types_from(&S.mono, 0, &S.arena, &S.intern);
     if (diag_error_count() > 0) { diag_set_abort_jmp(NULL); return false; }
     for (int i = 0; i < prog->decl_count; i++) DA_APPEND(S.env, S.env_n, S.env_cap, prog->decls[i]);
 

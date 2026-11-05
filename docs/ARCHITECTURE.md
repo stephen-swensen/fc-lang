@@ -52,7 +52,8 @@ The command-line driver is `main()` in `src/main.c`:
    errors, so name errors and type errors come out together. The driver stops
    if anything was reported.
 8. **Monomorphization**: `mono_discover_transitive` finds every generic
-   instance reachable from the ones pass2 registered; `mono_finalize_types`
+   instance reachable from the ones pass2 registered, through function bodies
+   and struct and union fields; `mono_finalize_types`
    resolves every instance's type names to their C names.
    Instance-level errors (a failed `static_assert`, a const-eval error, an
    infinite instance family) stop the driver.
@@ -63,7 +64,8 @@ The command-line driver is `main()` in `src/main.c`:
     map beside the C file (or the executable): the output path with
     `.errcodes` in place of its extension.
 
-The language server runs steps 2-7 through `analyze()` in `src/analyze.c`; see
+The language server runs steps 2-8 through `analyze()` in `src/analyze.c`,
+step 8 only when pass2 reported nothing, as here; see
 [Language server](#language-server).
 
 ## Source files
@@ -205,7 +207,9 @@ rejects a chain of instantiations that never comes round. `mono_find` looks
 an instance up by its interned mangled name through a hash index. Each instance
 records the instance whose body or fields first named it (`named_by`; an
 instance pass2 registers has none) and how many such steps separate it from
-one pass2 registers (`depth`). A generic may instantiate itself with any
+the nearest one pass2 registers (`depth`): discovery walks the instances in
+the order they were registered, a function's body or a struct's or union's
+fields alike, so it is breadth-first from all of those at once. A generic may instantiate itself with any
 arguments, and a family whose values come round again (`f<'n / 2>` reaches
 `f<0>`) closes by itself; one that is still making new instances past
 `MONO_MAX_CHAIN_DEPTH` (1024) steps (`f<'n + 1>`) is rejected, naming the
@@ -214,8 +218,8 @@ is reported sooner by the cap on its nesting depth, and pass1 rejects a type
 that wraps its own parameter in a self-reference at its definition. Once any
 error has been reported it registers nothing, so in a
 program (or an editor buffer) that already has an error, no further instance
-is checked. After pass2, discovery walks instantiated bodies to a fixpoint,
-and finalize resolves every type name to its mangled C name. Codegen's
+is checked. After pass2, discovery walks every instance once, and finalize
+resolves every type name to its mangled C name. Codegen's
 `emit_types` sorts every struct and union definition, instances and
 top-level declarations together, so a by-value field's type is defined before
 the struct that holds it.
@@ -557,7 +561,8 @@ The language server runs the front end many times in one process, so a
 module-level static in the front end must not carry state from one analysis
 into the next. Each one is reset where its pass starts (pass1's error-code
 table, the diagnostic counters in `diag_reset_counts`), is drained by its
-reader (the const-eval stash), or is a counter whose value only needs to be
+reader (the const-eval stash, which `analyze()` also clears as it starts, in
+case an abort skipped the drain), or is a counter whose value only needs to be
 unique (`local_c_name`'s id). The interactive session runs the native backend
 once per item, so `x86gen_emit`'s statics are reset when it finishes, in the
 same cleanup that frees its tables.
@@ -595,14 +600,16 @@ costs one analysis.
 
 `analyze()` runs the lexer, parser, pass1 and pass2 over in-memory sources and
 keeps the typed AST, symbols and arena alive in an `AnalysisResult` for
-queries. It differs from the CLI in four ways: diagnostics go to a collector,
-a fatal error aborts only this analysis, pass2 runs past recoverable parse and
-pass1 errors (so a half-typed line doesn't blank the rest of the file), and it
-stops after pass2. An error that only monomorphization or codegen reports
-therefore never reaches the editor; a chain of generic instances that never
-comes round is reported by pass2 when it runs through function bodies, but
-not when it runs only through struct fields. It does not require a `main`, so library files can be
-analyzed on their own.
+queries. When pass2 reports nothing it also runs monomorphization's discovery
+and finalize steps, the code `fcc` runs, for the errors only they report (a
+chain of instances that runs only through struct fields, a failed
+`static_assert` or size in an instance only another generic names); queries
+read the same AST either way. It differs from the CLI in four ways:
+diagnostics go to a collector, a fatal error aborts only this analysis, pass2
+runs past recoverable parse and pass1 errors (so a half-typed line doesn't
+blank the rest of the file), and it never runs codegen, so an error only
+codegen reports never reaches the editor. It does not require a `main`, so
+library files can be analyzed on their own.
 
 Unchanged feed files are not re-lexed on every keystroke: a session-scoped lex
 cache keeps their tokens, keyed by path, content hash and flag set.

@@ -1,0 +1,20 @@
+// The depth of a chain counts from the nearest instance code names, through
+// function bodies and struct fields alike. f's chain names s<0> to s<949>,
+// the last of them 950 steps from f<0>; but main names r<900>, whose field
+// names s<900>, so s<900> to s<1199> are within 300 steps of it, and the
+// chain on from s<949> is not counted from f<0>.
+struct r =
+    x: s<'n>*?
+
+struct s =
+    next: s<('n + 1) % 1200>*?
+    v: u8[('n & 3) + 1]
+
+let f = <'n>(k: i32) ->
+    let x = default(s<'n>)
+    if k <= 0 then 'n else f<('n + 1) % 950>(k - 1)
+
+let main = (args: str[]) ->
+    let b = default(r<900>)
+    assert(f<0>(3) == 3)
+    0

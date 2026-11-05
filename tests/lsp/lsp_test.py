@@ -2712,6 +2712,52 @@ for name, (src, want) in CHAINS.items():
     check(f"generic chain ({name}): reported in the editor as by the compiler",
           len(cmsgs) == 1 and want in cmsgs[0], str(cmsgs)[:300])
 
+# --- errors monomorphization reports reach the editor, after a clean pass2 ---
+# The server runs monomorphization's discovery when pass2 reports nothing, as
+# `fcc` does, so it reports a chain that runs only through struct fields, and a
+# failed static_assert or size in an instance only another generic names, at
+# the line `fcc` gives. With an error pass2 reports, that error is all `fcc`
+# reports, and all the editor does.
+FIELD_CHAIN = ("struct a =\n"
+               "    b: b<'n + 1>*?\n"
+               "    v: u8['n]\n\n"
+               "struct b =\n"                      # line 5
+               "    a: a<'n + 1>*?\n\n"
+               "let main = (args: str[]) ->\n"
+               "    let x = default(a<2>)\n"
+               "    0\n")
+MONO_ERRS = {
+    "field_chain.fc": (FIELD_CHAIN, 5, "'b' instantiates itself more than 1024 levels deep"),
+    "transitive_assert.fc": ("let g = <'n>() ->\n"
+                             "    static_assert('n >= 0, \"n must not be negative\")\n"  # line 2
+                             "    'n\n\n"
+                             "let f = <'n>() -> g<'n - 1>()\n\n"
+                             "let main = (args: str[]) ->\n"
+                             "    let x = f<0>()\n"
+                             "    0\n", 2,
+                             "static assertion failed in instantiation of 'g<-1>'"),
+    "far_size.fc": ("struct s =\n"                 # line 1
+                    "    v: u8['n]\n"
+                    "    next: s<'n - 1>*?\n\n"
+                    "let main = (args: str[]) ->\n"
+                    "    let x = default(s<6>)\n"
+                    "    0\n", 1,
+                    "fixed array size must be positive, got 0 (in 'u8[0]', in instance 's<0>')"),
+    "field_chain_and_type_err.fc": (FIELD_CHAIN + "\nlet bad = (q: i32) -> q + true\n", 12,
+                                    "arithmetic requires numeric operands"),
+}
+for name, (src, want_line, want) in MONO_ERRS.items():
+    muri = "file://" + os.path.join(chdir, name)
+    _, mds, _, _, _ = run_session([req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+        note("textDocument/didOpen", {"textDocument": {"uri": muri, "languageId": "fc",
+             "version": 1, "text": src}}),
+        req(9, "shutdown", None), note("exit", None)])
+    mlast = mds[-1] if mds else []
+    check(f"monomorphization error ({name}): reported in the editor as by the compiler",
+          len(mlast) == 1 and want in mlast[0]["message"]
+          and mlast[0]["range"]["start"]["line"] == want_line - 1,
+          json.dumps(mlast)[:300])
+
 check("no session crashed or reported a sanitizer error",
       not CRASHES, "\n".join(f"session {n}: exit {rc}\n{err}" for n, rc, err in CRASHES))
 

@@ -197,12 +197,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Discover transitive monomorphized instances (generic-calling-generic) */
+    /* Discover transitive monomorphized instances (generic-calling-generic, and
+     * the instances fields name) */
     mono_discover_transitive(&mono, &arena, &intern_table, &symtab);
 
     /* Finalize: resolve every instance's type names to their C names. (Codegen
      * orders the type definitions; see emit_types.) */
-    mono_finalize_types(&mono, &arena, &intern_table, &symtab);
+    mono_finalize_types(&mono, &arena, &intern_table);
 
     /* Monomorphization reports its own errors (an infinite instantiation
      * family, a failed static_assert or const evaluation in an instance);
