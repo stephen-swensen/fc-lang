@@ -2758,6 +2758,93 @@ for name, (src, want_line, want) in MONO_ERRS.items():
           and mlast[0]["range"]["start"]["line"] == want_line - 1,
           json.dumps(mlast)[:300])
 
+# --- an error the user's code causes in a stdlib file reaches the user's file ---
+# uwide's static_assert fails in uwide<32>, and `fcc` reports it at the
+# static_assert, in wideint.fc. A stdlib file that is not open is not
+# published, so the error moves to the start of the open document, naming its
+# stdlib location; whether the code writes uwide<32> or a generic makes it.
+# With the stdlib file open, it stays there, once, and is not moved as well.
+wpath = os.path.join(std_dir, "wideint.fc")
+wtext = open(wpath).read()
+wline = next(i for i, l in enumerate(wtext.split("\n")) if "static_assert" in l)
+wcol = wtext.split("\n")[wline].index("static_assert")
+WANT_SA = "static assertion failed in instantiation of 'uwide<32>'"
+WANT_MOVED = f"in the standard library at wideint.fc:{wline + 1}:{wcol + 1}: " + WANT_SA
+STD_USES = {
+    "writes.fc": ("import wideint from std::\n\n"
+                  "let main = (args: str[]) ->\n"
+                  "    let x = default(wideint.uwide<32>)\n"
+                  "    0\n"),
+    "generic_makes.fc": ("import wideint from std::\n\n"
+                         "let halve = <'n>() ->\n"
+                         "    let x = default(wideint.uwide<'n / 2>)\n"
+                         "    0\n\n"
+                         "let main = (args: str[]) ->\n"
+                         "    let _ = halve<64>()\n"
+                         "    0\n"),
+}
+stdu = tmpdir("fc_lsp_stduse_")
+for name, src in STD_USES.items():
+    suri_ = "file://" + os.path.join(stdu, name)
+    _, sds, _, _, _ = run_session([req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+        note("textDocument/didOpen", {"textDocument": {"uri": suri_, "languageId": "fc",
+             "version": 1, "text": src}}),
+        req(9, "shutdown", None), note("exit", None)])
+    slast = sds[-1] if sds else []
+    check(f"stdlib error the user's code causes ({name}): moved to the open document",
+          len(slast) == 1 and slast[0]["message"].startswith(WANT_MOVED)
+          and slast[0]["range"]["start"]["line"] == 0, json.dumps(slast)[:300])
+
+def last_pubs():
+    """The last publish for each URI in the session just run: {uri: [diagnostic messages]}."""
+    out = {}
+    for uri_, msgs_ in PUBS:
+        out[uri_] = msgs_
+    return out
+
+# Editing wideint.fc itself, with a use that makes uwide<32>: the error is in
+# the open file, reported at the static_assert, and nowhere else.
+wuri = "file://" + wpath
+_, wds, _, _, _ = run_session([req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": wuri, "languageId": "fc", "version": 1,
+         "text": wtext.rstrip("\n") + "\n\n    let bad_width = () -> default(uwide<32>)\n"}}),
+    req(9, "shutdown", None), note("exit", None)])
+wpubs = {u: m for u, m in last_pubs().items() if m}
+wlast = next((d for d in reversed(wds) if d), [])
+check("stdlib error caused in the stdlib file being edited: shown once, in place",
+      list(wpubs) == [wuri] and len(wpubs[wuri]) == 1 and wpubs[wuri][0].startswith(WANT_SA)
+      and wlast and wlast[0]["range"]["start"]["line"] == wline, json.dumps(wpubs)[:300])
+
+# The user's file and wideint.fc both open: the error is shown in wideint.fc, as
+# `fcc` reports it, and not moved to the user's file as well.
+muri = "file://" + os.path.join(stdu, "writes.fc")
+run_session([req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": wuri, "languageId": "fc", "version": 1,
+         "text": wtext}}),
+    note("textDocument/didOpen", {"textDocument": {"uri": muri, "languageId": "fc", "version": 1,
+         "text": STD_USES["writes.fc"]}}),
+    req(9, "shutdown", None), note("exit", None)])
+bpubs = {u: m for u, m in last_pubs().items() if m}
+check("stdlib error with the stdlib file open: shown once, in the stdlib file",
+      list(bpubs) == [wuri] and len(bpubs[wuri]) == 1 and bpubs[wuri][0].startswith(WANT_SA),
+      json.dumps(bpubs)[:300])
+
+# A lexical error in a stdlib file stops the analysis, and the open document
+# gets the note naming the file that stopped it; the error is not moved there
+# as well.
+badstd = tmpdir("fc_lsp_badstd_")
+with open(os.path.join(badstd, "broken.fc"), "w") as f:
+    f.write("module broken =\n\tlet f = 1\n")              # a tab: a lexical error
+_, ads, _, _, _ = run_session([req(1, "initialize", {"capabilities": {}}), note("initialized", {}),
+    note("textDocument/didOpen", {"textDocument": {"uri": "file://" + os.path.join(stdu, "plain.fc"),
+         "languageId": "fc", "version": 1, "text": "let main = (args: str[]) ->\n    0\n"}}),
+    req(9, "shutdown", None), note("exit", None)],
+    env=dict(os.environ, FCC_STDLIB_DIR=badstd))
+alast = ads[-1] if ads else []
+check("lexical error in a stdlib file: only the note that names it, not the error as well",
+      len(alast) == 1 and alast[0]["message"].startswith("analysis incomplete")
+      and "broken.fc" in alast[0]["message"], json.dumps(alast)[:300])
+
 check("no session crashed or reported a sanitizer error",
       not CRASHES, "\n".join(f"session {n}: exit {rc}\n{err}" for n, rc, err in CRASHES))
 

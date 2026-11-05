@@ -386,14 +386,6 @@ this section is the open-item backlog. None of these block release.
   not the specific variant. Deliberate today, but `UnionVariant.loc` is recorded (hover
   already reads it for the variant's doc comment via `variant_decl_loc`), so refining it
   is a small change plus a wire-test update.
-- **An instance error located in the stdlib is not shown.** Monomorphization reports a
-  failed `static_assert` or size at the template, so a user generic that makes
-  `wideint.uwide<'n / 2>` fails `fcc` at `stdlib/wideint.fc:32`, and
-  `publish_project_diagnostics` drops it with every diagnostic in a stdlib file that is
-  not open: the editor shows nothing. pass2's instance errors don't have this gap, since
-  they are located at the user's call. A file-level diagnostic on the open document
-  naming the stdlib error (as `analyze()` adds for an abort in an included file) closes
-  it.
 - **Stdlib AST re-parse per keystroke** — unchanged feed sources (stdlib + `lsp.rsp`
   files) are lex-cached across analyses and edit bursts coalesce into one analysis, but
   `analyze()` still re-*parses* the cached tokens into a fresh AST each time. Caching the

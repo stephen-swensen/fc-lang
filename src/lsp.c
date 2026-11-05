@@ -1589,14 +1589,22 @@ static void analyze_unit(LspServer *S, UnitEntry *u, LspDoc *doc) {
  * unit, or were closed are cleared with an explicit empty publish, diffed
  * against S->pub_uris (the set last published non-empty).
  *
- * stdlib feed files are never surfaced: presumed clean, not the user's code, and
- * often under a read-only install path. A stdlib file the user opened is a
- * normal document, found by store_find_by_path, and handled as one. */
+ * A stdlib file the user has not opened is not published: it is not the user's
+ * code, and often under a read-only install path. A diagnostic located in one
+ * is still the user's when their code causes it (a stdlib generic's
+ * static_assert fails in the instance they make, and fcc reports it at the
+ * static_assert), so it is moved to the start of the analysis's primary
+ * document, its stdlib location written into the message. A stdlib file the
+ * user opened is a normal document, found by store_find_by_path, and its
+ * diagnostics stay where they are; so each diagnostic is shown once, in place
+ * or moved, never both. */
 static void publish_project_diagnostics(LspServer *S) {
     /* 1. Aggregate + dedup diagnostics across every unit's fresh analysis, keyed
      *    by file. */
     AggDiag *agg = NULL;
     int an = 0, acap = 0;
+    char **moved = NULL;                           /* messages of moved stdlib diagnostics */
+    int mn = 0, mcap = 0;
     for (int ui = 0; ui < S->unit_count; ui++) {
         UnitEntry *u = &S->units[ui];
         AnalysisResult *r = u->result;
@@ -1613,14 +1621,25 @@ static void publish_project_diagnostics(LspServer *S) {
                 free(real);
                 if (skip) continue;
             }
-            if (!store_find_by_path(&S->store, file)) {   /* not open: drop if stdlib */
+            int line = r->diags[i].loc.line, col = r->diags[i].loc.col;
+            const char *msg = r->diags[i].message;
+            if (!store_find_by_path(&S->store, file)) {   /* not open: move if stdlib */
                 bool is_std = false;
                 for (int k = 0; k < S->stdlib_count; k++)
                     if (strcmp(S->stdlib[k].filename, file) == 0) { is_std = true; break; }
-                if (is_std) continue;
+                if (is_std) {
+                    /* An aborted analysis already says on the primary document
+                     * which included file stopped it (see analyze). */
+                    if (!r->typed) continue;
+                    const char *base = strrchr(file, '/');
+                    char *m = str_sprintf("in the standard library at %s:%d:%d: %s",
+                                          base ? base + 1 : file, line, col, msg);
+                    DA_APPEND(moved, mn, mcap, m);
+                    file = r->filename;
+                    line = col = 1;
+                    msg = m;
+                }
             }
-            int line = r->diags[i].loc.line, col = r->diags[i].loc.col;
-            const char *msg = r->diags[i].message;
             bool dup = false;
             for (int j = 0; j < an; j++)
                 if (agg[j].line == line && agg[j].col == col &&
@@ -1703,6 +1722,8 @@ static void publish_project_diagnostics(LspServer *S) {
     S->pub_cap = now_cap;
 
     free(agg);
+    for (int i = 0; i < mn; i++) free(moved[i]);
+    free(moved);
 }
 
 /* The document a unit's analysis runs with as its primary source: the first

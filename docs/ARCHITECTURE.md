@@ -653,7 +653,14 @@ Diagnostics are published for every file in a unit, open or not
 (`publish_project_diagnostics`), so breaking a file shows errors in the files
 that depend on it. A file that goes clean or leaves the unit is cleared with
 an empty publish. Standard library files are never reported unless the user
-opens one.
+opens one. A diagnostic located in one that isn't open is the user's when
+their code causes it (a stdlib generic's `static_assert` fails in the
+instance they make, and `fcc` reports it at the `static_assert`), so it
+moves to the start of the analysis's primary document, its stdlib location
+written into the message. Each diagnostic shows once: in place when its file
+is open, moved otherwise. An analysis an error in a stdlib file aborted
+already has a note on the primary document naming that file, so that error
+is not moved as well.
 
 ### Queries
 
