@@ -53,6 +53,7 @@ int repl_main(const CompileArgs *ca) {
 #else /* Linux x86-64 */
 
 #include "diag.h"
+#include "elflink.h"
 #include "elfobj.h"
 #include "fcc_version.h"   /* FCC_DATADIR */
 #include "lexer.h"
@@ -1526,34 +1527,29 @@ static bool load_files(const char **paths, int n) {
     return true;
 }
 
-/* Load a library into this process before the holder is forked, so that the
- * holder has it at the same address. */
-static bool load_library(const char *what, const CompileArgs *ca) {
-    if (strncmp(what, "-l", 2) == 0) {
-        const char *name = what + 2;
-        for (int i = 0; i < ca->lib_dir_count; i++) {
-            char *path = str_sprintf("%s/lib%s.so", ca->lib_dirs[i], name);
-            void *h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+/* Load the libraries into this process before the holder is forked, so that
+ * the holder has them at the same addresses. The linker finds them, as it does
+ * for an executable; dlopen would not read a linker script such as libm.so. */
+static bool load_libraries(const CompileArgs *ca) {
+    LinkArgs link = { (const char *const *)ca->link_inputs, ca->link_count,
+                      (const char *const *)ca->lib_dirs, ca->lib_dir_count };
+    char **libs = NULL;
+    int nlibs = 0;
+    bool ok = elf_shared_libs(&link, &libs, &nlibs);
+    for (int i = 0; i < nlibs; i++) {
+        if (ok) {
+            /* Without a slash, dlopen would search for the name. */
+            char *path = strchr(libs[i], '/') ? str_dup(libs[i]) : str_sprintf("./%s", libs[i]);
+            if (!dlopen(path, RTLD_NOW | RTLD_GLOBAL)) {
+                fprintf(stderr, "fcc: cannot load %s: %s\n", libs[i], dlerror());
+                ok = false;
+            }
             free(path);
-            if (h) return true;
         }
-        char *so = str_sprintf("lib%s.so", name);
-        void *h = dlopen(so, RTLD_NOW | RTLD_GLOBAL);
-        free(so);
-        if (h) return true;
-        fprintf(stderr, "fcc: cannot load the shared library for %s: %s\n", what, dlerror());
-        return false;
+        free(libs[i]);
     }
-    size_t l = strlen(what);
-    if ((l > 2 && strcmp(what + l - 2, ".o") == 0) || (l > 2 && strcmp(what + l - 2, ".a") == 0)) {
-        fprintf(stderr, "fcc: %s: an interactive session loads shared libraries only\n", what);
-        return false;
-    }
-    if (!dlopen(what, RTLD_NOW | RTLD_GLOBAL)) {
-        fprintf(stderr, "fcc: cannot load %s: %s\n", what, dlerror());
-        return false;
-    }
-    return true;
+    free(libs);
+    return ok;
 }
 
 /* ================================================================
@@ -1758,8 +1754,7 @@ int repl_main(const CompileArgs *ca) {
         fprintf(stderr, "fcc: cannot load the math library: %s\n", dlerror());
         return 1;
     }
-    for (int i = 0; i < ca->link_count; i++)
-        if (!load_library(ca->link_inputs[i], ca)) return 1;
+    if (!load_libraries(ca)) return 1;
 
     int cmd[2], resp[2];
     if (pipe(cmd) != 0 || pipe(resp) != 0) {

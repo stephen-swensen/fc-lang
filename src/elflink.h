@@ -23,3 +23,13 @@ typedef struct {
  * each problem with diag_error_simple and returns false on any. Linux x86-64
  * only, like the backend. */
 bool elf_link(Obj *o, const LinkArgs *a, const char *path);
+
+/* The shared libraries that `a`'s inputs come to, in order, for a process to
+ * load for itself: found as elf_link finds them, through the same search and
+ * the same linker scripts, but not libm and libc, which it does not add. An
+ * object file or an archive that holds something cannot be loaded, and is an
+ * error, unless a linker script names it; then it is left out. The caller
+ * frees *libs and each string in it, also when this reports a problem with
+ * diag_error_simple and returns false. Linux x86-64 only: it is defined only
+ * there, for the interactive session. */
+bool elf_shared_libs(const LinkArgs *a, char ***libs, int *nlibs);

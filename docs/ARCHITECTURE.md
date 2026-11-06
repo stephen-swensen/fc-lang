@@ -770,7 +770,10 @@ The supervisor (the `fcc` process) owns the terminal, the compiler and the
 linker. The holder, forked from it before anything runs, owns the running
 program. Both see one region of address space reserved at startup, and the
 libraries (libm, `-l`) are loaded before the fork, so an address the
-supervisor computes is valid in the holder.
+supervisor computes is valid in the holder. The linker finds them
+(`elf_shared_libs`): one search and one linker script reader, shared with
+`--native`, since a `-l` name is often a script (`libm.so`) that `dlopen` would
+refuse.
 
 `link_unit` places a unit's sections in the region and resolves its symbols:
 its own, then the units before it (by name, in the session's symbol map), then

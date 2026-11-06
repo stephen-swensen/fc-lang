@@ -4603,7 +4603,7 @@ val it: i32 = 10
 prog.fc:3:25: error: 'helper' is not defined in this session yet (prog.fc declares it at line 10)
 ```
 
-**Files.** The `.fc` inputs on the command line are loaded before the first prompt, with the standard library. They are one program, compiled together under the file rules (forward references, and top-level `let`s in any file), and their file-level initializers run before the first prompt. A `main` among them is an ordinary function and does not run. The `.fcx` inputs (FC scripts) then follow in order, each one input, shown at the prompt as if typed. `-l`, `-L` and `-I` are as for `--native`, except that only shared libraries can be loaded into a session.
+**Files.** The `.fc` inputs on the command line are loaded before the first prompt, with the standard library. They are one program, compiled together under the file rules (forward references, and top-level `let`s in any file), and their file-level initializers run before the first prompt. A `main` among them is an ordinary function and does not run. The `.fcx` inputs (FC scripts) then follow in order, each one input, shown at the prompt as if typed. `-l`, `-L` and `-I` are as for `--native`, except that only shared libraries can be loaded into a session: an object file or an archive named on the command line or found for a `-l` is an error, unless the archive is empty, as glibc's `libpthread.a` is. One that a linker script names, as `libc.so` names `libc_nonshared.a`, is left out, and a symbol that only it defines stays undefined.
 
 **Without a terminal.** When stdin is not a terminal (a pipe, or a redirected file), there is no prompt and the input is not shown. The `.fcx` inputs run, then all of stdin as one input, and the session ends. Its exit status tells how:
 

@@ -15,7 +15,7 @@ checks the session ended as expected; a timeout is a failure.
 """
 import os, pty, re, select, shutil, subprocess, sys, tempfile, textwrap, time
 
-BIN = sys.argv[1]
+BIN = os.path.abspath(sys.argv[1])
 TMP = tempfile.mkdtemp(prefix="fc_repl_")
 passes = 0
 failures = []
@@ -40,14 +40,15 @@ def write(name, text):
     return path
 
 
-def script(name, text, expect, status=0, args=(), dedent=True):
+def script(name, text, expect, status=0, args=(), dedent=True, env=None, cwd=None):
     """Enter `text` as one input (`dedent`ed as Python source is); the output
-    must be `expect` exactly."""
+    must be `expect` exactly. `env` adds to the environment."""
     if dedent:
         text = textwrap.dedent(text)
     try:
         p = subprocess.run([BIN, "--interactive", *args], input=text.encode(),
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60,
+                           env={**os.environ, **(env or {})}, cwd=cwd)
         out, code = p.stdout.decode(errors="replace"), p.returncode
     except subprocess.TimeoutExpired:
         out, code = "<timed out>", None
@@ -982,6 +983,112 @@ t.expect("what is sent while the session starts is run at the first prompt", [
 ])
 check("what is sent while the session starts is shown once",
       t.out.count(b"early + 1") == 1, t.out.decode(errors="replace"))
+
+# ---- Libraries: found as the linker finds them ----
+
+LIBS = os.path.join(TMP, "libs")
+os.mkdir(LIBS)
+
+
+def lib_text(name, text):
+    with open(os.path.join(LIBS, name), "w") as f:
+        f.write(text)
+
+
+def in_libs(*cmd):
+    subprocess.run(cmd, cwd=LIBS, check=True)
+
+
+CC = os.environ.get("CC", "cc")
+lib_text("value.h", "int lib_value(void);\nint other_value(void);\n")
+lib_text("value.c", "int lib_value(void) { return 42; }\n")
+lib_text("other.c", "int other_value(void) { return 7; }\n")
+in_libs(CC, "-fPIC", "-c", "value.c", "-o", "value.o")
+in_libs("ar", "rcs", "libstatic.a", "value.o")
+in_libs(CC, "-shared", "-fPIC", "-o", "libplain.so", "value.c")
+in_libs(CC, "-shared", "-fPIC", "-o", "libvalue.so.1", "value.c")
+in_libs(CC, "-shared", "-fPIC", "-o", "libother.so.1", "other.c")
+# A library that needs another one, which is then gone.
+in_libs(CC, "-shared", "-fPIC", "-o", "libgone.so", "other.c")
+in_libs(CC, "-shared", "-fPIC", "-o", "libneedy.so", "value.c", "-L.", "-Wl,--no-as-needed",
+        "-lgone")
+os.remove(os.path.join(LIBS, "libgone.so"))
+# The shape of libncurses.so: a file found by the search, in a script.
+lib_text("libvalue.so", "INPUT(libvalue.so.1)\n")
+# The shape of libc.so and libm.so: what they name is absolute, with an archive
+# beside the library and an AS_NEEDED list.
+lib_text("libglibc.so", """/* GNU ld script */
+OUTPUT_FORMAT(elf64-x86-64)
+GROUP ( %s/libvalue.so.1 %s/libstatic.a AS_NEEDED ( %s/libother.so.1 ) )
+""" % (LIBS, LIBS, LIBS))
+lib_text("libchain.so", "INPUT(-lvalue)\n")
+lib_text("libonlystatic.so", "INPUT(libstatic.a)\n")
+# The shape of glibc's libpthread.a: the magic, and nothing else.
+lib_text("libempty.a", "!<arch>\n")
+
+USE_VALUE = """\
+    module c from "value.h" =
+        extern lib_value: () -> i32
+    c.lib_value()
+    """
+VALUE_USED = """\
+    module c
+    val it: i32 = 42
+    """
+INC = "-I" + LIBS
+DIR = "-L" + LIBS
+
+script("-l finds a shared library in a -L directory", USE_VALUE, VALUE_USED,
+       args=(INC, DIR, "-lplain"))
+script("-l finds a library that is a linker script", USE_VALUE, VALUE_USED,
+       args=(INC, DIR, "-lvalue"))
+script("a linker script can name a library with -l", USE_VALUE, VALUE_USED,
+       args=(INC, DIR, "-lchain"))
+script("-l looks in LIBRARY_PATH", USE_VALUE, VALUE_USED,
+       args=(INC, "-lvalue"), env={"LIBRARY_PATH": LIBS})
+script("-l:FILE names the file", USE_VALUE, VALUE_USED,
+       args=(INC, DIR, "-l:libvalue.so.1"))
+script("a library named by its path", USE_VALUE, VALUE_USED,
+       args=(INC, os.path.join(LIBS, "libplain.so")))
+script("a linker script named by its path", USE_VALUE, VALUE_USED,
+       args=(INC, DIR, os.path.join(LIBS, "libvalue.so")))
+script("what a linker script names is searched for, not looked for beside it", "1\n",
+       "fcc: error: %s/libvalue.so: cannot find 'libvalue.so.1'\n" % LIBS,
+       status=1, args=(os.path.join(LIBS, "libvalue.so"),))
+script("a library named without a directory is the file, not a search",
+       USE_VALUE, VALUE_USED, args=(INC, "libvalue.so.1"), cwd=LIBS)
+script("a script's archive is left out, and its AS_NEEDED libraries load", """\
+    module c from "value.h" =
+        extern lib_value: () -> i32
+        extern other_value: () -> i32
+    c.lib_value() + c.other_value()
+    """, """\
+    module c
+    val it: i32 = 49
+    """, args=(INC, DIR, "-lglibc"))
+script("an empty archive has nothing to load", "1\n", "val it: i32 = 1\n",
+       args=(DIR, "-lempty"))
+script("glibc's own libraries load, whichever way each is installed", "1\n",
+       "val it: i32 = 1\n", args=("-lm", "-lc", "-lpthread", "-ldl", "-lrt"))
+script("what only a script's archive defines stays undefined", USE_VALUE, """\
+    fcc: error: undefined symbol 'lib_value': no library loaded into the session defines it (link one with -l)
+    """, status=1, args=(INC, DIR, "-lonlystatic"))
+
+script("-l finding nothing ends the session", "1\n",
+       "fcc: error: cannot find -lnosuchlib\n", status=1, args=("-lnosuchlib",))
+script("-l finding a static library ends the session", "1\n",
+       "fcc: error: %s/libstatic.a: an interactive session loads shared libraries only\n" % LIBS,
+       status=1, args=(DIR, "-lstatic"))
+script("an archive named by its path ends the session", "1\n",
+       "fcc: error: %s/libstatic.a: an interactive session loads shared libraries only\n" % LIBS,
+       status=1, args=(os.path.join(LIBS, "libstatic.a"),))
+script("an object file ends the session", "1\n",
+       "fcc: error: %s/value.o: an interactive session loads shared libraries only\n" % LIBS,
+       status=1, args=(os.path.join(LIBS, "value.o"),))
+script("a library that cannot be loaded ends the session", "1\n",
+       "fcc: cannot load %s/libneedy.so: libgone.so: cannot open shared object file: "
+       "No such file or directory\n" % LIBS,
+       status=1, args=(DIR, "-lneedy"))
 
 shutil.rmtree(TMP, ignore_errors=True)
 print()

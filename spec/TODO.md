@@ -355,7 +355,9 @@ Built 2026-11-03 (spec §Interactive sessions; design in `docs/ARCHITECTURE.md` 
 - **History across sessions.** Kept in memory only; a history file is the usual next
   step.
 - **Library inputs.** Only shared libraries load into a session (`-l`, `.so`); a `.o` or
-  `.a` would need the in-memory linker to take archive members.
+  `.a` would need the in-memory linker to take archive members. The same would give a
+  session `atexit` and `at_quick_exit`, which glibc keeps in `libc_nonshared.a`, not in
+  `libc.so.6`.
 - **Cost per statement.** About 1 ms (a fork per statement, and the C environment
   rebuilt from every declaration for each unit); 3000 statements take 4 s. Fine at a
   prompt; a cache of the C environment across units is the obvious saving if long

@@ -232,6 +232,9 @@ static struct {
     char **dirs; int ndir, capdir;
     Origin *orig; int norig, caporig;
 
+    bool listing;           /* elf_shared_libs: the inputs are only listed */
+    char **libs; int nlib, caplib;
+
     SymLink *sl;
     int *got; int ngot, capgot;
     int *plt; int nplt, capplt;
@@ -722,8 +725,18 @@ static bool run_script(const char *path, const unsigned char *b, size_t n, int d
     return ok;
 }
 
+/* While listing, an input that a process cannot load: an error if it was named
+ * or searched for, and left out if a linker script names it, since that is a
+ * supplement to the script's library, as libc_nonshared.a is to libc.so.6. */
+static int cannot_load(const char *name, int depth) {
+    if (depth > 0) return 1;
+    diag_error_simple("%s: an interactive session loads shared libraries only", name);
+    return -1;
+}
+
 /* Load an input: 1 when loaded (or loaded before), 0 when `searching` and it
- * is an ELF file for another machine, -1 after reporting an error. */
+ * is an ELF file for another machine, -1 after reporting an error. An archive
+ * of 8 bytes is its magic alone: it holds nothing, as glibc's libpthread.a. */
 static int load_file(const char *path, bool searching, int depth) {
     int fi = open_file(path);
     if (fi == -2) return 1;
@@ -734,8 +747,12 @@ static int load_file(const char *path, bool searching, int depth) {
     const char *name = L.files[fi].path;
     const unsigned char *b = L.files[fi].map;
     size_t n = L.files[fi].size;
-    if (n >= 8 && memcmp(b, "!<arch>\n", 8) == 0) return add_archive(name, b, n) ? 1 : -1;
+    if (n >= 8 && memcmp(b, "!<arch>\n", 8) == 0) {
+        if (L.listing) return n == 8 ? 1 : cannot_load(name, depth);
+        return add_archive(name, b, n) ? 1 : -1;
+    }
     if (n >= 8 && memcmp(b, "!<thin>\n", 8) == 0) {
+        if (L.listing) return n == 8 ? 1 : cannot_load(name, depth);
         unsupported(name, "a thin archive");
         return -1;
     }
@@ -746,8 +763,17 @@ static int load_file(const char *path, bool searching, int depth) {
             return -1;
         }
         uint64_t type = rd(b + 16, 2);
-        if (type == ET_REL) return merge_object(b, n, str_dup(name)) ? 1 : -1;
-        if (type == ET_DYN) return add_dso(name, b, n, searching) ? 1 : -1;
+        if (type == ET_REL) {
+            if (L.listing) return cannot_load(name, depth);
+            return merge_object(b, n, str_dup(name)) ? 1 : -1;
+        }
+        if (type == ET_DYN) {
+            if (L.listing) {
+                DA_APPEND(L.libs, L.nlib, L.caplib, str_dup(name));
+                return 1;
+            }
+            return add_dso(name, b, n, searching) ? 1 : -1;
+        }
         diag_error_simple("%s: neither an object file nor a shared library", name);
         return -1;
     }
@@ -1985,11 +2011,8 @@ static void link_free(void) {
     memset(&L, 0, sizeof L);
 }
 
-bool elf_link(Obj *o, const LinkArgs *a, const char *path) {
-    int errors = diag_error_count();
-    memset(&L, 0, sizeof L);
-    L.o = o;
-
+/* The directories -l looks in: -L, then LIBRARY_PATH, then the system's. */
+static void set_search_dirs(const LinkArgs *a) {
     for (int i = 0; i < a->ndirs; i++) DA_APPEND(L.dirs, L.ndir, L.capdir, str_dup(a->dirs[i]));
     const char *lp = getenv("LIBRARY_PATH");
     for (const char *p = lp; p && *p; ) {
@@ -2000,13 +2023,38 @@ bool elf_link(Obj *o, const LinkArgs *a, const char *path) {
     }
     for (size_t i = 0; i < sizeof SYSTEM_DIRS / sizeof SYSTEM_DIRS[0]; i++)
         DA_APPEND(L.dirs, L.ndir, L.capdir, str_dup(SYSTEM_DIRS[i]));
+}
 
-    add_start();
+/* Stops at the first input that reports an error. */
+static void load_inputs(const LinkArgs *a) {
+    int errors = diag_error_count();
     for (int i = 0; i < a->ninputs && diag_error_count() == errors; i++) {
         const char *in = a->inputs[i];
         if (in[0] == '-' && in[1] == 'l') find_lib(in + 2, 0);
         else load_file(in, false, 0);
     }
+}
+
+bool elf_shared_libs(const LinkArgs *a, char ***libs, int *nlibs) {
+    int errors = diag_error_count();
+    memset(&L, 0, sizeof L);
+    L.listing = true;
+    set_search_dirs(a);
+    load_inputs(a);
+    *libs = L.libs;
+    *nlibs = L.nlib;
+    link_free();
+    return diag_error_count() == errors;
+}
+
+bool elf_link(Obj *o, const LinkArgs *a, const char *path) {
+    int errors = diag_error_count();
+    memset(&L, 0, sizeof L);
+    L.o = o;
+    set_search_dirs(a);
+
+    add_start();
+    load_inputs(a);
     if (diag_error_count() == errors) find_lib("m", 0);
     if (diag_error_count() == errors) find_lib("c", 0);
     if (diag_error_count() == errors) resolve_archives();
